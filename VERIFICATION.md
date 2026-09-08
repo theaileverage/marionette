@@ -1,5 +1,15 @@
 # Verification record
 
+## Project lifecycle and prompt templates — 0.4.0 local acceptance
+
+Verified locally on macOS arm64 with Bun 1.3.14. The complete suite passed **189 tests across 20 files**. New coverage includes instance-wide runtime and MCP migration, rollback after failed startup, project removal and shared-resource preservation, native workspace trust restoration, missing-workspace recovery, terminal-lead reuse, and literal Mustache rendering for lead and worker instructions.
+
+`bun run check`, `bun run format:check`, `bun run release:check`, and `bun run tooling:check` passed. Full `bun pm pack` prepack validation passed, including runtime lifecycle checks and the production build. The resulting 0.4.0 tarball installed in an isolated temporary consumer and passed CLI version, read-only setup planning, standalone Herdr SDK, and TypeScript declaration checks without an installed Effect dependency.
+
+Worker prompt tests cover all six collaboration strategies, optional delegation and worktree sections, current-revision follow-ups, literal task text, JSON field escaping, and shell-quoted report commands. A supervisor dispatch fixture confirms that the rendered worker prompt excludes the worker credential.
+
+These checks use isolated state, temporary repositories, and protocol fixtures. They do not claim new live coding-agent acceptance or exercise removal against a user's real projects. Linux and macOS release CI independently validate the committed artifact before publication.
+
 ## Effect v4 on Bun — 0.3.0 local acceptance (8 September 2026)
 
 Verified locally on macOS arm64 with Bun 1.3.14, Effect 4.0.0-rc.112, TypeScript 7.0.2, and `@effect/tsgo` 0.43.0. The implementation was coordinated through a dedicated Marionette session. The complete Bun suite passed **127 tests across 14 files**, including all 125 retained Effect-era tests and two Bun SQLite compatibility tests.

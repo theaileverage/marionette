@@ -9,6 +9,8 @@ import { jsonObjectSchema, leaseResponseSchema, projectSchema } from './response
 import { installRuntime, packageRoot } from './runtime.js';
 import { startInstanceEffect, stopInstanceEffect, workerCallEffect } from './server-control.js';
 import { serveEffect } from './server.js';
+import { maintenanceCommandEffect } from './maintenance-cli.js';
+import { prompts } from './cli-prompts.js';
 import { launchLeadEffect, runSetupEffect, setupPlan, wizardEffect } from './setup.js';
 const args = process.argv.slice(2);
 function flag(name: string) {
@@ -25,11 +27,15 @@ const mainEffect = Effect.fn('main')(function* () {
     );
     return;
   }
+  if (['update', 'upgrade', 'remove', 'uninstall'].includes(cmd)) {
+    yield* maintenanceCommandEffect(cmd, args.slice(1), home);
+    return;
+  }
   if (cmd === 'setup' || cmd === 'init') {
     if (args.includes('--help')) {
       yield* sync('main.main', () =>
         console.log(
-          'Usage: marionette setup [--yes] [--json] [--config FILE] [--dry-run]\n  --project DIR --home DIR --name TEXT --session NAME --socket PATH --workspace ID\n  --lead codex-desktop|codex|claude|agy --lead-name TEXT --lead-profile PROFILE_ID --port NUMBER\n  --no-trust-agy --mcp install|print|skip --takeover\n  --schema prints the accepted JSON configuration. --yes accepts defaults without prompts.',
+          'Usage: marionette setup [--yes] [--json] [--config FILE] [--dry-run]\n  --project DIR --home DIR --name TEXT --session NAME --socket PATH --workspace ID\n  --lead codex-desktop|codex|claude|agy --lead-name TEXT --lead-profile PROFILE_ID --port NUMBER\n  --no-trust-workspaces --mcp install|print|skip --takeover --install-tools --upgrade\n  --schema prints the accepted JSON configuration. --yes accepts defaults without prompts.',
         ),
       );
       return;
@@ -47,9 +53,11 @@ const mainEffect = Effect.fn('main')(function* () {
           lead: ['codex-desktop', 'codex', 'claude', 'agy'],
           leadName: 'custom name (1–100 characters)',
           leadProfile: 'validated exact model profile ID (optional)',
-          trustAgy: true,
+          trustWorkspaces: true,
           mcp: ['install', 'print', 'skip'],
           takeover: false,
+          installTools: false,
+          upgrade: false,
         }),
       );
       return;
@@ -73,8 +81,12 @@ const mainEffect = Effect.fn('main')(function* () {
           '--lead-profile',
           '--port',
           '--no-trust-agy',
+          '--no-trust-workspaces',
+          '--trust-workspaces',
           '--mcp',
           '--takeover',
+          '--install-tools',
+          '--upgrade',
         ]),
     );
     for (const arg of args.slice(1))
@@ -82,7 +94,18 @@ const mainEffect = Effect.fn('main')(function* () {
         return yield* boundaryError('main.main')(new Error(`Unknown setup option: ${arg}`));
     const switches = yield* sync(
       'main.main',
-      () => new Set(['--yes', '--json', '--dry-run', '--no-trust-agy', '--takeover']),
+      () =>
+        new Set([
+          '--yes',
+          '--json',
+          '--dry-run',
+          '--no-trust-agy',
+          '--no-trust-workspaces',
+          '--trust-workspaces',
+          '--takeover',
+          '--install-tools',
+          '--upgrade',
+        ]),
     );
     for (let n = 1; n < args.length; n++) {
       if (!known.has(args[n]))
@@ -106,8 +129,20 @@ const mainEffect = Effect.fn('main')(function* () {
     if (flag('lead-profile'))
       yield* sync('main.main', () => (input.leadProfile = flag('lead-profile')));
     if (flag('port')) yield* sync('main.main', () => (input.port = Number(flag('port'))));
-    if (args.includes('--no-trust-agy')) input.trustAgy = false;
+    if (args.includes('--no-trust-agy') || args.includes('--no-trust-workspaces'))
+      input.trustWorkspaces = false;
+    if (args.includes('--trust-workspaces')) input.trustWorkspaces = true;
+    if (
+      args.includes('--trust-workspaces') &&
+      (args.includes('--no-trust-workspaces') || args.includes('--no-trust-agy'))
+    )
+      return yield* boundaryError('Setup.flags')(
+        new Error('Choose either --trust-workspaces or --no-trust-workspaces.'),
+      );
     if (args.includes('--takeover')) input.takeover = true;
+    if (args.includes('--install-tools')) input.installTools = true;
+    if (args.includes('--upgrade')) input.upgrade = true;
+    let interactive = false;
     if (
       !args.includes('--yes') &&
       !args.includes('--json') &&
@@ -120,6 +155,7 @@ const mainEffect = Effect.fn('main')(function* () {
             'Non-interactive setup requires --yes, --json, or --config FILE. Use --dry-run to review the plan.',
           ),
         );
+      interactive = true;
       input = yield* wizardEffect(input);
     }
     const parsed = input;
@@ -127,7 +163,7 @@ const mainEffect = Effect.fn('main')(function* () {
       yield* sync('main.main', () => print(setupPlan(parsed)));
       return;
     }
-    const result = yield* runSetupEffect(parsed);
+    const result = yield* runSetupEffect(parsed, interactive);
     if (args.includes('--json')) yield* sync('main.main', () => print(result));
     else
       yield* sync('main.main', () =>
@@ -135,6 +171,7 @@ const mainEffect = Effect.fn('main')(function* () {
           `\n${result.project} is ready.\nLead: ${result.lead.name} (${result.lead.agent})\nHerdr: ${result.session} / ${result.workspace}\nMCP: ${result.mcp.status} (${result.mcp.name})\n\n${result.next}\nLead prompt: ${result.lead.promptPath}\nRun marionette dashboard for your private dashboard link.\n${result.mcp.status === 'print' ? '\nMCP install command:\n' + result.mcp.shell : ''}`,
         ),
       );
+    if (interactive) prompts.outro('Setup complete.', { output: process.stderr });
     return;
   }
   if (cmd === 'lead') {
@@ -249,14 +286,17 @@ const mainEffect = Effect.fn('main')(function* () {
   }
   yield* sync('main.main', () =>
     console.log(
-      `Marionette — one project, many workers\n\nUsage: marionette <command> [--home /absolute/state/directory]\n\n  setup | init            Guided setup (setup --help for automation flags)\n  lead [--print]          Open the selected lead or print its bootstrap prompt\n  start | serve | stop    Manage the persistent supervisor (workers survive stop)\n  dashboard               Print the private dashboard access link\n  mcp-config              Print the desktop/terminal MCP configuration\n  projects                List explicitly connected projects\n  briefing PROJECT        Current assignments, lead, decisions and questions\n  inbox PROJECT           Read durable notifications [--consumer NAME]\n  doctor                  Inspect configured connections\n  call ACTION --file JSON [--lease FILE] [--save-lease FILE]\n  worker-report --file JSON  Submit a scoped report from a worker pane\n  worker-call --file JSON    Inspect, delegate, revise or control within worker scope\n\nActions: project.register, project.inspect, project.briefing, lead.acquire,\nlead.handover, task.submit, task.get, task.control, task.retry, task.reconcile,\ndecision.record, inbox.read, inbox.ack. See README.md for examples.\n`,
+      `Marionette — one project, many workers\n\nUsage: marionette <command> [--home /absolute/state/directory]\n\n  setup | init            Guided setup (setup --help for automation flags)\n  lead [--print]          Open the selected lead or print its bootstrap prompt\n  update | upgrade       Update runtimes, shared supervisor and MCP clients\n  remove                  Remove this project from Marionette\n  uninstall               Remove the instance; --global also removes the CLI\n  start | serve | stop    Manage the persistent supervisor (workers survive stop)\n  dashboard               Print the private dashboard access link\n  mcp-config              Print the desktop/terminal MCP configuration\n  projects                List explicitly connected projects\n  briefing PROJECT        Current assignments, lead, decisions and questions\n  inbox PROJECT           Read durable notifications [--consumer NAME]\n  doctor                  Inspect configured connections\n  call ACTION --file JSON [--lease FILE] [--save-lease FILE]\n  worker-report --file JSON  Submit a scoped report from a worker pane\n  worker-call --file JSON    Inspect, delegate, revise or control within worker scope\n\nActions: project.register, project.inspect, project.briefing, lead.acquire,\nlead.handover, task.submit, task.get, task.control, task.retry, task.reconcile,\ndecision.record, inbox.read, inbox.ack. See README.md for examples.\n`,
     ),
   );
 });
 const main = () => Effect.runPromise(mainEffect());
 main().catch((e) => {
-  if ((args[0] === 'setup' || args[0] === 'init') && args.includes('--json'))
-    print({ ok: false, error: e.message });
+  if (e.code === 'setup_cancelled' || e.code === 'operation_cancelled') {
+    process.exitCode = 130;
+    return;
+  }
+  if (args.includes('--json')) print({ ok: false, error: e.message });
   else console.error(e.message);
   process.exitCode = 1;
 });

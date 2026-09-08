@@ -25,7 +25,7 @@ export const processEffect = Effect.fn('Process.execute')(function* (
         cwd: options.cwd,
         env: options.env,
         shell: false,
-        detached: process.platform !== 'win32',
+        detached: !options.inherit && process.platform !== 'win32',
         stdio: options.inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'],
       };
       const child = spawn(binary, args, spawnOptions);
@@ -43,7 +43,7 @@ export const processEffect = Effect.fn('Process.execute')(function* (
         if (pid !== undefined && !Latch.isOpen(closed)) {
           yield* Effect.sync(() => {
             try {
-              process.kill(process.platform === 'win32' ? pid : -pid, 'SIGKILL');
+              process.kill(options.inherit || process.platform === 'win32' ? pid : -pid, 'SIGKILL');
             } catch (error) {
               if (!Schema.is(missingProcess)(error)) throw error;
             }

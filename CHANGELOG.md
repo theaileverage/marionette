@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0 — 2026-09-08
+
+- Add interactive setup with editable defaults, required-tool preflight, explicit installation options, and recovery for missing Herdr workspaces without losing project identity or history.
+- Open terminal leads in dedicated Herdr tabs, reuse verified sessions, and restart exited leads only after confirming an idle shell. Give each project a readable MCP registration and migrate owned legacy entries.
+- Add instance-wide update and upgrade commands that migrate saved project bindings and MCP registrations together, preserve worker terminals and lead leases, and restore the previous runtime and database if startup fails.
+- Add previewable project removal and instance uninstallation with active-work, terminal-identity, shared-resource, and retained-worktree checks. Preserve project source files and restore only workspace trust settings owned by Marionette.
+- Manage native workspace trust for Codex, Claude Code, and AGY, including managed worktrees, while preserving agent tool-approval and sandbox settings.
+- Consolidate lead, worker, strategy, delegation, and follow-up instructions into editable Mustache templates embedded in the distributed executables. Preserve literal task data, scoped ownership, revision fencing, and independent verification.
+- Expand regression coverage to 189 tests, including runtime rollback, setup recovery, MCP migration, terminal reuse, trust restoration, and prompt rendering.
+
 ## 0.3.0 — 2026-09-08
 
 - **Runtime change:** the CLI and supervisor now require Bun 1.3.14+. `npx` remains supported when Bun is on PATH. Development, tests, and CI use Bun with a frozen lockfile.

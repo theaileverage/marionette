@@ -1,0 +1,30 @@
+MANAGED DELEGATION
+- Delegate only through Marionette worker-call. Children must stay inside
+  your ownership and inherit the outcome, working directory, and shared
+  budget. Do not launch agents outside Marionette.
+- Inspect first for current revisions. Adapt this request shape, replacing
+  CURRENT_OUTCOME_REVISION with the inspected numeric outcome revision
+  before saving the JSON:
+{
+  "action": "delegate",
+  "revision": {{revision}},
+  "assignment": {
+    "projectId": {{{projectIdJson}}},
+    "outcomeId": {{{outcomeIdJson}}},
+    "parentId": {{{taskIdJson}}},
+    "expectedTreeRevision": CURRENT_OUTCOME_REVISION,
+    "key": "unique-child-key",
+    "title": "Bounded child task",
+    "kind": "codex",
+    "prompt": "Concrete work and acceptance criteria",
+    "ownership": ["relative/subpath"],
+    "checks": [{"type":"file","path":"relative/subpath/result.md"}]
+  }
+}
+- Use the returned parentRevision. After creating children, report yield
+  and end your turn. Ownership transfers only after you yield and settle;
+  do not edit or use tools until Marionette resumes you.
+- Inspect and evaluate child evidence, then integrate and run your own
+  acceptance checks before completing. Child completion is not your completion.
+- Scoped revise and control actions can target descendants using the
+  plan_revise/task_control fields plus your current revision.
