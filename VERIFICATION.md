@@ -1,5 +1,13 @@
 # Verification record
 
+## Herdr SDK and pane layout 0.2.2 (8 September 2026)
+
+The SDK exposes all 102 methods from the installed Herdr 0.9.0/protocol-22 schema plus the documented graphics-stream transport. The 117-test suite covers generated API coverage, socket framing, event cancellation and buffer limits, graphics errors and acknowledgements, pane layout selection, interrupted creation recovery, and sibling-safe terminal cleanup. The packed SDK was imported independently and its public TypeScript types compiled in a fresh consumer.
+
+A disposable named Herdr 0.9.0 session and real attached Herdr client rendered a 120-by-80 four-color fixture through a simulated Kitty-capable PTY with 10-by-20-pixel cells. Captured terminal graphics commands contained byte-exact RGBA (38,400 bytes), RGB (28,800 bytes), converted BGRA (38,400 bytes), and PNG (289 bytes) payloads. A BGRA file frame returned the expected sequence 7 / revision 11 acknowledgement and emitted the expected RGBA pixels. All placements retained the requested 24-by-8-cell size. Frame replacement and stream closure emitted deletions for all five image IDs. The decoded renderer output was visually inspected.
+
+This verifies the installed Herdr server/client rendering pipeline and SDK transports. The outer terminal was simulated; Computer Use denied access to Ghostty, so native Ghostty display and direct-file terminal consumption were not visually verified. No existing Herdr session was controlled and no paid agent was launched. The test server and frame sources were cleaned up.
+
 ## Resource lifecycle 0.2.1 (8 September 2026)
 
 The release adds 26 cleanup regression tests to the existing suite (100 total). The cleanup fixtures use real temporary Git repositories/worktrees and SQLite databases, plus an explicitly labelled Herdr protocol double. They exercise integrated-outcome release, retained failures/native-input states, split and replaced tabs, busy workers, lead handover, lost acknowledgements and restart reconciliation, dirty/untracked/ignored files, shared-checkout and registered-project consumers, archived evidence and Git bundles, tampering, branch movement, published-then-merged delivery, explicit abandonment, policy opt-in/revocation, directory/symlink artifacts and continuation after terminal release. HTTP/STDIO integration checks all 47 MCP tools, including the seven cleanup tools.

@@ -27,6 +27,8 @@ class Terminal implements HerdrPort {
   closed = false;
   closeCalls = 0;
   paneCount = 1;
+  sibling = false;
+  paneCloseCalls = 0;
   nativeSession = 'native';
   status = 'idle';
   loseAcknowledgement = false;
@@ -40,9 +42,14 @@ class Terminal implements HerdrPort {
     }
     if (method === 'pane.list')
       return {
-        panes: this.closed
-          ? []
-          : [{ tab_id: 'w1:t1', pane_id: 'w1:p1', terminal_id: 'term', workspace_id: 'w1' }],
+        panes: [
+          ...(this.closed
+            ? []
+            : [{ tab_id: 'w1:t1', pane_id: 'w1:p1', terminal_id: 'term', workspace_id: 'w1' }]),
+          ...(this.sibling
+            ? [{ tab_id: 'w1:t1', pane_id: 'w1:p2', terminal_id: 'sibling', workspace_id: 'w1' }]
+            : []),
+        ],
       };
     if (method === 'agent.get') {
       if (++this.reads === 2) this.beforeFinalRead?.();
@@ -59,6 +66,12 @@ class Terminal implements HerdrPort {
       };
     }
     if (method === 'pane.read') return { read: { text: 'Saved diagnostics: acceptance passed' } };
+    if (method === 'pane.close') {
+      this.paneCloseCalls++;
+      if (this.closeBeforeLoss || !this.loseAcknowledgement) this.closed = true;
+      if (this.loseAcknowledgement) throw new AppError('herdr_timeout', 'acknowledgement lost');
+      return {};
+    }
     if (method === 'tab.close') {
       this.closeCalls++;
       if (this.closeBeforeLoss || !this.loseAcknowledgement) this.closed = true;
@@ -852,6 +865,43 @@ test('directory artifact reports retain their committed contents without blockin
     await f.invoke('cleanup.collect', { archiveId: a.id });
     assert.ok(existsSync(join(f.state, 'archives', a.id, 'commits.bundle')));
     assert.equal(f.s.orchestration.unmet(f.s.orchestration.outcome(f.o.id)).length, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test('pane-scoped release closes only its pinned worker and preserves a sibling', async () => {
+  const f = fixture();
+  try {
+    f.store.put('run', f.r.id, { ...f.r, terminalScope: 'pane' });
+    f.h.sibling = true;
+    f.h.paneCount = 2;
+    await f.invoke('cleanup.release');
+    assert.equal(f.h.paneCloseCalls, 1);
+    assert.equal(f.h.closeCalls, 0);
+    assert.deepEqual(
+      (await f.h.call('pane.list')).panes.map((p: any) => p.pane_id),
+      ['w1:p2'],
+    );
+    assert.equal(f.store.get<Run>('run', f.r.id)!.cleanup!.state, 'closed');
+  } finally {
+    await f.close();
+  }
+});
+test('lost pane-close acknowledgement remains uncertain and reconciles with sibling still present', async () => {
+  const f = fixture();
+  try {
+    f.store.put('run', f.r.id, { ...f.r, terminalScope: 'pane' });
+    f.h.sibling = true;
+    f.h.paneCount = 2;
+    f.h.loseAcknowledgement = true;
+    f.h.closeBeforeLoss = true;
+    await assert.rejects(f.invoke('cleanup.release'), /acknowledgement lost/);
+    assert.equal(f.store.get<Run>('run', f.r.id)!.cleanup!.state, 'uncertain');
+    await f.invoke('cleanup.reconcile', { resolution: 'closed' });
+    assert.equal(f.store.get<Run>('run', f.r.id)!.cleanup!.state, 'closed');
+    assert.equal(f.h.paneCloseCalls, 1);
+    assert.equal(f.h.closeCalls, 0);
   } finally {
     await f.close();
   }

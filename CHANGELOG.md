@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2 — 2026-09-08
+
+- Ship a Marionette agent skill with setup, task coordination, recovery, and SDK guidance.
+- Place new workers in appropriately sized sibling panes, with overflow tabs, durable creation recovery, and cleanup that preserves sibling workers.
+- Export a dependency-free Herdr SDK covering all 102 Herdr 0.9.0/protocol-22 schema methods plus persistent graphics streams, with generated TypeScript types, cancellable event subscriptions, bounded buffering, and file-frame acknowledgements.
+- Verify graphics payloads, placement, replacement, and layer cleanup through the real Herdr server/client renderer with a simulated Kitty-capable terminal. Expand the regression suite to 117 tests.
+
 ## 0.2.1 — 2026-09-08
 
 - Separate verification, terminal release, delivery, evidence archival and Git collection lifecycles. Task completion continues to preserve branches and worktrees.

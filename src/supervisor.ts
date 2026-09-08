@@ -1,3 +1,4 @@
+import { planWorkerPane } from './worker-layout.js';
 import { strategyInstructions } from './prompts.js';
 import { trustAgyWorkspace } from './agy-trust.js';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -33,6 +34,22 @@ export class Supervisor {
   private timer?: ReturnType<typeof setInterval>;
   private busy = new Set<string>();
   private stopped = false;
+  private layouts = new Map<string, Promise<void>>();
+  private async withLayout<T>(projectId: string, action: () => Promise<T>): Promise<T> {
+    const previous = this.layouts.get(projectId) ?? Promise.resolve();
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.layouts.set(projectId, pending);
+    await previous;
+    try {
+      return await action();
+    } finally {
+      release();
+      if (this.layouts.get(projectId) === pending) this.layouts.delete(projectId);
+    }
+  }
   constructor(
     public service: Service,
     public url: string,
@@ -402,23 +419,51 @@ export class Supervisor {
       t = s.updateTask(s.task(id), { runId: run.id, attempt: run.attempt });
     });
     try {
-      const created = await h.call('tab.create', {
-        workspace_id: p.workspaceId,
-        cwd: t.cwd,
-        label: run.agentName,
-        focus: false,
-        env: { MARIONETTE_WORKER_TOKEN: token, MARIONETTE_TASK_ID: id, MARIONETTE_URL: this.url },
+      await this.withLayout(p.id, async () => {
+        const taskIds = new Set(s.tasks(p.id).map((task) => task.id));
+        const runs = s.store
+          .all<Run>('run')
+          .filter((r) => taskIds.has(r.taskId) && !s.cleanup.active(r.taskId));
+        run.creation = await planWorkerPane(h, p.workspaceId, runs);
+        run.terminalScope = 'pane';
+        // Persist intent before the mutation, including the pre-split membership for recovery.
+        this.saveRun(run);
+        const options = {
+          workspace_id: p.workspaceId,
+          cwd: t.cwd,
+          focus: false,
+          env: { MARIONETTE_WORKER_TOKEN: token, MARIONETTE_TASK_ID: id, MARIONETTE_URL: this.url },
+        };
+        const splitting = run.creation.mode === 'pane';
+        const created = await h.call(
+          splitting ? 'pane.split' : 'tab.create',
+          splitting
+            ? {
+                ...options,
+                target_pane_id: run.creation.targetPaneId,
+                direction: run.creation.direction,
+              }
+            : { ...options, label: run.agentName },
+        );
+        const pane = splitting ? created.pane : created.root_pane;
+        if (
+          !pane?.pane_id ||
+          !pane.terminal_id ||
+          !pane.tab_id ||
+          pane.workspace_id !== p.workspaceId ||
+          (splitting &&
+            (pane.tab_id !== run.creation.tabId ||
+              run.creation.beforePaneIds!.includes(pane.pane_id)))
+        )
+          throw new Error('Herdr did not return the expected new scoped pane');
+        Object.assign(run, {
+          paneId: pane.pane_id,
+          terminalId: pane.terminal_id,
+          tabId: pane.tab_id,
+          phase: 'starting',
+        });
+        this.saveRun(run);
       });
-      const pane = created.root_pane;
-      if (!pane?.pane_id || pane.workspace_id !== p.workspaceId)
-        throw new Error('Herdr did not return the expected scoped root pane');
-      Object.assign(run, {
-        paneId: pane.pane_id,
-        terminalId: pane.terminal_id,
-        tabId: pane.tab_id,
-        phase: 'starting',
-      });
-      this.saveRun(run);
       for (let attempt = 0; ; attempt++) {
         try {
           await h.call(

@@ -449,37 +449,73 @@ export class Service {
               'No task prompt was attempted. Inspect the workspace and reconcile creation as not-delivered.',
             );
           const project = this.project(t.projectId);
-          const tabs = (await h.call('tab.list', { workspace_id: project.workspaceId })).tabs ?? [];
-          const matches = tabs.filter(
-            (tab: any) => tab.workspace_id === project.workspaceId && tab.label === r.agentName,
-          );
-          if (matches.length > 1)
-            throw new AppError(
-              'identity_changed',
-              'Multiple tabs match the interrupted creation; manual inspection is required',
-              409,
+          if (r.creation?.mode === 'pane') {
+            const all = (await h.call('pane.list', { workspace_id: project.workspaceId })).panes;
+            if (!Array.isArray(all) || !r.creation.beforePaneIds)
+              throw new AppError(
+                'identity_changed',
+                'Missing split membership; inspect the workspace',
+                409,
+              );
+            const added = all.filter(
+              (pane: any) => !r.creation!.beforePaneIds!.includes(pane.pane_id),
             );
-          if (matches.length === 1) {
-            const panes = (
-              (await h.call('pane.list', { workspace_id: project.workspaceId })).panes ?? []
-            ).filter((pane: any) => pane.tab_id === matches[0].tab_id);
+            const panes = added.filter((pane: any) => pane.tab_id === r.creation!.tabId);
+            // No prompt was sent. Never adopt a moved, occupied, or ambiguous new pane.
             if (
-              panes.length !== 1 ||
-              panes[0].agent ||
-              panes[0].launch_pending ||
-              panes[0].workspace_id !== project.workspaceId ||
-              panes[0].cwd !== t.cwd
+              added.length !== panes.length ||
+              panes.length > 1 ||
+              (panes.length === 1 &&
+                (panes[0].agent ||
+                  panes[0].launch_pending ||
+                  panes[0].workspace_id !== project.workspaceId ||
+                  panes[0].cwd !== t.cwd))
             )
               throw new AppError(
                 'identity_changed',
-                'The orphan tab is no longer an untouched shell; inspect it before recovery',
+                'Interrupted split is ambiguous or no longer an untouched shell; inspect it before recovery',
                 409,
               );
-            Object.assign(r, {
-              paneId: panes[0].pane_id,
-              terminalId: panes[0].terminal_id,
-              tabId: panes[0].tab_id,
-            });
+            if (panes.length === 1)
+              Object.assign(r, {
+                paneId: panes[0].pane_id,
+                terminalId: panes[0].terminal_id,
+                tabId: panes[0].tab_id,
+              });
+          } else {
+            const tabs =
+              (await h.call('tab.list', { workspace_id: project.workspaceId })).tabs ?? [];
+            const matches = tabs.filter(
+              (tab: any) => tab.workspace_id === project.workspaceId && tab.label === r.agentName,
+            );
+            if (matches.length > 1)
+              throw new AppError(
+                'identity_changed',
+                'Multiple tabs match the interrupted creation; manual inspection is required',
+                409,
+              );
+            if (matches.length === 1) {
+              const panes = (
+                (await h.call('pane.list', { workspace_id: project.workspaceId })).panes ?? []
+              ).filter((pane: any) => pane.tab_id === matches[0].tab_id);
+              if (
+                panes.length !== 1 ||
+                panes[0].agent ||
+                panes[0].launch_pending ||
+                panes[0].workspace_id !== project.workspaceId ||
+                panes[0].cwd !== t.cwd
+              )
+                throw new AppError(
+                  'identity_changed',
+                  'The orphan tab is no longer an untouched shell; inspect it before recovery',
+                  409,
+                );
+              Object.assign(r, {
+                paneId: panes[0].pane_id,
+                terminalId: panes[0].terminal_id,
+                tabId: panes[0].tab_id,
+              });
+            }
           }
         } else {
           const a = (await h.call('agent.get', { target: r.paneId })).agent;

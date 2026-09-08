@@ -134,6 +134,15 @@ export interface ManagedWorktree {
   baseCommit: string;
 }
 export interface Run {
+  /** Absent on legacy runs, which own an exclusive tab. */
+  terminalScope?: 'pane';
+  creation?: {
+    mode: 'tab' | 'pane';
+    tabId?: string;
+    targetPaneId?: string;
+    direction?: 'right' | 'down';
+    beforePaneIds?: string[];
+  };
   cleanup?: {
     state: 'closing' | 'closed' | 'uncertain' | 'retained';
     reason: string;

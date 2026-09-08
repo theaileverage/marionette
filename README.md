@@ -37,6 +37,21 @@ npx @theaileverage/marionette dashboard
 
 To install the shorter `marionette` command globally, use `npm install -g @theaileverage/marionette`.
 
+## Agent skill and Herdr SDK
+
+The distributable agent skill lives at [skills/marionette/SKILL.md](skills/marionette/SKILL.md). Copy the `skills/marionette` folder into your agent's skill directory (for example `~/.codex/skills/marionette`) to enable discovery. It covers lead leases, assignments, outcome completion, worker reports, recovery, and programmatic terminal control.
+
+The dependency-free ESM SDK targets Herdr 0.9.0/protocol 22. It exports typed access to all 102 schema methods, persistent event subscriptions, graphics streams, and short helpers for common operations:
+
+```js
+import { HerdrClient } from '@theaileverage/marionette/herdr-sdk';
+
+const herdr = HerdrClient.fromEnv(); // Requires a real Herdr-managed environment.
+const { panes } = await herdr.pane.list(process.env.HERDR_WORKSPACE_ID);
+```
+
+Services can pass an explicitly selected absolute socket path to `new HerdrClient(socketPath)`. Use `herdr.api["pane.resize"]({ pane_id, direction: "right", amount: 0.1 })` for the full wire API. See [the SDK guide](skills/marionette/references/herdr-sdk.md) for typed requests, subscriptions, binary/file frames, cancellation, and coverage limits. Use Marionette task APIs for managed workers; direct SDK calls do not create task records or enforce leases.
+
 ## Setup for agents and scripts
 
 The wizard and non-interactive setup use the same implementation. `--yes` accepts defaults; `--json` returns a JSON result and never prompts. Errors return `{ "ok": false, "error": "..." }` with a nonzero exit status when `--json` is used. Unknown options and config keys are rejected.
@@ -95,7 +110,7 @@ npm run build
 node dist/cli.js setup
 ```
 
-`npm pack` checks, tests, builds, and produces the same allowlisted tarball used for publishing. Only the bundled CLI/MCP executable, built dashboard, package metadata, and documentation are distributed; local state, logs, credentials, test artifacts, and source fixtures are excluded.
+`npm pack` checks, tests, builds, and produces the same allowlisted tarball used for publishing. Only the bundled CLI/MCP executable, thin Herdr SDK with TypeScript declarations, agent skill, built dashboard, package metadata, and documentation are distributed; local state, logs, credentials, test artifacts, and source fixtures are excluded.
 
 ## Connect Herdr explicitly
 
@@ -121,7 +136,7 @@ node dist/cli.js call project.register --file register.json
 node dist/cli.js projects
 ```
 
-Registration checks the live socket and workspace. The socket path determines the actual session; the session name is the explicit human-readable label. Each assignment creates a new unfocused tab in that workspace. No existing pane is reused. Optional `agentArgs` contains argument arrays per kind (`codex`, `claude`, `agy`) when an explicit project-specific agent configuration is needed. It defaults to no overrides.
+Registration checks the live socket and workspace. The socket path determines the actual session; the session name is the explicit human-readable label. Each assignment gets a new unfocused pane. Marionette groups up to four workers per owned tab, splitting the largest suitable pane to the right or down. It creates a new tab when no owned group has room for at least 60 columns by 12 rows per pane. Existing user panes are never reused; all live tab members must match saved Marionette terminal identities. Optional `agentArgs` contains argument arrays per kind (`codex`, `claude`, `agy`) when an explicit project-specific agent configuration is needed. It defaults to no overrides.
 
 ## Connect Codex desktop and terminal leads
 
@@ -223,7 +238,7 @@ Workers receive an attempt-scoped report credential through their new pane envir
 
 ## Delivery and cleanup
 
-Version 0.2.1 separates terminal release from delivery and Git cleanup. After integrated outcome completion, the supervisor can save worker diagnostics and close an eligible settled worker tab automatically. Failed/cancelled work needs explicit inspection; blocked, paused, waiting and uncertain workers stay intact.
+Version 0.2.1 separates terminal release from delivery and Git cleanup. After integrated outcome completion, the supervisor can save worker diagnostics and close an eligible settled worker pane automatically. Failed/cancelled work needs explicit inspection; blocked, paused, waiting and uncertain workers stay intact.
 
 Task completion preserves branches and worktrees. Use the task drawer's **Delivery and cleanup** panel or `cleanup.preview`, `cleanup.release`, `cleanup.deliver`, `cleanup.archive`, and `cleanup.collect` through CLI/MCP. Record merged, published or explicitly abandoned work, preserve evidence and committed history, then collect only the exact eligible checkout. A published PR branch stays available for later review and merge. Archives preserve completion evidence after the worktree is removed.
 
@@ -251,7 +266,7 @@ The inbox displays up to 200 unacknowledged events per page. Marking them read a
 
 - Restarting the supervisor reattaches using the saved workspace, terminal, agent name/kind, and native session identity. It does not repeat a prompt because a socket disconnected.
 - A crash during pane creation, prompt delivery, or control delivery produces an `uncertain` task. Inspect the original pane and use `task_reconcile` with `delivered` or `not-delivered` and actual evidence. Do not guess. No automatic replay occurs.
-- If creation lost its acknowledgement, no task prompt was attempted. `not-delivered` reconciliation checks for an absent tab or one matching untouched shell. An occupied or ambiguous tab is refused. Original tabs are retained. If the identity cannot be established, resolve the named pane/session through Herdr before retrying.
+- If creation lost its acknowledgement, no task prompt was attempted. `not-delivered` reconciliation checks for an absent tab or one matching untouched shell. An occupied or ambiguous tab is refused. For interrupted splits, the saved pre-creation membership identifies a possible new shell; moved, occupied, or ambiguous additions are refused. Original terminals are retained. If the identity cannot be established, resolve the named pane/session through Herdr before retrying.
 - A crash during startup blocks for inspection and continuation of the existing pane. Restart during verification reruns checks. Design checks to be safe to repeat; Marionette cannot make arbitrary commands transactional.
 - Retries require a failed/cancelled task and a settled previous worker, and consume the assignment's maximum of one to three attempts. They are explicit, never automatic for ambiguous work.
 - Managed worktree creation persists `planned → creating → ready` before worker launch. Restart reuses a matching registered checkout. A creation interrupted before `ready` is reused only if clean at the pinned base; missing, incomplete, or mismatched checkouts fail preparation for inspection without reset, pruning, or destructive recreation. Once ready, retries preserve edits. An interrupted creation that cannot be validated requires manual inspection and repair or a new assignment.

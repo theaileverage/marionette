@@ -26,22 +26,38 @@ class ProtocolDouble implements HerdrPort {
   calls: { method: string; params: any }[] = [];
   agents = new Map<string, any>();
   envs = new Map<string, any>();
+  panes = new Map<string, any>();
   status = 'idle';
   failPrompt = false;
   createCount = 0;
   async call(method: string, params: any = {}): Promise<any> {
     this.calls.push({ method, params });
     if (method === 'ping' || method === 'workspace.get') return {};
-    if (method === 'tab.create') {
+    if (method === 'pane.list') return { panes: [...this.panes.values()] };
+    if (method === 'pane.layout') {
+      const tab = this.panes.get(params.pane_id).tab_id;
+      return {
+        layout: {
+          workspace_id: 'w1',
+          tab_id: tab,
+          panes: [...this.panes.values()]
+            .filter((p) => p.tab_id === tab)
+            .map((p) => ({ pane_id: p.pane_id, rect: { x: 0, y: 0, width: 180, height: 48 } })),
+        },
+      };
+    }
+    if (method === 'tab.create' || method === 'pane.split') {
       const n = ++this.createCount,
         pane = {
           pane_id: `w1:p${n}`,
-          tab_id: `w1:t${n}`,
+          tab_id:
+            method === 'pane.split' ? this.panes.get(params.target_pane_id).tab_id : `w1:t${n}`,
           terminal_id: `term${n}`,
           workspace_id: 'w1',
         };
       this.envs.set(pane.pane_id, params.env);
-      return { root_pane: pane };
+      this.panes.set(pane.pane_id, { ...pane, cwd: params.cwd });
+      return method === 'pane.split' ? { pane } : { root_pane: pane };
     }
     if (method === 'agent.start') {
       const a = {
@@ -336,7 +352,9 @@ test('managed worktrees run same-file tasks concurrently and preserve the shared
     writeFileSync(join(ta.cwd, 'shared.txt'), 'first worker\n');
     assert.equal(readFileSync(join(tb.cwd, 'shared.txt'), 'utf8'), 'committed base\n');
     assert.equal(readFileSync(join(f.root, 'shared.txt'), 'utf8'), 'uncommitted source\n');
-    const tabs = f.herdr.calls.filter((c) => c.method === 'tab.create');
+    const tabs = f.herdr.calls.filter(
+      (c) => c.method === 'tab.create' || c.method === 'pane.split',
+    );
     assert.deepEqual(new Set(tabs.map((c) => c.params.cwd)), new Set([ta.cwd, tb.cwd, f.root]));
     // Completion independently verifies inside the managed checkout, not the dirty source.
     const r = f.store.get<Run>('run', ta.runId!)!;
@@ -1115,6 +1133,82 @@ test('restart recovers a scheduling reservation made before any external side ef
     await f.pump();
     assert.equal(f.herdr.createCount, 1);
     assert.equal(f.service.task(t.id).attempt, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test('concurrent workers share new panes with distinct credentials and working directories', async () => {
+  const f = await fixture();
+  try {
+    const tasks = await Promise.all(
+      ['layout-a', 'layout-b', 'layout-c'].map((key) => f.submit(key)),
+    );
+    await f.pump();
+    const runs = tasks.map((t) => f.store.get<Run>('run', f.service.task(t.id).runId!)!);
+    assert.equal(new Set(runs.map((r) => r.tabId)).size, 1);
+    assert.equal(new Set(runs.map((r) => r.paneId)).size, 3);
+    assert.ok(runs.every((r) => r.terminalScope === 'pane'));
+    assert.equal(f.herdr.calls.filter((c) => c.method === 'tab.create').length, 1);
+    assert.equal(f.herdr.calls.filter((c) => c.method === 'pane.split').length, 2);
+    for (const call of f.herdr.calls.filter((c) =>
+      ['tab.create', 'pane.split'].includes(c.method),
+    )) {
+      assert.equal(call.params.focus, false);
+      assert.equal(call.params.cwd, f.root);
+      assert.ok(call.params.env.MARIONETTE_WORKER_TOKEN);
+      if (call.method === 'pane.split') assert.ok(call.params.target_pane_id);
+    }
+    assert.equal(
+      new Set(runs.map((r) => f.herdr.envs.get(r.paneId!).MARIONETTE_WORKER_TOKEN)).size,
+      3,
+    );
+  } finally {
+    await f.close();
+  }
+});
+test('lost split acknowledgement persists intent and reconciles without replaying or prompting', async () => {
+  const f = await fixture();
+  try {
+    await f.submit('split-parent');
+    await f.pump();
+    const original = f.herdr.call.bind(f.herdr);
+    f.herdr.call = async (method, params) => {
+      const result = await original(method, params);
+      if (method === 'pane.split') throw new AppError('herdr_disconnected', 'Lost split ACK');
+      return result;
+    };
+    const child = await f.submit('split-lost');
+    await f.pump();
+    const task = f.service.task(child.id),
+      run = f.store.get<Run>('run', task.runId!)!;
+    assert.equal(task.status, 'uncertain');
+    assert.equal(run.creation!.mode, 'pane');
+    assert.equal(run.paneId, undefined);
+    const orphan = [...f.herdr.panes.values()].find(
+      (p) => !run.creation!.beforePaneIds!.includes(p.pane_id),
+    )!;
+    orphan.agent = 'claude';
+    await assert.rejects(
+      f.service.invoke('task.reconcile', {
+        lease: f.lease,
+        taskId: task.id,
+        resolution: 'not-delivered',
+        reason: 'Inspect split',
+      }),
+      /untouched shell/,
+    );
+    delete orphan.agent;
+    await f.service.invoke('task.reconcile', {
+      lease: f.lease,
+      taskId: task.id,
+      resolution: 'not-delivered',
+      reason: 'Confirmed untouched shell',
+    });
+    assert.equal(f.service.task(task.id).status, 'failed');
+    assert.equal(f.store.get<Run>('run', run.id)!.paneId, orphan.pane_id);
+    assert.equal(f.herdr.calls.filter((c) => c.method === 'pane.split').length, 1);
+    assert.equal(f.herdr.calls.filter((c) => c.method === 'agent.prompt').length, 1);
   } finally {
     await f.close();
   }

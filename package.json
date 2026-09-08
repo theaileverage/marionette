@@ -1,6 +1,6 @@
 {
   "name": "@theaileverage/marionette",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "type": "module",
   "engines": {
     "node": ">=22.13"
@@ -13,11 +13,12 @@
     "test": "node --import tsx --test tests/*.test.ts",
     "cli": "node --import tsx src/cli.ts",
     "mcp": "node --import tsx src/mcp.ts",
-    "format": "prettier --write src web .github tests scripts *.json *.ts *.md",
-    "format:check": "prettier --check src web .github tests scripts *.json *.ts *.md",
+    "format": "prettier --write src web skills .github tests scripts *.json *.ts *.md",
+    "format:check": "prettier --check src web skills .github tests scripts *.json *.ts *.md",
     "prepack": "npm run check && npm test && npm run build",
     "release:prepare": "node scripts/release.mjs prepare",
-    "release:check": "node scripts/release.mjs check"
+    "release:check": "node scripts/release.mjs check",
+    "sdk:generate": "node scripts/generate-herdr-sdk.mjs"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
@@ -52,7 +53,17 @@
     "VERIFICATION.md",
     "LICENSE",
     "CONTRIBUTING.md",
-    "RELEASING.md"
+    "RELEASING.md",
+    "dist/herdr-sdk.js",
+    "dist/herdr-sdk.d.ts",
+    "skills/",
+    "dist/herdr-protocol.js",
+    "dist/herdr-protocol.d.ts",
+    "dist/herdr-streams.js",
+    "dist/herdr-streams.d.ts",
+    "dist/herdr-transport.js",
+    "dist/herdr-transport.d.ts",
+    "vendor/herdr-0.9.0/LICENSE"
   ],
   "publishConfig": {
     "access": "public"
@@ -65,5 +76,11 @@
   "homepage": "https://github.com/theaileverage/marionette#readme",
   "bugs": {
     "url": "https://github.com/theaileverage/marionette/issues"
+  },
+  "exports": {
+    "./herdr-sdk": {
+      "types": "./dist/herdr-sdk.d.ts",
+      "import": "./dist/herdr-sdk.js"
+    }
   }
 }

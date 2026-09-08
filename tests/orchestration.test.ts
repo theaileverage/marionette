@@ -13,22 +13,38 @@ import type { Outcome } from '../src/orchestration-types.js';
 class Agents implements HerdrPort {
   agents = new Map<string, any>();
   envs = new Map<string, any>();
+  panes = new Map<string, any>();
   calls: { method: string; params: any }[] = [];
   failPrompt = false;
   next = 0;
   async call(method: string, params: any = {}): Promise<any> {
     this.calls.push({ method, params });
     if (method === 'ping' || method === 'workspace.get') return {};
-    if (method === 'tab.create') {
+    if (method === 'pane.list') return { panes: [...this.panes.values()] };
+    if (method === 'pane.layout') {
+      const tab = this.panes.get(params.pane_id).tab_id;
+      return {
+        layout: {
+          workspace_id: 'w1',
+          tab_id: tab,
+          panes: [...this.panes.values()]
+            .filter((p) => p.tab_id === tab)
+            .map((p) => ({ pane_id: p.pane_id, rect: { x: 0, y: 0, width: 180, height: 48 } })),
+        },
+      };
+    }
+    if (method === 'tab.create' || method === 'pane.split') {
       const n = ++this.next,
         pane = {
           pane_id: `w1:p${n}`,
-          tab_id: `w1:t${n}`,
+          tab_id:
+            method === 'pane.split' ? this.panes.get(params.target_pane_id).tab_id : `w1:t${n}`,
           workspace_id: 'w1',
           terminal_id: `terminal-${n}`,
         };
       this.envs.set(pane.pane_id, params.env);
-      return { root_pane: pane };
+      this.panes.set(pane.pane_id, { ...pane, cwd: params.cwd });
+      return method === 'pane.split' ? { pane } : { root_pane: pane };
     }
     if (method === 'agent.start') {
       const n = params.pane_id.split('p')[1];

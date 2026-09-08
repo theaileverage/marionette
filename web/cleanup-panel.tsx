@@ -4,7 +4,13 @@ import type { Run } from '../src/types';
 
 type Preview = {
   policy: CleanupPolicy;
-  runs: { runId: string; tabId?: string; cleanup?: Run['cleanup']; reasons: string[] }[];
+  runs: {
+    runId: string;
+    tabId?: string;
+    paneId?: string;
+    cleanup?: Run['cleanup'];
+    reasons: string[];
+  }[];
   collectionReasons: string[];
   delivery?: Delivery;
   archive?: Archive;
@@ -64,7 +70,7 @@ export function CleanupPanel({
           {preview.runs.map((r) => (
             <div key={r.runId}>
               <p>
-                Worker {r.tabId ?? r.runId}: {r.cleanup?.state ?? 'retained'}
+                Worker {r.paneId ?? r.tabId ?? r.runId}: {r.cleanup?.state ?? 'retained'}
               </p>
               {r.reasons.map((text, n) => (
                 <p className="muted" key={n}>
@@ -80,7 +86,7 @@ export function CleanupPanel({
                       void run('cleanup.reconcile', { runId: r.runId, resolution: 'closed' })
                     }
                   >
-                    Confirm original tab is absent
+                    Confirm original worker terminal is absent
                   </button>
                   <button
                     disabled={disabled}
@@ -96,7 +102,7 @@ export function CleanupPanel({
                   disabled={disabled}
                   onClick={() => void run('cleanup.release', { runId: r.runId })}
                 >
-                  Result inspected · release worker and tab
+                  Result inspected · release worker terminal
                 </button>
               ) : null}
             </div>

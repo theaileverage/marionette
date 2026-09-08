@@ -239,6 +239,7 @@ export class Cleanup {
       runs: runs.map((r) => ({
         runId: r.id,
         tabId: r.tabId,
+        paneId: r.paneId,
         cleanup: r.cleanup,
         reasons: this.runReasons(t, r, true),
       })),
@@ -272,7 +273,7 @@ export class Cleanup {
         this.saveRun(r, {
           ...r.cleanup,
           state: 'uncertain',
-          error: 'Restart during tab closure; inspect and reconcile. No automatic replay.',
+          error: 'Restart during terminal closure; inspect and reconcile. No automatic replay.',
         });
   }
   async stop() {
@@ -343,10 +344,9 @@ export class Cleanup {
     if (
       tab?.workspace_id !== p.workspaceId ||
       tab.tab_id !== r.tabId ||
-      tab.pane_count !== 1 ||
-      members?.length !== 1 ||
-      members[0].pane_id !== r.paneId ||
-      members[0].terminal_id !== r.terminalId
+      (!r.terminalScope && (tab.pane_count !== 1 || members?.length !== 1)) ||
+      members?.filter((pane: any) => pane.pane_id === r.paneId && pane.terminal_id === r.terminalId)
+        .length !== 1
     )
       refuse('Tab contents changed; refusing to close another pane');
     const a = (await h.call('agent.get', { target: r.paneId })).agent;
@@ -366,6 +366,23 @@ export class Cleanup {
   }
   private async absent(t: Task, r: Run) {
     const h = this.s.port(this.s.project(t.projectId));
+    if (r.terminalScope === 'pane') {
+      const panes = (await h.call('pane.list')).panes;
+      if (!Array.isArray(panes)) refuse('Cannot inspect worker terminal membership');
+      if (
+        panes.some(
+          (pane: any) =>
+            (pane.pane_id === r.paneId || pane.terminal_id === r.terminalId) &&
+            (pane.pane_id !== r.paneId ||
+              pane.tab_id !== r.tabId ||
+              pane.terminal_id !== r.terminalId),
+        )
+      )
+        refuse('Original terminal may have moved; inspect it before cleanup');
+      return !panes.some(
+        (pane: any) => pane.pane_id === r.paneId || pane.terminal_id === r.terminalId,
+      );
+    }
     try {
       await h.call('tab.get', { tab_id: r.tabId });
       return false;
@@ -392,7 +409,7 @@ export class Cleanup {
   private async release(t: Task, r: Run, reason: string, automatic: boolean, guard = () => {}) {
     if (r.cleanup?.state === 'closed') return r.cleanup;
     if (r.cleanup && ['closing', 'uncertain'].includes(r.cleanup.state))
-      refuse('Reconcile ambiguous tab closure first');
+      refuse('Reconcile ambiguous terminal closure first');
     try {
       const reasons = this.runReasons(this.s.task(t.id), r, automatic);
       if (reasons.length) refuse(reasons.join('; '));
@@ -425,12 +442,13 @@ export class Cleanup {
         updatedAt: now(),
         output: String(output).slice(-100000),
       });
-      await h.call('tab.close', { tab_id: r.tabId });
+      if (r.terminalScope === 'pane') await h.call('pane.close', { pane_id: r.paneId });
+      else await h.call('tab.close', { tab_id: r.tabId });
       this.saveRun(r, { ...this.s.store.get<Run>('run', r.id)!.cleanup!, state: 'closed' });
       this.s.store.event(
         t.projectId,
         'cleanup.released',
-        'Saved worker diagnostics and closed its settled tab',
+        'Saved worker diagnostics and closed its settled terminal',
         t.id,
         { runId: r.id },
       );
@@ -758,7 +776,7 @@ export class Cleanup {
             this.saveRun(r!, { ...r!.cleanup!, state: 'closed', reason, error: undefined });
             return this.s.store.get<Run>('run', r!.id)!.cleanup;
           }
-          refuse('Original tab is still present');
+          refuse('Original worker terminal is still present');
         }
         await this.pinned(t, r!);
         guard();
