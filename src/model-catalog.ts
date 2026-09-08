@@ -1,8 +1,9 @@
+import { Effect, Latch, Option, Schema } from 'effect';
 import { spawn } from 'node:child_process';
-import { command } from './files.js';
-import { AppError, now, type Kind } from './types.js';
+import { BoundaryError, boundaryError, sync } from './effect-runtime.js';
+import { commandEffect } from './files.js';
 import { profileSchema, type Profile } from './orchestration-types.js';
-
+import { AppError, now, type Kind } from './types.js';
 export interface CatalogModel {
   model: string;
   name: string;
@@ -17,16 +18,39 @@ export interface ModelCatalog {
   source: string;
   fetchedAt: string;
 }
-
 /** Metadata-only native protocols: never submit a user turn or request a tool. */
-async function metadata(
+const metadataEffect = Effect.fn('ModelCatalog.metadata')(function* (
   binary: string,
   args: string[],
   cwd: string,
   kind: 'codex' | 'claude',
-): Promise<any[]> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(binary, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+) {
+  const { child } = yield* Effect.acquireRelease(
+    sync('ModelCatalog.spawn', () => {
+      const closed = Latch.makeUnsafe();
+      const child = spawn(binary, args, {
+        cwd,
+        detached: process.platform !== 'win32',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      child.once('close', () => closed.openUnsafe());
+      return { child, closed };
+    }),
+    ({ child, closed }) =>
+      Effect.gen(function* () {
+        const pid = child.pid;
+        if (pid !== undefined && !Latch.isOpen(closed))
+          yield* Effect.sync(() => {
+            try {
+              process.kill(process.platform === 'win32' ? pid : -pid, 'SIGKILL');
+            } catch (error) {
+              if (!Schema.is(Schema.Struct({ code: Schema.Literal('ESRCH') }))(error)) throw error;
+            }
+          });
+        yield* closed.await;
+      }),
+  );
+  return yield* Effect.callback<any[], AppError | BoundaryError>((resume) => {
     let buffer = '',
       bytes = 0,
       finished = false,
@@ -35,16 +59,12 @@ async function metadata(
     const finish = (error?: Error) => {
       if (finished) return;
       finished = true;
-      clearTimeout(timer);
       child.stdin.end();
-      child.kill('SIGTERM');
-      error ? reject(error) : resolve(rows);
+      resume(
+        error ? Effect.fail(boundaryError('ModelCatalog.metadata')(error)) : Effect.succeed(rows),
+      );
     };
-    const timer = setTimeout(
-      () => finish(new AppError('catalog_timeout', `${binary} model metadata timed out`)),
-      30000,
-    );
-    const send = (value: unknown) => child.stdin.write(JSON.stringify(value) + '\n');
+    const send = (value: Schema.MutableJson) => child.stdin.write(JSON.stringify(value) + '\n');
     child.on('error', (error) => finish(error));
     child.stdin.on('error', (error) => {
       if (!finished) finish(error);
@@ -53,13 +73,23 @@ async function metadata(
     child.on('exit', () => {
       if (!finished)
         finish(
-          new AppError('catalog_unavailable', `${binary} exited before returning model metadata`),
+          new AppError({
+            code: 'catalog_unavailable',
+            message: `${binary} exited before returning model metadata`,
+            status: 400,
+          }),
         );
     });
     child.stdout.on('data', (data: Buffer) => {
       bytes += data.length;
       if (bytes > 4 * 1024 * 1024)
-        return finish(new AppError('catalog_size', 'Native metadata exceeds 4 MiB'));
+        return finish(
+          new AppError({
+            code: 'catalog_size',
+            message: 'Native metadata exceeds 4 MiB',
+            status: 400,
+          }),
+        );
       buffer += data.toString();
       let index: number;
       while ((index = buffer.indexOf('\n')) >= 0) {
@@ -80,10 +110,11 @@ async function metadata(
           const models = item.response.response?.models;
           if (!Array.isArray(models))
             return finish(
-              new AppError(
-                'catalog_unavailable',
-                'Claude SDK initialization did not return supported models',
-              ),
+              new AppError({
+                code: 'catalog_unavailable',
+                message: 'Claude SDK initialization did not return supported models',
+                status: 400,
+              }),
             );
           rows.push(...models);
           finish();
@@ -91,16 +122,34 @@ async function metadata(
         }
         if (item.id === 1) {
           if (item.error)
-            return finish(new AppError('catalog_unavailable', String(item.error.message)));
+            return finish(
+              new AppError({
+                code: 'catalog_unavailable',
+                message: String(item.error.message),
+                status: 400,
+              }),
+            );
           send({ method: 'initialized' });
           send({ id: nextId, method: 'model/list', params: { limit: 100, includeHidden: false } });
         } else if (item.id === nextId) {
           if (item.error || !Array.isArray(item.result?.data))
-            return finish(new AppError('catalog_unavailable', 'Codex model/list failed'));
+            return finish(
+              new AppError({
+                code: 'catalog_unavailable',
+                message: 'Codex model/list failed',
+                status: 400,
+              }),
+            );
           rows.push(...item.result.data);
           if (item.result.nextCursor) {
             if (nextId >= 20)
-              return finish(new AppError('catalog_pages', 'Too many model catalog pages'));
+              return finish(
+                new AppError({
+                  code: 'catalog_pages',
+                  message: 'Too many model catalog pages',
+                  status: 400,
+                }),
+              );
             nextId++;
             send({
               id: nextId,
@@ -126,13 +175,34 @@ async function metadata(
         method: 'initialize',
         params: { clientInfo: { name: 'marionette-model-catalog', version: '0.2.0' } },
       });
-  });
-}
-export function parseCatalog(kind: Kind, raw: unknown): CatalogModel[] {
+  }).pipe(Effect.timeout(30000), Effect.mapError(boundaryError('ModelCatalog.metadata')));
+}, Effect.scoped);
+const nativeModelSchema = Schema.Struct({
+  hidden: Schema.optional(Schema.Boolean),
+  value: Schema.optional(Schema.String),
+  resolvedModel: Schema.optional(Schema.String),
+  model: Schema.optional(Schema.String),
+  supportedEffortLevels: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
+  supportedReasoningEfforts: Schema.optional(
+    Schema.Array(Schema.Struct({ reasoningEffort: Schema.String })),
+  ),
+  inputModalities: Schema.optional(Schema.Array(Schema.String)),
+  supportsAdaptiveThinking: Schema.optional(Schema.Boolean),
+  supportsFastMode: Schema.optional(Schema.Boolean),
+  supportsAutoMode: Schema.optional(Schema.Boolean),
+  displayName: Schema.optional(Schema.String),
+  description: Schema.optional(Schema.String),
+  defaultReasoningEffort: Schema.optional(Schema.String),
+});
+export function parseCatalog<Input>(kind: Kind, raw: Input): CatalogModel[] {
   const result: CatalogModel[] = [];
   if (kind === 'agy') {
-    if (typeof raw !== 'string')
-      throw new AppError('catalog_format', 'AGY catalog must be tab-separated text');
+    if (!Schema.is(Schema.String)(raw))
+      throw new AppError({
+        code: 'catalog_format',
+        message: 'AGY catalog must be tab-separated text',
+        status: 400,
+      });
     for (const line of raw.split('\n')) {
       const [model, name] = line.trim().split('\t');
       if (!model || !name || !/^[a-zA-Z0-9][a-zA-Z0-9_.:/-]+$/.test(model)) continue;
@@ -152,18 +222,24 @@ export function parseCatalog(kind: Kind, raw: unknown): CatalogModel[] {
     }
   } else {
     if (!Array.isArray(raw))
-      throw new AppError('catalog_format', 'Native catalog must be an array');
-    for (const item of raw) {
-      if (!item || typeof item !== 'object') continue;
+      throw new AppError({
+        code: 'catalog_format',
+        message: 'Native catalog must be an array',
+        status: 400,
+      });
+    for (const candidate of raw) {
+      const decoded = Schema.decodeUnknownOption(nativeModelSchema)(candidate);
+      if (Option.isNone(decoded)) continue;
+      const item = decoded.value;
       if (kind === 'codex' && item.hidden) continue;
       const model =
         kind === 'claude'
-          ? typeof item.value === 'string' && item.value.startsWith('claude-')
+          ? item.value !== undefined && item.value.startsWith('claude-')
             ? item.value
             : item.resolvedModel
           : item.model;
       if (
-        typeof model !== 'string' ||
+        model === undefined ||
         !model.trim() ||
         /^(default|auto|latest|opus|sonnet|haiku|fable)(\[.*\])?$/.test(model)
       )
@@ -171,22 +247,18 @@ export function parseCatalog(kind: Kind, raw: unknown): CatalogModel[] {
       const reasoning =
         (kind === 'claude'
           ? item.supportedEffortLevels
-          : item.supportedReasoningEfforts?.map((e: any) => e.reasoningEffort)) ?? [];
-      if (!Array.isArray(reasoning) || reasoning.some((e) => typeof e !== 'string')) continue;
+          : item.supportedReasoningEfforts?.map((e) => e.reasoningEffort)) ?? [];
       const capabilities = [
         'tools',
-        ...(kind === 'codex'
-          ? (item.inputModalities ?? []).filter((x: unknown) => typeof x === 'string')
-          : []),
+        ...(kind === 'codex' ? (item.inputModalities ?? []) : []),
         ...(item.supportsAdaptiveThinking ? ['adaptive-thinking'] : []),
         ...(item.supportsFastMode ? ['fast-mode'] : []),
         ...(item.supportsAutoMode ? ['native-approval-review'] : []),
       ];
       result.push({
         model,
-        name: typeof item.displayName === 'string' ? item.displayName : model,
-        description:
-          typeof item.description === 'string' ? item.description : 'Native runtime model',
+        name: item.displayName ?? model,
+        description: item.description ?? 'Native runtime model',
         reasoning,
         defaultReasoning:
           kind === 'codex'
@@ -202,7 +274,7 @@ export function parseCatalog(kind: Kind, raw: unknown): CatalogModel[] {
 }
 export function catalogProfiles(catalog: ModelCatalog): Profile[] {
   return catalog.models.map((m) =>
-    profileSchema.parse({
+    Schema.decodeSync(profileSchema)({
       id: `${catalog.kind}-${m.model}`
         .toLowerCase()
         .replace(/[^a-z0-9_-]+/g, '-')
@@ -222,16 +294,23 @@ export function catalogProfiles(catalog: ModelCatalog): Profile[] {
     }),
   );
 }
-export async function discoverModels(kind: Kind, cwd: string): Promise<ModelCatalog> {
+export const discoverModelsEffect = Effect.fn('discoverModels')(function* (
+  kind: Kind,
+  cwd: string,
+) {
   let raw: unknown, source: string;
   if (kind === 'agy') {
-    const result = await command('agy', ['models'], cwd, 30000);
+    const result = yield* commandEffect('agy', ['models'], cwd, 30000);
     if (result.code !== 0 || result.timedOut)
-      throw new AppError('catalog_unavailable', 'agy models failed');
+      return yield* new AppError({
+        code: 'catalog_unavailable',
+        message: 'agy models failed',
+        status: 400,
+      });
     raw = result.output;
     source = 'agy models';
   } else if (kind === 'claude') {
-    raw = await metadata(
+    raw = yield* metadataEffect(
       'claude',
       [
         '--print',
@@ -251,11 +330,22 @@ export async function discoverModels(kind: Kind, cwd: string): Promise<ModelCata
     );
     source = 'Claude SDK initialization supported models';
   } else {
-    raw = await metadata('codex', ['app-server', '--stdio'], cwd, kind);
+    raw = yield* metadataEffect('codex', ['app-server', '--stdio'], cwd, kind);
     source = 'Codex app-server model/list';
   }
-  const models = parseCatalog(kind, raw);
+  const models = yield* sync('discoverModels.discoverModels', () => parseCatalog(kind, raw));
   if (!models.length)
-    throw new AppError('catalog_empty', `${kind} returned no exact selectable model IDs`);
-  return { kind, models, source, fetchedAt: now() };
-}
+    return yield* new AppError({
+      code: 'catalog_empty',
+      message: `${kind} returned no exact selectable model IDs`,
+      status: 400,
+    });
+  return yield* sync('discoverModels.discoverModels', () => ({
+    kind,
+    models,
+    source,
+    fetchedAt: now(),
+  }));
+});
+export const discoverModels = (kind: Kind, cwd: string) =>
+  Effect.runPromise(discoverModelsEffect(kind, cwd));

@@ -9,10 +9,16 @@ public/
 
 # Local agent configuration and credentials
 .codex/
-.agents/
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/effect/
+.marionette-reports/
+tests/.marionette-reports/
 .env
 .env.*
 !.env.example
 *.pem
 *.key
 release-assets/
+.quality-check-*/

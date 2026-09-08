@@ -1,14 +1,15 @@
-import test from 'node:test';
+import { Effect, Fiber, Latch } from 'effect';
 import assert from 'node:assert/strict';
-import { mkdtempSync, realpathSync, writeFileSync, rmSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { Store } from '../src/store.js';
-import { Service } from '../src/service.js';
-import { Supervisor } from '../src/supervisor.js';
-import { AppError, now, type Task, type Project, type HerdrPort, type Run } from '../src/types.js';
+import { join } from 'node:path';
+import { test } from 'bun:test';
 import { parseUsage, type LeadWait } from '../src/continuation.js';
 import type { Outcome } from '../src/orchestration-types.js';
+import { Service } from '../src/service.js';
+import { Store } from '../src/store.js';
+import { Supervisor } from '../src/supervisor.js';
+import { AppError, now, type HerdrPort, type Project, type Run, type Task } from '../src/types.js';
 
 class Agents implements HerdrPort {
   agents = new Map<string, any>();
@@ -63,11 +64,17 @@ class Agents implements HerdrPort {
     }
     if (method === 'agent.get') {
       const a = this.agents.get(params.target);
-      if (!a) throw new AppError('agent_not_found', 'Missing test agent');
+      if (!a)
+        throw new AppError({ code: 'agent_not_found', message: 'Missing test agent', status: 400 });
       return { agent: { ...a } };
     }
     if (method === 'agent.prompt') {
-      if (this.failPrompt) throw new AppError('herdr_timeout', 'Lost delivery acknowledgement');
+      if (this.failPrompt)
+        throw new AppError({
+          code: 'herdr_timeout',
+          message: 'Lost delivery acknowledgement',
+          status: 400,
+        });
       const a = this.agents.get(params.target);
       a.agent_status = 'working';
       a.state_change_seq++;
@@ -359,7 +366,7 @@ test('revision fencing rejects stale additions, dependency cycles, and silent cr
         expectedRevision: f.service.orchestration.outcome(f.outcome.id).revision,
         criteria: f.outcome.criteria,
       }),
-      /String|Required/,
+      /[Ss]tring|Required/,
     );
     const revised = await f.invoke('outcome.revise', {
       outcomeId: f.outcome.id,
@@ -866,12 +873,24 @@ test('startup shell readiness is retried but post-launch registration never dupl
       if (method === 'agent.start') {
         starts++;
         if (starts === 1)
-          throw new AppError('invalid_state', 'agent target pane w1:p1 is not an available shell');
+          throw new AppError({
+            code: 'invalid_state',
+            message: 'agent target pane w1:p1 is not an available shell',
+            status: 400,
+          });
         await original(method, params);
-        throw new AppError('agent_not_ready', 'Agent launched but registration pending');
+        throw new AppError({
+          code: 'agent_not_ready',
+          message: 'Agent launched but registration pending',
+          status: 400,
+        });
       }
       if (method === 'agent.get' && reads++ === 0)
-        throw new AppError('agent_not_found', 'Registration pending');
+        throw new AppError({
+          code: 'agent_not_found',
+          message: 'Registration pending',
+          status: 400,
+        });
       return original(method, params);
     };
     const t = await f.submit('readiness');
@@ -909,7 +928,11 @@ test('native blocked scrollback falls back to visible output and permits explici
     const original = f.agents.call.bind(f.agents);
     f.agents.call = async (method, params = {}) => {
       if (method === 'pane.read' && params.source === 'recent_unwrapped')
-        throw new AppError('agent_not_idle', 'Scrollback unavailable while blocked');
+        throw new AppError({
+          code: 'agent_not_idle',
+          message: 'Scrollback unavailable while blocked',
+          status: 400,
+        });
       return original(method, params);
     };
     f.agents.agents.get(f.run(task).paneId!).agent_status = 'blocked';
@@ -1131,33 +1154,35 @@ test('profile discovery preserves exact choices and defaults; availability canno
       defaults: { implementation: 'chosen' },
     });
     assert.equal(f.service.orchestration.profiles(f.p.id)[0].availability, 'unverified');
-    f.service.orchestration.probeProfile = async () => ({
-      output: 'Native probe fixture',
-      evidence: 'Controlled availability response',
-    });
+    f.service.orchestration.probeProfile = () =>
+      Effect.succeed({
+        output: 'Native probe fixture',
+        evidence: 'Controlled availability response',
+      });
     await f.invoke('profile.validate', { profileId: 'chosen' });
-    f.service.orchestration.discoverModels = async () => ({
-      kind: 'codex',
-      source: 'fixture catalog',
-      fetchedAt: now(),
-      models: [
-        {
-          model: 'exact-a',
-          name: 'Catalog A',
-          description: 'A',
-          reasoning: ['low'],
-          capabilities: [],
-        },
-        {
-          model: 'exact-b',
-          name: 'Catalog B',
-          description: 'B',
-          reasoning: ['low'],
-          defaultReasoning: 'low',
-          capabilities: ['tools'],
-        },
-      ],
-    });
+    f.service.orchestration.discoverModels = () =>
+      Effect.succeed({
+        kind: 'codex',
+        source: 'fixture catalog',
+        fetchedAt: now(),
+        models: [
+          {
+            model: 'exact-a',
+            name: 'Catalog A',
+            description: 'A',
+            reasoning: ['low'],
+            capabilities: [],
+          },
+          {
+            model: 'exact-b',
+            name: 'Catalog B',
+            description: 'B',
+            reasoning: ['low'],
+            defaultReasoning: 'low',
+            capabilities: ['tools'],
+          },
+        ],
+      });
     const discovered = await f.invoke('profile.discover', { kind: 'codex' });
     assert.equal(discovered.added.length, 1);
     const chosen = f.service.orchestration.profiles(f.p.id).find((p) => p.id === 'chosen')!;
@@ -1233,6 +1258,47 @@ test('acknowledged prompts with no observed native activity become uncertain wit
     for (let n = 0; n < 3; n++) await f.tick();
     assert.equal(prompts, 1);
   } finally {
+    await f.close();
+  }
+});
+
+test('interrupting a held lead prompt persists uncertainty immediately and never replays', async () => {
+  const f = await fixture();
+  const entered = Latch.makeUnsafe();
+  const release = Latch.makeUnsafe();
+  let prompts = 0;
+  const original = f.agents.call.bind(f.agents);
+  f.agents.call = async (method, params = {}) => {
+    if (method === 'agent.prompt') {
+      prompts++;
+      entered.openUnsafe();
+      await Effect.runPromise(release.await);
+      return {};
+    }
+    return original(method, params);
+  };
+  try {
+    const task = await f.submit('interrupted-lead');
+    const wait = await f.invoke('lead.wait', {
+      key: 'interrupted',
+      outcomeId: f.outcome.id,
+      condition: { tasks: [task.id] },
+      adapter: f.leadAgent(),
+    });
+    f.done(task);
+    f.store.put('lead-wait', wait.id, { ...wait, state: 'ready', readyAt: 0 });
+    const delivery = Effect.runFork(
+      f.service.continuation.processEffect(f.store.get<LeadWait>('lead-wait', wait.id)!),
+    );
+    await Effect.runPromise(entered.await);
+    await Effect.runPromise(Fiber.interrupt(delivery));
+    const current = f.store.get<LeadWait>('lead-wait', wait.id)!;
+    assert.equal(current.state, 'uncertain');
+    assert.match(current.error!, /No automatic replay/);
+    await f.service.continuation.process(current);
+    assert.equal(prompts, 1);
+  } finally {
+    release.openUnsafe();
     await f.close();
   }
 });

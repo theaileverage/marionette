@@ -1,10 +1,11 @@
+import type { HerdrJson } from './herdr-transport.js';
 import {
   HERDR_METHODS,
   type HerdrMethod,
   type HerdrParams,
   type HerdrResult,
-  type ResponseTypes,
   type RequestTypes,
+  type ResponseTypes,
 } from './herdr-protocol.js';
 import {
   HerdrEventStream,
@@ -18,15 +19,15 @@ import {
   type StreamOptions,
 } from './herdr-transport.js';
 export * from './herdr-protocol.js';
-export { HerdrError } from './herdr-transport.js';
-export type { RequestOptions, StreamOptions } from './herdr-transport.js';
 export { HerdrEventStream, HerdrGraphicsStream } from './herdr-streams.js';
 export type {
-  GraphicsStreamParams,
-  GraphicsFrame,
   GraphicsFileFrame,
+  GraphicsFrame,
   GraphicsFrameAck,
+  GraphicsStreamParams,
 } from './herdr-streams.js';
+export { HerdrError } from './herdr-transport.js';
+export type { RequestOptions, StreamOptions } from './herdr-transport.js';
 
 export type Pane = ResponseTypes.PaneInfo;
 export type Agent = ResponseTypes.AgentInfo;
@@ -65,10 +66,10 @@ export interface LaunchOptions {
   env?: Record<string, string>;
   focus?: boolean;
 }
-export interface WaitOptions {
+export type WaitOptions = {
   timeout_ms: number;
   until?: ('idle' | 'working' | 'blocked' | 'done' | 'unknown')[];
-}
+};
 
 /** Explicit connection selection, typed wire APIs, and small convenience helpers. */
 export class HerdrClient {
@@ -83,22 +84,20 @@ export class HerdrClient {
   /** Escape hatch for future one-shot methods. Streams require their dedicated transports. */
   call<T = unknown>(
     method: string,
-    params: Record<string, unknown> = {},
+    params: Record<string, HerdrJson | undefined> = {},
     timeoutMs = 10000,
+    signal?: AbortSignal,
   ): Promise<T> {
     if (method === 'events.subscribe' || method === 'pane.graphics.stream')
       return Promise.reject(
         new TypeError('Use subscribe(), graphicsStream(), or api for a streaming method'),
       );
-    return socketRequest<T>(this.socketPath, method, params, { timeoutMs });
+    return socketRequest<T>(this.socketPath, method, params, { timeoutMs, signal });
   }
   /** All schema-defined one-shot methods with exact typed parameter objects. */
   request<M extends RequestMethod>(method: M, ...args: RequestArgs<M>): Promise<HerdrResult> {
     const [params = {}, options = {}] = args;
-    if (
-      !(HERDR_METHODS as readonly string[]).includes(method) ||
-      (method as string) === 'events.subscribe'
-    )
+    if (!HERDR_METHODS.some((known) => known === method) || String(method) === 'events.subscribe')
       return Promise.reject(
         new TypeError(
           'Unknown one-shot method; use call() for extensions or subscribe() for events',
@@ -116,6 +115,8 @@ export class HerdrClient {
     return HerdrGraphicsStream.open(this.socketPath, params, options);
   }
   /** One-to-one method names, including streams, for discovery and generated agent code. */
+  // SAFETY: Every generated method is installed below with its matching request transport;
+  // the two streaming methods are explicitly routed to their dedicated transports.
   readonly api: HerdrApi = Object.freeze(
     Object.fromEntries([
       ...HERDR_METHODS.map((method) => [
@@ -185,12 +186,11 @@ export class HerdrClient {
         timeoutMs + 5000,
       ),
     get: (target: string) => this.call<{ agent: Agent }>('agent.get', { target }),
-    prompt: (target: string, text: string, wait?: WaitOptions) =>
-      this.call(
-        'agent.prompt',
-        { target, text, ...(wait ? { wait } : {}) },
-        wait ? wait.timeout_ms + 5000 : 10000,
-      ),
+    prompt: (target: string, text: string, wait?: WaitOptions) => {
+      const params: HerdrParams['agent.prompt'] = { target, text };
+      if (wait) params.wait = wait;
+      return this.call('agent.prompt', params, wait ? wait.timeout_ms + 5000 : 10000);
+    },
     wait: (target: string, options: WaitOptions) =>
       this.call('agent.wait', { target, ...options }, options.timeout_ms + 5000),
     sendKeys: (target: string, keys: string[]) => this.call('agent.send_keys', { target, keys }),

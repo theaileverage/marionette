@@ -11,27 +11,26 @@ concurrency:
   cancel-in-progress: true
 jobs:
   checks:
-    name: Checks (${{ matrix.os }}, Node ${{ matrix.node }})
+    name: Checks (${{ matrix.os }}, Bun)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        node: ['22', '24']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          node-version: ${{ matrix.node }}
-          cache: npm
-      - run: npm ci
-      - run: npm run format:check
-      - run: npm run release:check
-      - run: npm pack --pack-destination "$RUNNER_TEMP"
-      - run: node scripts/release.mjs smoke "$RUNNER_TEMP/theaileverage-marionette-$(node -p 'require("./package.json").version').tgz"
+          bun-version: '1.3.14'
+      - run: bun install --frozen-lockfile
+      - run: bun run tooling:check
+      - run: bun run format:check
+      - run: bun run release:check
+      - run: bun pm pack --destination "$RUNNER_TEMP"
+      - run: bun scripts/release.mjs smoke "$RUNNER_TEMP/theaileverage-marionette-$(bun -p 'require("./package.json").version').tgz"
   required:
     name: Required CI
     if: always()

@@ -1,30 +1,30 @@
-import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  realpathSync,
-  mkdtempSync,
+  existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
-  writeFileSync,
+  realpathSync,
   rmSync,
   statSync,
-  existsSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { resolve, isAbsolute } from 'node:path';
+import { test, onTestFinished } from 'bun:test';
 import { trustAgyWorkspace } from '../src/agy-trust.js';
-import { setupPlan, mcpCommand, privateJson } from '../src/setup.js';
 import { installRuntime } from '../src/runtime.js';
-import { Store } from '../src/store.js';
 import { Service } from '../src/service.js';
+import { mcpCommand, privateJson, setupPlan } from '../src/setup.js';
+import { Store } from '../src/store.js';
 
-function fixture(t: any) {
+function fixture() {
   const root = realpathSync(mkdtempSync(resolve(tmpdir(), 'marionette-setup-')));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  onTestFinished(() => rmSync(root, { recursive: true, force: true }));
   return root;
 }
-test('AGY trust preserves settings, permissions and existing roots and is idempotent', (t) => {
-  const root = fixture(t),
+test('AGY trust preserves settings, permissions and existing roots and is idempotent', () => {
+  const root = fixture(),
     settings = resolve(root, 'settings.json');
   const original = {
     trustedWorkspaces: ['/existing/project'],
@@ -42,8 +42,8 @@ test('AGY trust preserves settings, permissions and existing roots and is idempo
   assert.equal(trustAgyWorkspace(root, settings).changed, false);
   assert.equal(readFileSync(settings, 'utf8'), after);
 });
-test('AGY trust fails closed on malformed data and concurrent lock', (t) => {
-  const root = fixture(t),
+test('AGY trust fails closed on malformed data and concurrent lock', () => {
+  const root = fixture(),
     settings = resolve(root, 'settings.json');
   for (const input of ['invalid', '[]', '{"trustedWorkspaces":true}']) {
     writeFileSync(settings, input);
@@ -56,8 +56,8 @@ test('AGY trust fails closed on malformed data and concurrent lock', (t) => {
   assert.throws(() => trustAgyWorkspace(root, settings), /being edited/);
   assert.equal(readFileSync(settings, 'utf8'), '{}');
 });
-test('setup dry plan is read-only, validates input and retains saved lead preferences', (t) => {
-  const root = fixture(t),
+test('setup dry plan is read-only, validates input and retains saved lead preferences', () => {
+  const root = fixture(),
     home = resolve(root, 'state');
   assert.throws(() => setupPlan({ project: root, lead: 'typo' }));
   assert.throws(() => setupPlan({ project: root, trutsAgy: true }));
@@ -81,9 +81,9 @@ test('setup dry plan is read-only, validates input and retains saved lead prefer
   assert.equal(repeat.workspace, 'w9');
   assert.equal(statSync(resolve(root, '.marionette/project.json')).mode & 0o777, 0o600);
 });
-test('durable runtime survives deletion of the npx package and reuses identical content', (t) => {
-  const root = fixture(t),
-    source = resolve(root, 'npm-cache/package'),
+test('durable runtime survives deletion of the Bun package cache and reuses identical content', () => {
+  const root = fixture(),
+    source = resolve(root, 'bun-cache/package'),
     home = resolve(root, 'state');
   mkdirSync(resolve(source, 'dist'), { recursive: true });
   mkdirSync(resolve(source, 'public'), { recursive: true });
@@ -107,9 +107,11 @@ test('all MCP client commands use separate arguments and stable executable paths
       '/state with spaces',
     );
     assert.equal(c.binary, agent === 'codex-desktop' ? 'codex' : agent);
-    assert.deepEqual(c.args.slice(-5), [
+    assert.equal(c.server.command, process.execPath);
+    assert.ok(isAbsolute(c.server.command));
+    assert.ok(!c.args.includes('--no-warnings') && !c.args.includes('--import'));
+    assert.deepEqual(c.args.slice(-4), [
       process.execPath,
-      '--no-warnings',
       '/path with spaces/runtime/dist/mcp.js',
       '--home',
       '/state with spaces',
@@ -117,10 +119,10 @@ test('all MCP client commands use separate arguments and stable executable paths
     if (agent === 'claude') assert.ok(c.args.includes('user'));
   }
 });
-test('named lead agent metadata follows handover while old leases are fenced', async (t) => {
-  const root = fixture(t),
+test('named lead agent metadata follows handover while old leases are fenced', async () => {
+  const root = fixture(),
     store = new Store(resolve(root, 'state.sqlite'));
-  t.after(() => store.close());
+  onTestFinished(() => store.close());
   const service = new Service(store, () => ({ call: async () => ({}) }));
   const p = await service.invoke('project.register', {
     name: 'Test',

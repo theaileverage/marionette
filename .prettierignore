@@ -3,4 +3,9 @@ dist
 public
 .marionette
 .runtime
-package-lock.json
+bun.lock
+.agents
+tools/oxlint/anti-slop
+.marionette-reports
+tests/.marionette-reports
+.quality-check-*

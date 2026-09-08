@@ -1,68 +1,109 @@
-import { z } from 'zod';
-
-export const leadAgentSchema = z.enum(['codex-desktop', 'codex', 'claude', 'agy']);
-export type LeadAgent = z.infer<typeof leadAgentSchema>;
-export const kindSchema = z.enum(['codex', 'claude', 'agy']);
-export const checkSchema = z.discriminatedUnion('type', [
-  z.object({
-    type: z.literal('file'),
-    path: z.string().min(1),
-    contains: z.string().optional(),
-    sha256: z
-      .string()
-      .regex(/^[a-f0-9]{64}$/)
-      .optional(),
-    allowUnchanged: z.boolean().default(false),
+import { Effect, Schema } from 'effect';
+export const leadAgentSchema = Schema.Literals(['codex-desktop', 'codex', 'claude', 'agy']);
+export type LeadAgent = Schema.Schema.Type<typeof leadAgentSchema>;
+export const kindSchema = Schema.Literals(['codex', 'claude', 'agy']);
+export const checkSchema = Schema.Union([
+  Schema.Struct({
+    type: Schema.mutableKey(Schema.Literal('file')),
+    path: Schema.mutableKey(Schema.String.check(Schema.isMinLength(1))),
+    contains: Schema.mutableKey(Schema.optional(Schema.String)),
+    sha256: Schema.mutableKey(
+      Schema.optional(Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/))),
+    ),
+    allowUnchanged: Schema.mutableKey(
+      Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+    ),
   }),
-  z.object({
-    type: z.literal('command'),
-    command: z.string().min(1),
-    args: z.array(z.string()).default([]),
-    timeoutMs: z.number().int().min(100).max(120000).default(30000),
+  Schema.Struct({
+    type: Schema.mutableKey(Schema.Literal('command')),
+    command: Schema.mutableKey(Schema.String.check(Schema.isMinLength(1))),
+    args: Schema.mutableKey(
+      Schema.mutable(Schema.Array(Schema.String)).pipe(
+        Schema.withDecodingDefault(Effect.succeed([])),
+      ),
+    ),
+    timeoutMs: Schema.mutableKey(
+      Schema.Finite.check(Schema.isInt())
+        .check(Schema.isGreaterThanOrEqualTo(100))
+        .check(Schema.isLessThanOrEqualTo(120000))
+        .pipe(Schema.withDecodingDefault(Effect.succeed(30000))),
+    ),
   }),
 ]);
-export const assignmentSchema = z.object({
-  projectId: z.string(),
-  key: z.string().min(1).max(200),
-  title: z.string().min(1).max(200),
-  workstream: z.string().min(1).max(100).default('General'),
-  kind: kindSchema,
-  outcomeId: z.string().optional(),
-  parentId: z.string().optional(),
-  required: z.boolean().optional(),
-  profileId: z.string().optional(),
-  category: z.string().optional(),
-  model: z.string().optional(),
-  reasoning: z.string().optional(),
-  canDelegate: z.boolean().optional(),
-  deferStart: z.boolean().optional(),
-  expectedTreeRevision: z.number().int().min(1).optional(),
-  planReason: z.string().min(1).optional(),
-  prompt: z.string().min(1).max(50000),
-  cwd: z.string().optional(),
-  execution: z
-    .discriminatedUnion('mode', [
-      z.object({ mode: z.literal('shared') }).strict(),
-      z
-        .object({ mode: z.literal('worktree'), baseRef: z.string().min(1).max(500).optional() })
-        .strict(),
-    ])
-    .optional(),
-  ownership: z.array(z.string().min(1)).min(1),
-  dependencies: z.array(z.string()).default([]),
-  checks: z.array(checkSchema).min(1),
-  maxAttempts: z.number().int().min(1).max(3).default(2),
+export const assignmentSchema = Schema.Struct({
+  projectId: Schema.mutableKey(Schema.String),
+  key: Schema.mutableKey(Schema.String.check(Schema.isMinLength(1)).check(Schema.isMaxLength(200))),
+  title: Schema.mutableKey(
+    Schema.String.check(Schema.isMinLength(1)).check(Schema.isMaxLength(200)),
+  ),
+  workstream: Schema.mutableKey(
+    Schema.String.check(Schema.isMinLength(1))
+      .check(Schema.isMaxLength(100))
+      .pipe(Schema.withDecodingDefault(Effect.succeed('General'))),
+  ),
+  kind: Schema.mutableKey(kindSchema),
+  outcomeId: Schema.mutableKey(Schema.optional(Schema.String)),
+  parentId: Schema.mutableKey(Schema.optional(Schema.String)),
+  required: Schema.mutableKey(Schema.optional(Schema.Boolean)),
+  profileId: Schema.mutableKey(Schema.optional(Schema.String)),
+  category: Schema.mutableKey(Schema.optional(Schema.String)),
+  model: Schema.mutableKey(Schema.optional(Schema.String)),
+  reasoning: Schema.mutableKey(Schema.optional(Schema.String)),
+  canDelegate: Schema.mutableKey(Schema.optional(Schema.Boolean)),
+  deferStart: Schema.mutableKey(Schema.optional(Schema.Boolean)),
+  expectedTreeRevision: Schema.mutableKey(
+    Schema.optional(Schema.Finite.check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(1))),
+  ),
+  planReason: Schema.mutableKey(Schema.optional(Schema.String.check(Schema.isMinLength(1)))),
+  prompt: Schema.mutableKey(
+    Schema.String.check(Schema.isMinLength(1)).check(Schema.isMaxLength(50000)),
+  ),
+  cwd: Schema.mutableKey(Schema.optional(Schema.String)),
+  execution: Schema.mutableKey(
+    Schema.optional(
+      Schema.Union([
+        Schema.Struct({ mode: Schema.mutableKey(Schema.Literal('shared')) }).annotate({
+          parseOptions: { onExcessProperty: 'error' },
+        }),
+        Schema.Struct({
+          mode: Schema.mutableKey(Schema.Literal('worktree')),
+          baseRef: Schema.mutableKey(
+            Schema.optional(
+              Schema.String.check(Schema.isMinLength(1)).check(Schema.isMaxLength(500)),
+            ),
+          ),
+        }).annotate({ parseOptions: { onExcessProperty: 'error' } }),
+      ]),
+    ),
+  ),
+  ownership: Schema.mutableKey(
+    Schema.mutable(Schema.Array(Schema.String.check(Schema.isMinLength(1)))).check(
+      Schema.isMinLength(1),
+    ),
+  ),
+  dependencies: Schema.mutableKey(
+    Schema.mutable(Schema.Array(Schema.String)).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+    ),
+  ),
+  checks: Schema.mutableKey(Schema.mutable(Schema.Array(checkSchema)).check(Schema.isMinLength(1))),
+  maxAttempts: Schema.mutableKey(
+    Schema.Finite.check(Schema.isInt())
+      .check(Schema.isGreaterThanOrEqualTo(1))
+      .check(Schema.isLessThanOrEqualTo(3))
+      .pipe(Schema.withDecodingDefault(Effect.succeed(2))),
+  ),
 });
-export const credentialsSchema = z.object({
-  projectId: z.string(),
-  owner: z.string().min(1),
-  epoch: z.number().int(),
-  token: z.string().min(1),
+export const credentialsSchema = Schema.Struct({
+  projectId: Schema.mutableKey(Schema.String),
+  owner: Schema.mutableKey(Schema.String.check(Schema.isMinLength(1))),
+  epoch: Schema.mutableKey(Schema.Finite.check(Schema.isInt())),
+  token: Schema.mutableKey(Schema.String.check(Schema.isMinLength(1))),
 });
-export type Credentials = z.infer<typeof credentialsSchema>;
-export type Check = z.infer<typeof checkSchema>;
-export type Assignment = z.infer<typeof assignmentSchema>;
-export type Kind = z.infer<typeof kindSchema>;
+export type Credentials = Schema.Schema.Type<typeof credentialsSchema>;
+export type Check = Schema.Schema.Type<typeof checkSchema>;
+export type Assignment = Schema.Schema.Type<typeof assignmentSchema>;
+export type Kind = Schema.Schema.Type<typeof kindSchema>;
 export type Status =
   | 'waiting'
   | 'yielding'
@@ -239,18 +280,21 @@ export interface AgentInfo {
   state_change_seq?: number;
   interactive_ready?: boolean;
   launch_pending?: boolean;
-  agent_session?: { value: string };
+  agent_session?: {
+    value: string;
+  };
 }
 export interface HerdrPort {
-  call(method: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<any>;
+  call(
+    method: string,
+    params?: Record<string, Schema.MutableJson | undefined>,
+    timeoutMs?: number,
+    signal?: AbortSignal,
+  ): Promise<any>;
 }
 export const now = () => new Date().toISOString();
-export class AppError extends Error {
-  constructor(
-    public code: string,
-    message: string,
-    public status = 400,
-  ) {
-    super(message);
-  }
-}
+export class AppError extends Schema.TaggedError<AppError>()('AppError', {
+  code: Schema.String,
+  message: Schema.String,
+  status: Schema.Finite,
+}) {}

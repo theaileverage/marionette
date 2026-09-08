@@ -1,7 +1,33 @@
 # Contributing
 
-Use Node 22.13 or newer and install dependencies with `npm ci`. Run `npm run check`, `npm test`, `npm run build` and `npm run format:check` before opening a pull request. Describe the concrete behavior change and its validation. Keep tests deterministic; the standard suite must not start paid agent sessions or depend on a developer's Herdr configuration.
+Use Bun 1.3.14 or newer and install dependencies with `bun install --frozen-lockfile`. Run `bun run check`, `bun run test`, `bun run build` and `bun run format:check` before opening a pull request. Describe the concrete behavior change and its validation. Keep tests deterministic; the standard suite must not start paid agent sessions or depend on a developer's Herdr configuration.
 
-Keep generated bundles, local agent configuration, `.env` files, `.marionette` state, `.runtime` fixtures and credentials out of commits. Live validation scripts are opt-in and use explicitly named isolated sessions. Never point them at someone else's active session.
+The project pins Bun, Effect v4, and TypeScript 7. Commit `bun.lock`; do not generate an npm lockfile. `bun install --frozen-lockfile` runs the `prepare` script to
+patch the local TypeScript and Oxlint binaries with `@effect/tsgo`. If dependencies
+were installed with lifecycle scripts disabled, run `bun run prepare` before
+checking code. `bun run check` includes Effect compiler diagnostics and Oxlint;
+`bun run effect:diagnostics` prints the Effect diagnostics separately. Run
+`bun run tooling:check` to verify that valid Effect code passes and deliberate
+floating Effects and unsafe casts fail. CI performs this check after installation.
+`bun run runtime:check` exercises failed startup and concurrent shutdown through
+the real server boundary; it requires permission to bind loopback sockets.
+
+Read the [Effect skill](.agents/skills/effect/SKILL.md) and its relevant references
+before changing application workflows. The skill is from
+[kitlangton/skills](https://github.com/kitlangton/skills/tree/main/skills/effect).
+Use the installed `effect` package source to verify APIs for the pinned release.
+The [runtime guide](documentation/effect-runtime.md) explains resource ownership,
+transport boundaries, and the durable-state invariants the migration preserves.
+For VS Code or Cursor, install the TypeScript 7 extension and select the workspace
+TypeScript version; `.vscode/settings.json` configures the native language server.
+
+The [vendored anti-slop rules](tools/oxlint/anti-slop/UPSTREAM.md) enforce evidence
+for casts, parsed boundaries, and Effect service imports. All generic rules and
+the Effect rule group are errors. Fix the underlying contract instead of disabling
+rules. Generated Herdr protocol types, vendor code, built output, agent assets and
+local runtime state are excluded from lint. Keep `oxlint` and `@oxlint/plugins`
+at the same exact version and within `@effect/tsgo`'s supported versions.
+
+Keep generated bundles, local agent configuration, `.env` files, `.marionette` state, `.runtime` fixtures and credentials out of commits. The reviewed `.agents/skills/effect` guidance is tracked; other local agent configuration remains ignored. Live validation scripts are opt-in and use explicitly named isolated sessions. Never point them at someone else's active session.
 
 Changes enter `main` through pull requests. Release preparation and publication follow [RELEASING.md](RELEASING.md). Marionette is licensed under [MIT](LICENSE); bundled third-party licenses are preserved in `THIRD_PARTY_NOTICES.md`.

@@ -55,7 +55,7 @@ if (stage === 'start') {
         kind: 'codex',
         ownership: ['backend'],
         prompt:
-          'Implement backend/ledger.mjs exporting createLedger(currency). It returns currency, balance(), deposit(amount), withdraw(amount). Reject negative/nonfinite amounts and overdrafts without changing the balance. Before implementing, submit a blocked worker report asking which currency to use, then stop and wait for the lead answer. Put the question report inside backend/. After receiving the currency, implement the ledger and run node acceptance/ledger.mjs. Never edit the acceptance tests.',
+          'Implement backend/ledger.mjs exporting createLedger(currency). It returns currency, balance(), deposit(amount), withdraw(amount). Reject negative/nonfinite amounts and overdrafts without changing the balance. Before implementing, submit a blocked worker report asking which currency to use, then stop and wait for the lead answer. Put the question report inside backend/. After receiving the currency, implement the ledger and run bun acceptance/ledger.mjs. Never edit the acceptance tests.',
         checks: [
           { type: 'file', path: 'backend/ledger.mjs' },
           {
@@ -167,7 +167,7 @@ if (stage === 'start') {
         taskId: t.id,
         key: 'live-currency-answer',
         type: 'reply',
-        text: 'Use INR. Implement the ledger as specified and run node acceptance/ledger.mjs. Put all reports inside backend/.',
+        text: 'Use INR. Implement the ledger as specified and run bun acceptance/ledger.mjs. Put all reports inside backend/.',
       }),
       null,
       2,

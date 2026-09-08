@@ -1,7 +1,7 @@
-import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseCatalog, catalogProfiles } from '../src/model-catalog.js';
+import { test } from 'bun:test';
 import { catalogSnapshot } from '../src/model-catalog-snapshot.js';
+import { catalogProfiles, parseCatalog } from '../src/model-catalog.js';
 import { builtinProfiles, profileArgs } from '../src/profiles.js';
 
 test('extracted catalogs retain exact IDs, context variants and supported effort settings', () => {

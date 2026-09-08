@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Run the application, tests, and development tools on Bun, with a frozen Bun lockfile and Bun CI checks.
+- Compose application workflows and resource lifetimes with Effect v4, including typed errors, scoped polling, graceful shutdown, and cancellable subprocesses and sockets.
+- Use Bun's SQLite driver while preserving the version-2 database format, synchronous transactions, lease fencing, and recovery behavior.
+- Enforce Effect diagnostics and anti-slop lint rules, install the project Effect skill, and expand verification to 127 tests plus isolated package checks.
+
 ## 0.2.2 — 2026-09-08
 
 - Ship a Marionette agent skill with setup, task coordination, recovery, and SDK guidance.

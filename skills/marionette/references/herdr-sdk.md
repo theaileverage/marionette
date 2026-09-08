@@ -4,11 +4,11 @@
 
 The SDK targets the installed Herdr **0.9.0, protocol 22** schema. It exposes all **102 schema-defined methods**, plus the documented `pane.graphics.stream` transport omitted by upstream's exported schema. This includes workspace, worktree, tab, pane, layout, agent, event, integration, plugin, notification, client, and server APIs. The full surface uses `api[method](params, options?)`; the short helpers below remain conveniences for common operations.
 
-The vendored schema and generated types are reproducible with `npm run sdk:generate` in the Marionette source checkout. Coverage tests exercise every method through an isolated Unix-socket peer, plus streaming success/failure cases. A separate live 0.9.0 server/client check verified emitted RGB/RGBA/BGRA/PNG payloads, file-frame acknowledgements, placement, replacement, and layer removal using a simulated Kitty-capable terminal. See `VERIFICATION.md` in the package for evidence and limits; this does not validate every server-side operation or the native terminal display. Herdr still enforces semantic constraints, installed plugins, and client/graphics capabilities. Existing Marionette pane and agent methods also remain schema-compatible with 0.8.2/protocol 20.
+The vendored schema and generated types are reproducible with `bun run sdk:generate` in the Marionette source checkout. Coverage tests exercise every method through an isolated Unix-socket peer, plus streaming success/failure cases. A separate live 0.9.0 server/client check verified emitted RGB/RGBA/BGRA/PNG payloads, file-frame acknowledgements, placement, replacement, and layer removal using a simulated Kitty-capable terminal. See `VERIFICATION.md` in the package for evidence and limits; this does not validate every server-side operation or the native terminal display. Herdr still enforces semantic constraints, installed plugins, and client/graphics capabilities. Existing Marionette pane and agent methods also remain schema-compatible with 0.8.2/protocol 20.
 
 The [Socket API documentation](https://herdr.dev/docs/socket-api/) describes the server contract. In 0.9.0, multiple clients can size tabs independently, so read current pane geometry before splitting.
 
-After installing a build of Marionette containing the SDK, import its ESM subpath in Node.js 22.13+:
+After installing a build of Marionette containing the SDK, import its ESM subpath in Bun 1.3.14+ (the standalone SDK also supports Node.js 22.13+):
 
 ```js
 import { HerdrClient, HerdrError } from '@theaileverage/marionette/herdr-sdk';

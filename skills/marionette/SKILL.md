@@ -11,7 +11,7 @@ Marionette is a persistent supervisor for agent CLIs in Herdr. Leads use a fence
 
 Prefer connected Marionette MCP tools. MCP names use underscores (`project_briefing`); CLI action names use dots (`project.briefing`). Read the tool's input schema before constructing a call.
 
-For CLI access, use the installed `marionette`, or `node /absolute/package/dist/cli.js` for a source build. Commands discover the project binding from the working directory; pass `--home /absolute/state/directory` for a selected instance. Start with:
+For CLI access, use the installed `marionette`, or `bun /absolute/package/dist/cli.js` for a source build. Commands discover the project binding from the working directory; pass `--home /absolute/state/directory` for a selected instance. Start with:
 
 ```sh
 marionette projects

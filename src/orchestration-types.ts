@@ -1,32 +1,58 @@
-import { z } from 'zod';
-import { checkSchema, kindSchema } from './types.js';
-
-export const criterionSchema = z
-  .object({
-    id: z.string().min(1).max(100),
-    description: z.string().min(1).max(4000),
-    requiredEvidence: z.string().min(1).max(4000),
-  })
-  .strict();
-export const outcomeSchema = z.object({
-  projectId: z.string(),
-  key: z.string().min(1),
-  objective: z.string().min(1).max(20000),
-  scope: z.array(z.string().min(1)).min(1),
-  category: z.enum(['software', 'research', 'analysis', 'decision']).default('software'),
-  criteria: z.array(criterionSchema).min(1),
-  maxTurns: z.number().int().min(1).max(1000).default(60),
-  maxDepth: z.number().int().min(0).max(6).default(3),
+import { Effect, Schema } from 'effect';
+import { checkSchema, kindSchema, type Task } from './types.js';
+export const criterionSchema = Schema.Struct({
+  id: Schema.mutableKey(Schema.String.check(Schema.isMinLength(1)).check(Schema.isMaxLength(100))),
+  description: Schema.mutableKey(
+    Schema.String.check(Schema.isMinLength(1)).check(Schema.isMaxLength(4000)),
+  ),
+  requiredEvidence: Schema.mutableKey(
+    Schema.String.check(Schema.isMinLength(1)).check(Schema.isMaxLength(4000)),
+  ),
+}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+export const outcomeSchema = Schema.Struct({
+  projectId: Schema.mutableKey(Schema.String),
+  key: Schema.mutableKey(Schema.String.check(Schema.isMinLength(1))),
+  objective: Schema.mutableKey(
+    Schema.String.check(Schema.isMinLength(1)).check(Schema.isMaxLength(20000)),
+  ),
+  scope: Schema.mutableKey(
+    Schema.mutable(Schema.Array(Schema.String.check(Schema.isMinLength(1)))).check(
+      Schema.isMinLength(1),
+    ),
+  ),
+  category: Schema.mutableKey(
+    Schema.Literals(['software', 'research', 'analysis', 'decision']).pipe(
+      Schema.withDecodingDefault(Effect.succeed('software')),
+    ),
+  ),
+  criteria: Schema.mutableKey(
+    Schema.mutable(Schema.Array(criterionSchema)).check(Schema.isMinLength(1)),
+  ),
+  maxTurns: Schema.mutableKey(
+    Schema.Finite.check(Schema.isInt())
+      .check(Schema.isGreaterThanOrEqualTo(1))
+      .check(Schema.isLessThanOrEqualTo(1000))
+      .pipe(Schema.withDecodingDefault(Effect.succeed(60))),
+  ),
+  maxDepth: Schema.mutableKey(
+    Schema.Finite.check(Schema.isInt())
+      .check(Schema.isGreaterThanOrEqualTo(0))
+      .check(Schema.isLessThanOrEqualTo(6))
+      .pipe(Schema.withDecodingDefault(Effect.succeed(3))),
+  ),
 });
 export interface Assessment {
   criterionId: string;
   rationale: string;
-  references: { path: string; digest: string }[];
+  references: {
+    path: string;
+    digest: string;
+  }[];
   revision: number;
   owner: string;
   createdAt: string;
 }
-export interface Outcome extends Omit<z.infer<typeof outcomeSchema>, 'key'> {
+export interface Outcome extends Omit<Schema.Schema.Type<typeof outcomeSchema>, 'key'> {
   id: string;
   leadOwner: string;
   revision: number;
@@ -43,33 +69,84 @@ export interface Outcome extends Omit<z.infer<typeof outcomeSchema>, 'key'> {
     createdAt: string;
   };
 }
-export const profileSchema = z
-  .object({
-    id: z.string().regex(/^[a-z0-9_-]{1,80}$/),
-    name: z.string().min(1),
-    kind: kindSchema,
-    model: z.string().min(1),
-    reasoning: z.string().optional(),
-    supportedReasoning: z.array(z.string()).default([]),
-    categories: z.array(z.string().min(1)).min(1),
-    capabilities: z.array(z.string()).default([]),
-    strengths: z.string().min(1),
-    canDelegate: z.boolean().default(false),
-    maxConcurrency: z.number().int().min(1).max(8).default(2),
-    availability: z.enum(['unverified', 'available', 'unavailable']).default('unverified'),
-    availabilityEvidence: z.string().default('Not checked on this account'),
-  })
-  .strict();
-export type Profile = z.infer<typeof profileSchema>;
-export const limitsSchema = z
-  .object({
-    global: z.number().int().min(1).max(32).default(8),
-    project: z.number().int().min(1).max(8).default(3),
-    providers: z.record(kindSchema, z.number().int().min(1).max(16)).default({}),
-    models: z.record(z.string(), z.number().int().min(1).max(16)).default({}),
-  })
-  .strict();
-export type Limits = z.infer<typeof limitsSchema>;
+export const profileSchema = Schema.Struct({
+  id: Schema.mutableKey(Schema.String.check(Schema.isPattern(/^[a-z0-9_-]{1,80}$/))),
+  name: Schema.mutableKey(Schema.String.check(Schema.isMinLength(1))),
+  kind: Schema.mutableKey(kindSchema),
+  model: Schema.mutableKey(Schema.String.check(Schema.isMinLength(1))),
+  reasoning: Schema.mutableKey(Schema.optional(Schema.String)),
+  supportedReasoning: Schema.mutableKey(
+    Schema.mutable(Schema.Array(Schema.String)).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+    ),
+  ),
+  categories: Schema.mutableKey(
+    Schema.mutable(Schema.Array(Schema.String.check(Schema.isMinLength(1)))).check(
+      Schema.isMinLength(1),
+    ),
+  ),
+  capabilities: Schema.mutableKey(
+    Schema.mutable(Schema.Array(Schema.String)).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+    ),
+  ),
+  strengths: Schema.mutableKey(Schema.String.check(Schema.isMinLength(1))),
+  canDelegate: Schema.mutableKey(
+    Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  ),
+  maxConcurrency: Schema.mutableKey(
+    Schema.Finite.check(Schema.isInt())
+      .check(Schema.isGreaterThanOrEqualTo(1))
+      .check(Schema.isLessThanOrEqualTo(8))
+      .pipe(Schema.withDecodingDefault(Effect.succeed(2))),
+  ),
+  availability: Schema.mutableKey(
+    Schema.Literals(['unverified', 'available', 'unavailable']).pipe(
+      Schema.withDecodingDefault(Effect.succeed('unverified')),
+    ),
+  ),
+  availabilityEvidence: Schema.mutableKey(
+    Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed('Not checked on this account'))),
+  ),
+}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+export type Profile = Schema.Schema.Type<typeof profileSchema>;
+export const limitsSchema = Schema.Struct({
+  global: Schema.mutableKey(
+    Schema.Finite.check(Schema.isInt())
+      .check(Schema.isGreaterThanOrEqualTo(1))
+      .check(Schema.isLessThanOrEqualTo(32))
+      .pipe(Schema.withDecodingDefault(Effect.succeed(8))),
+  ),
+  project: Schema.mutableKey(
+    Schema.Finite.check(Schema.isInt())
+      .check(Schema.isGreaterThanOrEqualTo(1))
+      .check(Schema.isLessThanOrEqualTo(8))
+      .pipe(Schema.withDecodingDefault(Effect.succeed(3))),
+  ),
+  providers: Schema.mutableKey(
+    Schema.Record(
+      kindSchema,
+      Schema.mutableKey(
+        Schema.optionalKey(
+          Schema.Finite.check(Schema.isInt())
+            .check(Schema.isGreaterThanOrEqualTo(1))
+            .check(Schema.isLessThanOrEqualTo(16)),
+        ),
+      ),
+    ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  ),
+  models: Schema.mutableKey(
+    Schema.Record(
+      Schema.String,
+      Schema.mutableKey(
+        Schema.Finite.check(Schema.isInt())
+          .check(Schema.isGreaterThanOrEqualTo(1))
+          .check(Schema.isLessThanOrEqualTo(16)),
+      ),
+    ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  ),
+}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+export type Limits = Schema.Schema.Type<typeof limitsSchema>;
 export interface Revision {
   id: string;
   projectId: string;
@@ -79,30 +156,52 @@ export interface Revision {
   reason: string;
   evidence: string[];
   owner: string;
-  before: unknown;
-  after: unknown;
+  before: Task | Outcome | { outcome: Outcome; affected: Task[] } | null | undefined;
+  after: Task | Outcome;
   createdAt: string;
 }
-export const planPatchSchema = z
-  .object({
-    prompt: z.string().min(1).max(50000).optional(),
-    title: z.string().min(1).max(200).optional(),
-    checks: z.array(checkSchema).min(1).optional(),
-    dependencies: z.array(z.string()).optional(),
-    required: z.boolean().optional(),
-    supersededBy: z.string().optional(),
-  })
-  .strict();
-export const strategySchema = z.object({
-  outcomeId: z.string(),
-  kind: z.enum(['parallel', 'sequential', 'council', 'debate', 'competition', 'review-repair']),
-  participants: z.array(z.string()).min(1),
-  criteria: z.string().min(1),
-  stopCondition: z.string().min(1),
-  maxRounds: z.number().int().min(1).max(20).default(3),
-  quorum: z.number().int().min(1).optional(),
+export const planPatchSchema = Schema.Struct({
+  prompt: Schema.mutableKey(
+    Schema.optional(Schema.String.check(Schema.isMinLength(1)).check(Schema.isMaxLength(50000))),
+  ),
+  title: Schema.mutableKey(
+    Schema.optional(Schema.String.check(Schema.isMinLength(1)).check(Schema.isMaxLength(200))),
+  ),
+  checks: Schema.mutableKey(
+    Schema.optional(Schema.mutable(Schema.Array(checkSchema)).check(Schema.isMinLength(1))),
+  ),
+  dependencies: Schema.mutableKey(Schema.optional(Schema.mutable(Schema.Array(Schema.String)))),
+  required: Schema.mutableKey(Schema.optional(Schema.Boolean)),
+  supersededBy: Schema.mutableKey(Schema.optional(Schema.String)),
+}).annotate({ parseOptions: { onExcessProperty: 'error' } });
+export const strategySchema = Schema.Struct({
+  outcomeId: Schema.mutableKey(Schema.String),
+  kind: Schema.mutableKey(
+    Schema.Literals([
+      'parallel',
+      'sequential',
+      'council',
+      'debate',
+      'competition',
+      'review-repair',
+    ]),
+  ),
+  participants: Schema.mutableKey(
+    Schema.mutable(Schema.Array(Schema.String)).check(Schema.isMinLength(1)),
+  ),
+  criteria: Schema.mutableKey(Schema.String.check(Schema.isMinLength(1))),
+  stopCondition: Schema.mutableKey(Schema.String.check(Schema.isMinLength(1))),
+  maxRounds: Schema.mutableKey(
+    Schema.Finite.check(Schema.isInt())
+      .check(Schema.isGreaterThanOrEqualTo(1))
+      .check(Schema.isLessThanOrEqualTo(20))
+      .pipe(Schema.withDecodingDefault(Effect.succeed(3))),
+  ),
+  quorum: Schema.mutableKey(
+    Schema.optional(Schema.Finite.check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(1))),
+  ),
 });
-export interface Strategy extends z.infer<typeof strategySchema> {
+export interface Strategy extends Schema.Schema.Type<typeof strategySchema> {
   id: string;
   projectId: string;
   revision: number;

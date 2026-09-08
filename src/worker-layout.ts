@@ -1,14 +1,22 @@
-import type { HerdrPort, Run } from './types.js';
+import { Effect } from 'effect';
+import { herdrCall } from './effect-runtime.js';
 import type { Pane, PaneLayout } from './herdr-sdk.js';
+import type { HerdrPort, Run } from './types.js';
+import { AppError } from './types.js';
 
 /** Only split tabs whose entire live membership is pinned to known Marionette runs. */
-export async function planWorkerPane(
+export const planWorkerPaneEffect = Effect.fn('WorkerLayout.plan')(function* (
   h: HerdrPort,
   workspaceId: string,
   runs: Run[],
-): Promise<NonNullable<Run['creation']>> {
-  const panes: Pane[] = (await h.call('pane.list', { workspace_id: workspaceId })).panes;
-  if (!Array.isArray(panes)) throw new Error('Herdr did not return workspace panes');
+) {
+  const panes: Pane[] = (yield* herdrCall(h, 'pane.list', { workspace_id: workspaceId })).panes;
+  if (!Array.isArray(panes))
+    return yield* new AppError({
+      code: 'invalid_panes',
+      message: 'Herdr did not return workspace panes',
+      status: 502,
+    });
   const candidates = runs.filter(
     (r) =>
       r.terminalScope === 'pane' && r.paneId && r.tabId && !r.cleanup && r.phase !== 'creating',
@@ -25,7 +33,7 @@ export async function planWorkerPane(
       )
     )
       continue;
-    const layout: PaneLayout = (await h.call('pane.layout', { pane_id: members[0].pane_id }))
+    const layout: PaneLayout = (yield* herdrCall(h, 'pane.layout', { pane_id: members[0].pane_id }))
       .layout;
     if (
       layout?.workspace_id !== workspaceId ||
@@ -45,10 +53,9 @@ export async function planWorkerPane(
           {
             paneId: p.pane_id,
             area: width * height,
-            direction: (right && (!down || width >= height * 3) ? 'right' : 'down') as
-              'right' | 'down',
+            direction: right && (!down || width >= height * 3) ? 'right' : 'down',
           },
-        ];
+        ] satisfies { paneId: string; area: number; direction: 'right' | 'down' }[];
       })
       .sort((a, b) => b.area - a.area);
     if (choices.length)
@@ -58,7 +65,9 @@ export async function planWorkerPane(
         targetPaneId: choices[0].paneId,
         direction: choices[0].direction,
         beforePaneIds: panes.map((p) => p.pane_id),
-      };
+      } satisfies NonNullable<Run['creation']>;
   }
-  return { mode: 'tab' };
-}
+  return { mode: 'tab' } satisfies NonNullable<Run['creation']>;
+});
+export const planWorkerPane = (h: HerdrPort, workspaceId: string, runs: Run[]) =>
+  Effect.runPromise(planWorkerPaneEffect(h, workspaceId, runs));

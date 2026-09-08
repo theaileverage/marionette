@@ -5,7 +5,7 @@ When there is no useful work to do, persist lead_wait with an observable result,
 Keep stable instructions and the same native conversation when possible. Read compact event deliveries and target task_get, outcome_get and checkpoint_get for details; full transcripts and evidence stay in referenced records and files. Save a checkpoint after consequential decisions or before a long gap. Record deliberate compaction and its potential loss of prefix reuse. Import actual native JSON usage when available and label missing cache, token and cost metrics unavailable.
 Evaluate each current completion criterion against concrete evidence with outcome_assess; review the integrated result with outcome_integrate. Finish with outcome_complete only after the entire required tree passes. Give a final account of satisfied criteria, evidence references, remaining issues and any necessary user decision. If blocked, state the precise unmet requirement and required next action; do not claim completion.`;
 
-export const strategyInstructions: Record<string, string> = {
+export const strategyInstructions = {
   parallel:
     'Produce your bounded specialist result, then return concrete evidence for integration.',
   sequential:

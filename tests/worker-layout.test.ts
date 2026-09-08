@@ -1,7 +1,7 @@
-import test from 'node:test';
 import assert from 'node:assert/strict';
+import { test } from 'bun:test';
+import type { HerdrPort, Run } from '../src/types.js';
 import { planWorkerPane } from '../src/worker-layout.js';
-import type { Run, HerdrPort } from '../src/types.js';
 
 function fixture(count = 1, width = 180, height = 48) {
   const panes = Array.from({ length: count }, (_, n) => ({
@@ -10,14 +10,23 @@ function fixture(count = 1, width = 180, height = 48) {
     pane_id: `w1:p${n}`,
     terminal_id: `term-${n}`,
   }));
-  const runs = panes.map((p) => ({
+  const runs = panes.map((p): Run => ({
     id: p.pane_id,
     terminalScope: 'pane',
     paneId: p.pane_id,
     tabId: p.tab_id,
     terminalId: p.terminal_id,
     phase: 'running',
-  })) as Run[];
+    taskId: p.pane_id,
+    attempt: 1,
+    revision: 1,
+    agentName: 'test',
+    kind: 'codex',
+    tokenHash: 'test',
+    startedAt: '',
+    seenWork: false,
+    baseline: {},
+  }));
   const h: HerdrPort = {
     async call(method) {
       if (method === 'pane.list') return { panes };
@@ -60,7 +69,7 @@ test('worker layout refuses user members, changed identities, legacy tabs, and u
     if (change === 'terminal') f.runs[0].terminalId = 'replaced';
     if (change === 'legacy') delete f.runs[0].terminalScope;
     if (change === 'creating')
-      f.runs.push({ phase: 'creating', creation: { mode: 'pane', tabId: 'w1:t1' } } as Run);
+      f.runs.push({ ...f.runs[0], phase: 'creating', creation: { mode: 'pane', tabId: 'w1:t1' } });
     if (change === 'cleanup')
       f.runs[0].cleanup = { state: 'closing', reason: 'release', updatedAt: '' };
     assert.equal((await planWorkerPane(f.h, 'w1', f.runs)).mode, 'tab', change);

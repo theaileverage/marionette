@@ -9,25 +9,26 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, resolve, relative } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-/** Copy the bundled executable and UI out of the ephemeral npx cache. */
+/** Copy the bundled executable and UI out of the ephemeral package cache. */
 export function installRuntime(home: string, source = packageRoot) {
   const files: string[] = ['dist/cli.js', 'dist/mcp.js', 'package.json'];
   if (existsSync(resolve(source, 'THIRD_PARTY_NOTICES.md'))) files.push('THIRD_PARTY_NOTICES.md');
   function walk(dir: string) {
     for (const entry of readdirSync(resolve(source, dir), { withFileTypes: true })) {
       const path = dir + '/' + entry.name;
-      entry.isDirectory() ? walk(path) : files.push(path);
+      if (entry.isDirectory()) walk(path);
+      else files.push(path);
     }
   }
   if (
     !existsSync(resolve(source, 'dist/cli.js')) ||
     !existsSync(resolve(source, 'public/index.html'))
   )
-    throw new Error('Build Marionette first with npm run build');
+    throw new Error('Build Marionette first with bun run build');
   walk('public');
   const digest = createHash('sha256');
   for (const file of files.sort()) digest.update(file).update(readFileSync(resolve(source, file)));

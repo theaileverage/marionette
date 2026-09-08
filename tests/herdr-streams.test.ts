@@ -1,9 +1,10 @@
-import test from 'node:test';
+import { Schema } from 'effect';
 import assert from 'node:assert/strict';
-import net from 'node:net';
 import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import net from 'node:net';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { test, jest } from 'bun:test';
 import { HerdrClient } from '../src/herdr-sdk.js';
 
 function deferred<T>() {
@@ -48,9 +49,9 @@ async function fixture(handle: (socket: net.Socket, request: any, remaining: Buf
     },
   };
 }
-const reply = (socket: net.Socket, id: string, result: unknown) =>
+const reply = (socket: net.Socket, id: string, result: Schema.MutableJson) =>
   socket.write(JSON.stringify({ id, result }) + '\n');
-const event = (event: string, data: unknown) => JSON.stringify({ event, data }) + '\n';
+const event = (event: string, data: Schema.MutableJson) => JSON.stringify({ event, data }) + '\n';
 
 test('subscriptions preserve coalesced and fragmented events through an async iterator', async () => {
   const peer = deferred<net.Socket>();
@@ -82,7 +83,10 @@ test('subscriptions preserve coalesced and fragmented events through an async it
     setImmediate(() => socket.write(bytes.subarray(offset)));
     for await (const item of stream) {
       assert.equal(item.event, 'pane.agent_status_changed');
-      assert.equal((item.data as any).title, 'प्रश्न 🐑');
+      assert.equal(
+        Schema.decodeUnknownSync(Schema.Struct({ title: Schema.String }))(item.data).title,
+        'प्रश्न 🐑',
+      );
       break;
     }
     await stream.closed;
@@ -143,7 +147,7 @@ test('closing a subscription wakes an outstanding reader', async () => {
   }
 });
 
-test('one-shot waits honor cancellation and server deadlines', async (t) => {
+test('one-shot waits honor cancellation and server deadlines', async () => {
   const peer = deferred<{ socket: net.Socket; request: any }>();
   let connects = 0;
   const f = await fixture((socket, request) => {
@@ -156,7 +160,7 @@ test('one-shot waits honor cancellation and server deadlines', async (t) => {
       (e: any) => e.code === 'herdr_aborted',
     );
     assert.equal(connects, 0);
-    t.mock.timers.enable({ apis: ['setTimeout'] });
+    jest.useFakeTimers();
     const controller = new AbortController();
     const waiting = f.h.request(
       'events.wait',
@@ -173,14 +177,14 @@ test('one-shot waits honor cancellation and server deadlines', async (t) => {
       },
     );
     await peer.promise;
-    t.mock.timers.tick(10001);
+    jest.advanceTimersByTime(10001);
     await Promise.resolve();
     assert.equal(settled, false, 'A server wait must outlive the generic 10-second deadline');
     controller.abort();
     await assert.rejects(waiting, (e: any) => e.code === 'herdr_aborted');
     assert.equal(connects, 1);
   } finally {
-    t.mock.timers.reset();
+    jest.useRealTimers();
     await f.close();
   }
 });
@@ -257,7 +261,7 @@ test('graphics streams serialize exact binary bytes and correlate file-frame ack
   }
 });
 
-test('graphics stream surfaces server errors, wrong ACKs and lost ACKs without replay', async (t) => {
+test('graphics stream surfaces server errors, wrong ACKs and lost ACKs without replay', async () => {
   for (const mode of ['error', 'wrong', 'timeout'] as const) {
     let frames = 0;
     const received = deferred<void>();
@@ -284,7 +288,7 @@ test('graphics stream surfaces server errors, wrong ACKs and lost ACKs without r
     });
     try {
       const stream = await f.h.graphicsStream({ pane_id: 'w1:p1' });
-      if (mode === 'timeout') t.mock.timers.enable({ apis: ['setTimeout'] });
+      if (mode === 'timeout') jest.useFakeTimers();
       const sent = stream.fileFrame(
         {
           format: 'rgba',
@@ -307,12 +311,12 @@ test('graphics stream surfaces server errors, wrong ACKs and lost ACKs without r
               : 'herdr_timeout'),
       );
       await received.promise;
-      if (mode === 'timeout') t.mock.timers.tick(101);
+      if (mode === 'timeout') jest.advanceTimersByTime(101);
       await rejected;
       await assert.rejects(stream.closed);
       assert.equal(frames, 1);
     } finally {
-      t.mock.timers.reset();
+      jest.useRealTimers();
       await f.close();
     }
   }
