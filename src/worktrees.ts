@@ -6,7 +6,7 @@ import { inside, safePath } from './files.js';
 import { AppError, type ManagedWorktree, type Task } from './types.js';
 
 const exec = promisify(execFile);
-async function git(cwd: string, args: string[]) {
+export async function git(cwd: string, args: string[]) {
   // A supervisor's inherited Git environment must not redirect task repository operations.
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const key of Object.keys(env)) if (key.startsWith('GIT_')) delete env[key];

@@ -3,6 +3,7 @@ import { realpathSync, statSync } from 'node:fs';
 import { resolve, isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { Continuation } from './continuation.js';
+import { Cleanup } from './cleanup.js';
 import { Orchestration } from './orchestration.js';
 import { Store } from './store.js';
 import { Herdr } from './herdr.js';
@@ -30,6 +31,7 @@ export const terminalStates = new Set(['completed', 'cancelled', 'failed']);
 export class Service {
   orchestration = new Orchestration(this);
   continuation = new Continuation(this);
+  cleanup = new Cleanup(this);
   constructor(
     public store: Store,
     public port: (project: Project) => HerdrPort = (p) => new Herdr(p.socketPath),
@@ -87,6 +89,7 @@ export class Service {
       );
     return {
       project,
+      cleanupPolicy: this.cleanup.policy(projectId),
       lead: this.publicLead(projectId),
       ...this.orchestration.board(projectId),
       tasks,
@@ -151,6 +154,7 @@ export class Service {
     return result;
   }
   async invoke(action: string, raw: any = {}): Promise<any> {
+    if (action.startsWith('cleanup.')) return this.cleanup.invoke(action, raw);
     if (/^(lead\.wait|checkpoint\.|usage\.|adapter\.)/.test(action))
       return this.continuation.invoke(action, raw);
     if (/^(outcome\.|plan\.|profile\.|limits\.|strategy\.|board\.)/.test(action))
@@ -192,6 +196,8 @@ export class Service {
         await h.call('ping');
         await h.call('workspace.get', { workspace_id: p.workspaceId });
         return this.store.transaction(() => {
+          for (const task of this.store.all<Task>('task'))
+            if (task.worktree && inside(task.worktree.path, root)) this.cleanup.assertMutable(task);
           const concurrent = this.store
             .all<Project>('project')
             .find((v) => v.socketPath === p.socketPath && v.workspaceId === p.workspaceId);
@@ -350,6 +356,7 @@ export class Service {
           key = z.string().min(1).parse(raw.key);
         if (c.projectId !== t.projectId)
           throw new AppError('project_mismatch', 'Task and lease differ');
+        this.cleanup.assertMutable(t);
         // Check idempotency before external reads, but never bypass fencing.
         const cached = this.store.get<any>('idempotency', t.projectId + ':retry:' + key);
         if (cached)
@@ -392,6 +399,7 @@ export class Service {
         }
         this.guard(raw.lease);
         const current = this.task(t.id);
+        this.cleanup.assertMutable(current);
         if (current.runId !== t.runId || !['failed', 'cancelled'].includes(current.status))
           throw new AppError(
             'retry_state',
@@ -596,12 +604,15 @@ export class Service {
       })
       .parse(raw);
     return this.store.transaction(() => {
-      const t = this.task(i.taskId);
+      let t = this.task(i.taskId);
+      this.cleanup.assertMutable(t);
       if (t.projectId !== c.projectId)
         throw new AppError('project_mismatch', 'Task and lease differ');
       return this.idempotent(c.projectId, 'control:' + i.key, i, () => {
         if (terminalStates.has(t.status))
           throw new AppError('task_finished', 'Task is already finished', 409);
+        if (t.runId && this.store.get<Run>('run', t.runId)?.cleanup?.state === 'closed')
+          t = this.updateTask(t, { runId: undefined });
         if (['redirect', 'reply'].includes(i.type) && !i.text?.trim())
           throw new AppError('text_required', 'Provide the new instructions or answer');
         if (i.type === 'keys' && !i.keys)
@@ -689,6 +700,9 @@ export class Service {
     const p = this.project(a.projectId),
       cwd = realpathSync(a.cwd ?? p.root);
     const parent = a.parentId ? this.task(a.parentId) : undefined;
+    if (parent) this.cleanup.assertMutable(parent);
+    for (const task of this.store.all<Task>('task'))
+      if (task.worktree && inside(task.worktree.path, cwd)) this.cleanup.assertMutable(task);
     const inheritedWorktree =
       parent?.projectId === p.id && parent.worktree?.state === 'ready' && parent.cwd === cwd;
     if (!inside(p.root, cwd) && !inheritedWorktree)
@@ -720,6 +734,12 @@ export class Service {
       }
     for (const id of a.dependencies) {
       const d = this.task(id);
+      if (this.cleanup.active(d.id))
+        throw new AppError(
+          'cleanup_busy',
+          'Dependency is being cleaned up; retry after it finishes',
+          409,
+        );
       if (d.projectId !== a.projectId)
         throw new AppError('dependency_scope', 'Dependencies must belong to the same project');
     }
@@ -754,6 +774,7 @@ export class Service {
   workerGuard(taskId: string, token: string, revision: number) {
     const t = this.task(taskId),
       r = t.runId ? this.store.get<Run>('run', t.runId) : undefined;
+    this.cleanup.assertMutable(t);
     if (!r || hash(token) !== r.tokenHash)
       throw new AppError('worker_auth', 'Invalid or obsolete worker token', 401);
     if (terminalStates.has(t.status) || revision !== t.revision || r.phase === 'stopped')
@@ -774,6 +795,7 @@ export class Service {
     return this.store.transaction(() => {
       const t = this.task(taskId),
         r = t.runId ? this.store.get<Run>('run', t.runId) : undefined;
+      this.cleanup.assertMutable(t);
       if (!r || hash(token) !== r.tokenHash)
         throw new AppError('worker_auth', 'Invalid or obsolete worker token', 401);
       if (terminalStates.has(t.status) || i.revision !== t.revision)

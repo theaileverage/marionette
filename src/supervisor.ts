@@ -42,6 +42,7 @@ export class Supervisor {
   start() {
     this.recover();
     this.service.continuation.recover();
+    this.service.cleanup.recover();
     this.timer = setInterval(() => this.tick(), this.pollMs);
     this.tick();
   }
@@ -49,6 +50,7 @@ export class Supervisor {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     await this.service.continuation.stop();
+    await this.service.cleanup.stop();
     while (this.busy.size) await new Promise((r) => setTimeout(r, 50));
   }
   recover() {
@@ -124,12 +126,15 @@ export class Supervisor {
     if (this.stopped) return;
     this.service.orchestration.refreshEvidence();
     this.service.continuation.tick();
+    this.service.cleanup.tick();
     const s = this.service,
       all = s.store.all<Task>('task');
     // Reserve each task synchronously before asynchronous Herdr operations begin.
     for (const t of all)
       if (
         t.runId &&
+        !this.service.cleanup.active(t.id) &&
+        !['closing', 'closed', 'uncertain'].includes(this.run(t).cleanup?.state ?? '') &&
         t.status !== 'queued' &&
         !this.busy.has(t.id) &&
         (!terminalStates.has(t.status) || this.run(t).phase !== 'stopped')
@@ -157,7 +162,13 @@ export class Supervisor {
     }
     for (const project of s.store.all<Project>('project')) {
       const tasks = s.tasks(project.id);
-      for (const task of tasks.filter((t) => t.status === 'queued' && !this.busy.has(t.id))) {
+      for (const task of tasks.filter(
+        (t) =>
+          t.status === 'queued' &&
+          !t.archiveId &&
+          !this.service.cleanup.active(t.id) &&
+          !this.busy.has(t.id),
+      )) {
         const dependencies = task.dependencies.map((id) => s.task(id));
         let waitReason = dependencies.some((d) => d.status !== 'completed')
           ? 'Waiting for dependencies to complete'

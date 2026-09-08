@@ -12,6 +12,7 @@ import {
 } from './orchestration-types.js';
 import { leadContract } from './prompts.js';
 import { waitSchema } from './continuation.js';
+import { cleanupPolicySchema } from './cleanup.js';
 import { VERSION } from './version.js';
 import { call, homePath } from './config.js';
 import {
@@ -418,6 +419,72 @@ tool(
     expectedRevision: z.number().int(),
     synthesis: z.string(),
     disagreements: z.array(z.string()),
+  },
+);
+tool(
+  'cleanup_preview',
+  'cleanup.preview',
+  'Inspect release and collection eligibility, retained runs, delivery, archive and policy. Does not delete anything.',
+  { taskId: z.string() },
+  true,
+);
+tool(
+  'cleanup_configure',
+  'cleanup.configure',
+  'Authorize project cleanup policy. Automatic terminal release defaults on after integrated outcome completion; automatic worktree collection defaults off. Collection requires recorded delivery, sealed evidence and all consumers to finish.',
+  { lease: credentialsSchema, reason: z.string(), policy: cleanupPolicySchema },
+);
+tool(
+  'cleanup_release',
+  'cleanup.release',
+  'After inspecting the result and confirming no further native continuation is needed, save diagnostics and close only the settled worker tab. Failed/cancelled files remain intact. No session or workspace closure.',
+  {
+    lease: credentialsSchema,
+    taskId: z.string(),
+    runId: z.string().optional(),
+    reason: z.string(),
+  },
+);
+tool(
+  'cleanup_reconcile',
+  'cleanup.reconcile',
+  'Reconcile uncertain tab closure using actual inspection. Closed requires the original tab to be absent; not-closed requires the original settled identity. Never replays closure.',
+  {
+    lease: credentialsSchema,
+    taskId: z.string(),
+    runId: z.string().optional(),
+    reason: z.string(),
+    resolution: z.enum(['closed', 'not-closed']),
+  },
+);
+tool(
+  'cleanup_deliver',
+  'cleanup.deliver',
+  'Record merged, published, or explicitly abandoned work. This performs no commit, push, or merge. The checkout must be clean including ignored files. Merged/published needs an exact target ref containing its HEAD; published uses refreshed refs/remotes/... metadata.',
+  {
+    lease: credentialsSchema,
+    taskId: z.string(),
+    reason: z.string(),
+    disposition: z.enum(['merged', 'published', 'abandoned']),
+    targetRef: z.string().optional(),
+  },
+);
+tool(
+  'cleanup_archive',
+  'cleanup.archive',
+  'Seal all finished tasks sharing the managed checkout and preserve evidence, diagnostics and committed history. Release their terminals first. Sealed tasks cannot resume; use a new assignment for additional work.',
+  { lease: credentialsSchema, taskId: z.string(), reason: z.string() },
+);
+tool(
+  'cleanup_collect',
+  'cleanup.collect',
+  'Collect the exact archived worktree after rechecking consumers, delivery and integrity. Supply the preview archiveId. Optional branch deletion compares and deletes the exact archived tip after rechecking merged ancestry, or after explicit abandonment. No forced worktree removal, sessions, or workspace removal.',
+  {
+    lease: credentialsSchema,
+    taskId: z.string(),
+    reason: z.string(),
+    archiveId: z.string(),
+    deleteBranch: z.boolean().optional(),
   },
 );
 await server.connect(new StdioServerTransport());

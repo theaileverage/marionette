@@ -47,7 +47,9 @@ export async function call(home: string, action: string, input: unknown = {}) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${c.token}` },
       body: JSON.stringify({ action, input }),
-      signal: AbortSignal.timeout(action === 'profile.validate' ? 135000 : 45000),
+      signal: AbortSignal.timeout(
+        action.startsWith('cleanup.') ? 300000 : action === 'profile.validate' ? 135000 : 45000,
+      ),
     });
   const body = (await response.json()) as any;
   if (!response.ok)

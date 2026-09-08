@@ -100,6 +100,7 @@ export interface Lead {
   reason: string;
 }
 export interface Task extends Omit<Assignment, 'key'> {
+  archiveId?: string;
   id: string;
   cwd: string;
   worktree?: ManagedWorktree;
@@ -133,6 +134,13 @@ export interface ManagedWorktree {
   baseCommit: string;
 }
 export interface Run {
+  cleanup?: {
+    state: 'closing' | 'closed' | 'uncertain' | 'retained';
+    reason: string;
+    updatedAt: string;
+    output?: string;
+    error?: string;
+  };
   id: string;
   taskId: string;
   attempt: number;

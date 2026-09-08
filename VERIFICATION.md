@@ -1,5 +1,15 @@
 # Verification record
 
+## Resource lifecycle 0.2.1 (8 September 2026)
+
+The release adds 26 cleanup regression tests to the existing suite (100 total). The cleanup fixtures use real temporary Git repositories/worktrees and SQLite databases, plus an explicitly labelled Herdr protocol double. They exercise integrated-outcome release, retained failures/native-input states, split and replaced tabs, busy workers, lead handover, lost acknowledgements and restart reconciliation, dirty/untracked/ignored files, shared-checkout and registered-project consumers, archived evidence and Git bundles, tampering, branch movement, published-then-merged delivery, explicit abandonment, policy opt-in/revocation, directory/symlink artifacts and continuation after terminal release. HTTP/STDIO integration checks all 47 MCP tools, including the seven cleanup tools.
+
+The installed Herdr protocol-20 schema was inspected for `tab.get`, `pane.list`, `agent.get`, and `tab.close`. No real user worker, tab, branch or worktree was removed in this release exercise, and no paid agent was launched. Protocol-fixture results do not claim new live native-agent acceptance; the earlier 0.2.0 exercise remains documented below.
+
+The built dashboard was checked in an isolated temporary supervisor with no real Herdr connection. Cleanup eligibility rendered the retained worker and blocking reasons. A seven-day retention policy saved and reloaded through the UI. Screenshots were visually inspected at desktop and 390-pixel mobile width; the mobile drawer and document both measured 390 pixels with no horizontal overflow. The test used private fixture state and left production project bindings untouched.
+
+Release gates: formatting, TypeScript checks, release metadata, the full suite, production build, packaged-install smoke, and the Linux/macOS Node 22/24 CI matrix. Evidence archival flushes files/directories before recording success; collection retains an explicit phase through interruptions and rechecks identity/integrity before removal. Herdr does not provide an atomic conditional-close primitive, so external operators must not repurpose a tab while cleanup is closing it.
+
 ## Outcome orchestration 0.2.0 (8 September 2026)
 
 Published `@theaileverage/marionette@0.2.0` publicly with the `latest` tag. The registry integrity exactly matches the tested tarball, and an independent fresh-cache registry install returned version `0.2.0`. All required validation, including the cold-resume probe, passed before publication.

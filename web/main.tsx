@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import './style.css';
 import { OutcomeBoard, type OutcomeBoardData } from './outcome-board';
+import { CleanupPanel } from './cleanup-panel';
 
 type Task = {
   id: string;
@@ -128,7 +129,13 @@ function App() {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ action, input }),
       signal: AbortSignal.timeout(
-        action === 'profile.validate' ? 135000 : action === 'profile.discover' ? 45000 : 15000,
+        action.startsWith('cleanup.')
+          ? 300000
+          : action === 'profile.validate'
+            ? 135000
+            : action === 'profile.discover'
+              ? 45000
+              : 15000,
       ),
     });
     const data = await response.json();
@@ -1093,6 +1100,21 @@ function App() {
                 {task.output || 'Output will appear after the worker starts.'}
               </pre>
             </section>
+            <CleanupPanel
+              key={task.id}
+              taskId={task.id}
+              canEdit={mine}
+              pending={pending}
+              onAction={(action, input) =>
+                perform(
+                  action,
+                  { ...input, lease },
+                  action === 'cleanup.preview'
+                    ? 'Cleanup eligibility refreshed'
+                    : 'Cleanup state saved',
+                )
+              }
+            />
             {task.receipt && (
               <section>
                 <h3>Completion report</h3>
