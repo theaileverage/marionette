@@ -35,7 +35,7 @@
     "lucide-react": "^0.468.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "zod": "^3.25.0"
+    "zod": "^4.5.4"
   },
   "description": "Persistent multi-agent orchestration for Herdr, with a named lead, MCP tools, and a local dashboard.",
   "bin": {
