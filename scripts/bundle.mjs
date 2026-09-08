@@ -12,6 +12,7 @@ for (const name of ['cli', 'mcp']) {
     entryPoints: [`src/${name}.ts`],
     outfile: `dist/${name}.js`,
     bundle: true,
+    loader: { '.mustache': 'text' },
     platform: 'node',
     format: 'esm',
     target: 'esnext',

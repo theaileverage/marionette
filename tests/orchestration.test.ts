@@ -284,6 +284,28 @@ test('outcome criteria, history and independent assessments survive restart and 
   }
 });
 
+test('supervisor dispatches the worker template with literal data and shell-quoted report commands', async () => {
+  const f = await fixture();
+  try {
+    f.supervisor.cliPath = "/test/Ada's tools/cli.js";
+    const task = await f.submit('render', {
+      canDelegate: true,
+      prompt: 'Preserve <output> and {{literal}}.',
+    });
+    await f.tick();
+    const prompt = f.agents.calls.find((call) => call.method === 'agent.prompt')?.params.text;
+    assert.ok(prompt);
+    assert.ok(prompt.includes('ASSIGNMENT\nPreserve <output> and {{literal}}.'));
+    assert.ok(prompt.includes('MANAGED DELEGATION'));
+    assert.ok(prompt.includes(`Persistent outcome: ${f.outcome.id}`));
+    assert.ok(prompt.includes("'/test/Ada'\\''s tools/cli.js' worker-report"));
+    assert.ok(prompt.includes(JSON.stringify(task.checks, null, 2)));
+    assert.equal(prompt.includes(f.token(task)), false);
+  } finally {
+    await f.close();
+  }
+});
+
 test('recursive completion rejects failed, blocked, cancelled and unresolved descendants', async () => {
   const f = await fixture();
   try {

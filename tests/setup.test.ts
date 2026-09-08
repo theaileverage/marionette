@@ -12,6 +12,8 @@ import {
 import { tmpdir } from 'node:os';
 import { resolve, isAbsolute } from 'node:path';
 import { test, onTestFinished } from 'bun:test';
+import { execFileSync } from 'node:child_process';
+import { mcpServerName } from '../src/mcp-registration.js';
 import { trustAgyWorkspace } from '../src/agy-trust.js';
 import { installRuntime } from '../src/runtime.js';
 import { Service } from '../src/service.js';
@@ -79,6 +81,8 @@ test('setup dry plan is read-only, validates input and retains saved lead prefer
   assert.equal(repeat.lead, 'claude');
   assert.equal(repeat.trustAgy, false);
   assert.equal(repeat.workspace, 'w9');
+  assert.equal(repeat.workspaceExplicit, false);
+  assert.equal(setupPlan({ project: root, workspace: 'w9' }).workspaceExplicit, true);
   assert.equal(statSync(resolve(root, '.marionette/project.json')).mode & 0o777, 0o600);
 });
 test('durable runtime survives deletion of the Bun package cache and reuses identical content', () => {
@@ -156,4 +160,55 @@ test('named lead agent metadata follows handover while old leases are fenced', a
       .trustAgyWorkspaces,
     true,
   );
+});
+
+test('preflight requires a terminal lead even without MCP installation, and treats other workers as optional', async () => {
+  const { setupRequirements, toolInstaller } = await import('../src/setup-dependencies.js');
+  assert.deepEqual(
+    setupRequirements({ lead: 'claude', mcp: 'skip' })
+      .filter((tool) => tool.required)
+      .map((tool) => tool.binary),
+    ['git', 'herdr', 'claude'],
+  );
+  assert.deepEqual(
+    setupRequirements({ lead: 'codex-desktop', mcp: 'print' })
+      .filter((tool) => tool.required)
+      .map((tool) => tool.binary),
+    ['git', 'herdr'],
+  );
+  assert.equal(setupPlan({ project: fixture() }).installTools, false);
+  assert.deepEqual(toolInstaller('herdr', true, false), {
+    binary: 'brew',
+    args: ['install', 'herdr'],
+  });
+  assert.deepEqual(toolInstaller('herdr', false, false), {
+    url: 'https://herdr.dev/install.sh',
+    shell: 'sh',
+  });
+  assert.equal(toolInstaller('agy', true, true), undefined);
+});
+
+test('MCP display quotes only arguments that need shell escaping and round-trips special characters', () => {
+  const ordinary = mcpCommand('codex', 'mnett-menderly-mendy', '/runtime', '/state');
+  assert.ok(ordinary.shell.startsWith('codex mcp add mnett-menderly-mendy -- '));
+  assert.ok(!ordinary.shell.includes("'"));
+  const special = mcpCommand(
+    'codex',
+    'mnett-project-lead',
+    "/runtime's files/$(false)",
+    '/state with spaces; echo unsafe',
+  );
+  const args = execFileSync('/bin/sh', ['-c', `set -- ${special.shell}; printf '%s\\0' "$@"`], {
+    encoding: 'utf8',
+  })
+    .split('\0')
+    .slice(0, -1);
+  assert.deepEqual(args, [special.binary, ...special.args]);
+});
+
+test('MCP names use readable project and lead slugs with bounded safe characters', () => {
+  assert.equal(mcpServerName('Menderly', 'Mendy'), 'mnett-menderly-mendy');
+  assert.equal(mcpServerName('Café & Co.', 'Ada Lovelace'), 'mnett-cafe-co-ada-lovelace');
+  assert.match(mcpServerName('项目', '✨'), /^[a-z0-9-]+$/);
+  assert.ok(mcpServerName('project'.repeat(30), 'lead'.repeat(30)).length <= 60);
 });

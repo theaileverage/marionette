@@ -9,6 +9,7 @@ import { BoundaryError, sdk, sync } from './effect-runtime.js';
 import { Service } from './service.js';
 import { Supervisor } from './supervisor.js';
 import { AppError } from './types.js';
+import { packageRoot } from './runtime.js';
 import { SETUP_VERSION, VERSION } from './version.js';
 
 interface ServerHandle {
@@ -70,6 +71,7 @@ const serverLayer = (shutdown: () => Promise<void>) =>
           id: config.id,
           pid: process.pid,
           version: VERSION,
+          runtime: packageRoot,
           setupVersion: SETUP_VERSION,
           notificationMode: 'durable-inbox-and-dashboard',
         }),

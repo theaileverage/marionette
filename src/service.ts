@@ -215,6 +215,7 @@ export class Service {
                       ),
                     ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
                   ),
+                  trustWorkspaces: Schema.mutableKey(Schema.optional(Schema.Boolean)),
                   trustAgyWorkspaces: Schema.mutableKey(
                     Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
                   ),
@@ -284,11 +285,95 @@ export class Service {
               }),
             );
           }
+          case 'project.reconnect': {
+            const i = yield* sync('Project.reconnectInput', () =>
+              Schema.decodeUnknownSync(
+                Schema.Struct({
+                  lease: credentialsSchema,
+                  expectedWorkspaceId: Schema.String.check(Schema.isPattern(/^w\d+$/)),
+                  workspaceId: Schema.String.check(Schema.isPattern(/^w\d+$/)),
+                }),
+              )(raw),
+            );
+            const check = () => {
+              const c = this.guard(i.lease),
+                p = this.project(c.projectId);
+              if (p.workspaceId === i.workspaceId) return p;
+              if (p.workspaceId !== i.expectedWorkspaceId)
+                throw new AppError({
+                  code: 'project_connection_changed',
+                  message:
+                    'The project connection changed during setup. Retry with its current saved binding.',
+                  status: 409,
+                });
+              if (
+                this.tasks(p.id).some((t) => !terminalStates.has(t.status)) ||
+                this.store
+                  .all<Operation>('operation')
+                  .some((op) => op.projectId === p.id && op.phase !== 'done') ||
+                this.continuation
+                  .waits(p.id)
+                  .some((w) => !['acknowledged', 'invalidated'].includes(w.state))
+              )
+                throw new AppError({
+                  code: 'project_reconnect_busy',
+                  message:
+                    'Resolve active tasks, pending operations and lead waits before reconnecting a missing workspace. Existing history and authority were preserved.',
+                  status: 409,
+                });
+              if (
+                this.store
+                  .all<Project>('project')
+                  .some(
+                    (other) =>
+                      other.id !== p.id &&
+                      other.socketPath === p.socketPath &&
+                      other.workspaceId === i.workspaceId,
+                  )
+              )
+                throw new AppError({
+                  code: 'workspace_owned',
+                  message: 'The replacement workspace is already bound to another project.',
+                  status: 409,
+                });
+              return p;
+            };
+            const p = yield* sync('Project.reconnectPreflight', check);
+            if (p.workspaceId === i.workspaceId) return p;
+            const h = this.port(p);
+            const { workspaces }: { workspaces: { workspace_id: string }[] } = yield* herdrCall(
+              h,
+              'workspace.list',
+            );
+            if (workspaces.some((w) => w.workspace_id === p.workspaceId))
+              return yield* new AppError({
+                code: 'workspace_still_exists',
+                message:
+                  'The original workspace still exists. Setup will not replace an active connection.',
+                status: 409,
+              });
+            yield* herdrCall(h, 'workspace.get', { workspace_id: i.workspaceId });
+            return yield* sync('Project.reconnectCommit', () =>
+              this.store.transaction(() => {
+                const current = check();
+                if (current.workspaceId === i.workspaceId) return current;
+                const updated = { ...current, workspaceId: i.workspaceId };
+                this.store.put('project', p.id, updated);
+                this.store.event(
+                  p.id,
+                  'project.reconnected',
+                  `Reconnected missing workspace ${current.workspaceId} to ${i.workspaceId}; project history and lead preserved.`,
+                );
+                return updated;
+              }),
+            );
+          }
           case 'project.configure': {
             const i = yield* sync('Service.invoke', () =>
               Schema.decodeUnknownSync(
                 Schema.Struct({
                   lease: Schema.mutableKey(credentialsSchema),
+                  trustWorkspaces: Schema.mutableKey(Schema.optional(Schema.Boolean)),
                   trustAgyWorkspaces: Schema.mutableKey(Schema.optional(Schema.Boolean)),
                   agentArgs: Schema.mutableKey(
                     Schema.optional(
@@ -306,6 +391,7 @@ export class Service {
             const c = yield* sync('Service.invoke', () => this.guard(i.lease)),
               p = yield* sync('Service.invoke', () => this.project(c.projectId));
             const updated = { ...p };
+            if (i.trustWorkspaces !== undefined) updated.trustWorkspaces = i.trustWorkspaces;
             if (i.trustAgyWorkspaces !== undefined)
               updated.trustAgyWorkspaces = i.trustAgyWorkspaces;
             if (i.agentArgs) updated.agentArgs = i.agentArgs;

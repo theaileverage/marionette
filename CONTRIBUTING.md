@@ -2,6 +2,24 @@
 
 Use Bun 1.3.14 or newer and install dependencies with `bun install --frozen-lockfile`. Run `bun run check`, `bun run test`, `bun run build` and `bun run format:check` before opening a pull request. Describe the concrete behavior change and its validation. Keep tests deterministic; the standard suite must not start paid agent sessions or depend on a developer's Herdr configuration.
 
+Edit the lead prompt in [`src/templates/lead.mustache`](src/templates/lead.mustache).
+It is a plain-text Mustache template shared by setup, lead launch, and MCP
+instructions. The optional `session` section receives `leadName`, `projectName`,
+`projectId`, and `leasePath`; triple braces preserve their literal text without
+HTML escaping. Keep session-specific details inside that section. Run
+`bun test tests/prompts.test.ts tests/lead-terminal.test.ts` to check rendering
+and terminal compatibility. Source commands load template edits on their next
+start; run `bun run build` to embed them in the distributed CLI and MCP bundles.
+
+Worker wording lives beside it: `worker.mustache` contains the assignment,
+scope, inspection, worktree, and reporting instructions; `worker-delegation.mustache`
+and `worker-strategy.mustache` are conditional partials; `worker-followup.mustache`
+handles child results, lead answers, and replacement objectives. Task data and
+shell-quoted CLI commands are prepared in `src/prompts.ts` and `src/supervisor.ts`.
+Use triple braces for literal text and the prepared `*Json` fields inside JSON
+examples. Templates and partials are embedded during the same build. Run
+`bun test tests/prompts.test.ts tests/orchestration.test.ts` after worker edits.
+
 The project pins Bun, Effect v4, and TypeScript 7. Commit `bun.lock`; do not generate an npm lockfile. `bun install --frozen-lockfile` runs the `prepare` script to
 patch the local TypeScript and Oxlint binaries with `@effect/tsgo`. If dependencies
 were installed with lifecycle scripts disabled, run `bun run prepare` before

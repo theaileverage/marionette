@@ -44,6 +44,7 @@ export const healthEffect = Effect.fn('Http.health')(
         id: Schema.optional(Schema.String),
         setupVersion: Schema.optional(Schema.Finite),
         version: Schema.optional(Schema.String),
+        runtime: Schema.optional(Schema.String),
       }),
     )(yield* response.json);
   },

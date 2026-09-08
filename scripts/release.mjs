@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -141,6 +141,18 @@ function smoke(tarball) {
     timeout: 30000,
   });
   assert.equal(output, pkg.version, 'Installed package CLI version differs');
+  const cli = join(dir, 'node_modules', '.bin', 'marionette');
+  const plan = JSON.parse(run(process.execPath, [cli, 'setup', '--dry-run'], { cwd: dir }));
+  assert.equal(
+    plan.root,
+    realpathSync(dir),
+    'Fresh package setup must use the caller project directory',
+  );
+  assert.equal(existsSync(join(dir, '.marionette')), false, 'Dry-run must not create state');
+  assert.ok(
+    !readFileSync(cli, 'utf8').includes('node:sqlite'),
+    'Bun package must not load node:sqlite',
+  );
   assert.equal(
     existsSync(join(dir, 'node_modules', 'effect')),
     false,

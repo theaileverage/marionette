@@ -128,6 +128,8 @@ export interface Project {
   workspaceId: string;
   maxConcurrency: number;
   agentArgs: Partial<Record<Kind, string[]>>;
+  trustWorkspaces?: boolean;
+  /** Legacy AGY-only opt-in; retained when reading older state. */
   trustAgyWorkspaces?: boolean;
   createdAt: string;
 }

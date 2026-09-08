@@ -23,6 +23,10 @@ Read the selected project's briefing, decisions, outstanding questions, and inbo
 
 If setup is needed, `marionette setup --schema` and `setup --help` describe the installed options. `setup --json --project /absolute/project --lead codex-desktop --lead-name NAME` creates/reuses the named session, supervisor and project binding and configures the selected lead. Setup's `--dry-run` previews its effects. Preserve an existing installation and saved lead. `doctor` diagnoses connections; deleting state is not a recovery step.
 
+`marionette update --check` reports available updates; `update` and `upgrade` update the shared instance and its project bindings/MCP registrations, with rollback on startup failure. Setup offers migration for an older saved runtime; scripted setup requires `--upgrade`. Workspace trust is the general `trustWorkspaces` option for Codex, Claude Code, and AGY; `--no-trust-workspaces` retains native workspace prompts without changing tool approvals.
+
+For user-requested removal, inspect `remove --dry-run` or `uninstall --dry-run --global` first. `remove` targets the current project (`--project DIR` or `--project-id ID` selects another); `uninstall` removes the selected instance, with `--global` also removing detected Bun/npm CLI installs. Source files and Git branches are preserved. Resolve active tasks, pending operations, and managed worktrees first. Closing verified agent panes requires explicit `--stop-agents`; `--keep-herdr` retains terminal resources. Noninteractive deletion requires `--yes`. Never use removal as a repair shortcut.
+
 ## Lead workflow
 
 Read a supplied bootstrap prompt and private lease file locally. Keep the token out of prose, artifacts, and logs. A CLI mutation accepts `--lease /private/path/lead.json`; an MCP mutation accepts the equivalent `lease` object. Acquire control only for initial establishment or an authorized takeover. `lead_handover` / `lead.handover` transfers the lease and invalidates the old one. Do not take over merely because another lead is quiet.

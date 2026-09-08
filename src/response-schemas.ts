@@ -14,6 +14,7 @@ export const projectSchema = Schema.Struct({
     kindSchema,
     Schema.optionalKey(Schema.mutable(Schema.Array(Schema.String))),
   ),
+  trustWorkspaces: Schema.optional(Schema.Boolean),
   trustAgyWorkspaces: Schema.optional(Schema.Boolean),
   createdAt: Schema.String,
 });
