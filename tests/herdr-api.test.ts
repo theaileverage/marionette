@@ -1,16 +1,16 @@
-import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import net from 'node:net';
-import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { test } from 'bun:test';
 import {
-  HerdrClient,
   HERDR_METHODS,
   HERDR_PROTOCOL,
   HERDR_SCHEMA_SHA256,
+  HerdrClient,
 } from '../src/herdr-sdk.js';
-import { createHash } from 'node:crypto';
 // @ts-expect-error The generator is a development-only JavaScript tool.
 import { generateProtocol } from '../scripts/generate-herdr-sdk.mjs';
 const source = readFileSync(
@@ -91,10 +91,13 @@ test('every schema method routes through the typed API without renaming or losin
     for (const request of schema.schemas.request.oneOf) {
       const method = request.properties.method.const;
       const params = sample(request.properties.params ?? { type: 'object' });
-      const result = await (h.api as any)[method](params);
+      const entry = Object.entries(h.api).find(([name]) => name === method);
+      assert.ok(entry);
+      const result = await entry[1](params);
+      if (method === 'events.subscribe') assert.ok('close' in result);
       assert.equal(received.at(-1).method, method);
       assert.deepEqual(received.at(-1).params, params, method);
-      if (method === 'events.subscribe') result.close();
+      if ('close' in result) result.close();
     }
     const graphics = await h.api['pane.graphics.stream']({
       pane_id: 'w1:p1',
@@ -113,7 +116,7 @@ test('every schema method routes through the typed API without renaming or losin
   }
 });
 
-// Compiled by npm run check; never execute mutations merely to validate their types.
+// Compiled by bun run check; never execute mutations merely to validate their types.
 function typeContract(h: HerdrClient) {
   void h.api['workspace.close']({ workspace_id: 'w1', close_group: true });
   void h.api['pane.move']({

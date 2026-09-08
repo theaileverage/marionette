@@ -1,27 +1,27 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { Effect, Latch } from 'effect';
 import { z } from 'zod';
-import {
-  outcomeSchema,
-  criterionSchema,
-  planPatchSchema,
-  profileSchema,
-  limitsSchema,
-  strategySchema,
-} from './orchestration-types.js';
-import { leadContract } from './prompts.js';
-import { waitSchema } from './continuation.js';
-import { cleanupPolicySchema } from './cleanup.js';
-import { VERSION } from './version.js';
-import { call, homePath } from './config.js';
+import { callEffect, homePath } from './config.js';
+import { sdk } from './effect-runtime.js';
 import {
   assignmentSchema,
-  credentialsSchema,
   checkSchema,
+  cleanupPolicySchema,
+  credentialsSchema,
+  criterionSchema,
   kindSchema,
   leadAgentSchema,
-} from './types.js';
+  limitsSchema,
+  outcomeSchema,
+  planPatchSchema,
+  profileSchema,
+  strategySchema,
+  waitSchema,
+} from './mcp-schemas.js';
+import { leadContract } from './prompts.js';
+import { VERSION } from './version.js';
 const i = process.argv.indexOf('--home'),
   home = homePath(i >= 0 ? process.argv[i + 1] : undefined);
 const server = new McpServer(
@@ -47,14 +47,22 @@ function tool(
       inputSchema,
       annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly, openWorldHint: false },
     },
-    async (input: any) => {
-      try {
-        const result = await call(home, action, input);
-        return { content: [{ type: 'text' as const, text: JSON.stringify(result) }] };
-      } catch (e) {
-        return { isError: true, content: [{ type: 'text' as const, text: String(e) }] };
-      }
-    },
+    (input: any) =>
+      Effect.runPromise(
+        callEffect(home, action, input).pipe(
+          Effect.match({
+            onSuccess: (result) =>
+              ({
+                content: [{ type: 'text', text: JSON.stringify(result) }],
+              }) satisfies import('@modelcontextprotocol/sdk/types.js').CallToolResult,
+            onFailure: (error) =>
+              ({
+                isError: true,
+                content: [{ type: 'text', text: String(error) }],
+              }) satisfies import('@modelcontextprotocol/sdk/types.js').CallToolResult,
+          }),
+        ),
+      ),
   );
 }
 tool(
@@ -487,4 +495,30 @@ tool(
     deleteBranch: z.boolean().optional(),
   },
 );
-await server.connect(new StdioServerTransport());
+const main = Effect.fn('Mcp.serve')(function* () {
+  const closed = yield* Latch.make();
+  server.server.onclose = () => {
+    closed.openUnsafe();
+  };
+  yield* Effect.acquireRelease(
+    sdk('Mcp.connect', () => server.connect(new StdioServerTransport())),
+    () => sdk('Mcp.close', () => server.close()).pipe(Effect.orDie),
+  );
+  yield* Effect.acquireRelease(
+    Effect.sync(() => {
+      const stop = () => {
+        closed.openUnsafe();
+      };
+      process.once('SIGINT', stop);
+      process.once('SIGTERM', stop);
+      return stop;
+    }),
+    (stop) =>
+      Effect.sync(() => {
+        process.off('SIGINT', stop);
+        process.off('SIGTERM', stop);
+      }),
+  );
+  yield* closed.await;
+}, Effect.scoped);
+await Effect.runPromise(main());

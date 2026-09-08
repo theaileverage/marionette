@@ -1,4 +1,5 @@
 {
+  "$schema": "./node_modules/@effect/tsgo/schema.json",
   "compilerOptions": {
     "target": "ES2022",
     "module": "NodeNext",
@@ -8,8 +9,21 @@
     "skipLibCheck": true,
     "outDir": "dist",
     "rootDir": "src",
-    "types": ["node"],
-    "declaration": true
+    "types": ["node", "bun"],
+    "declaration": true,
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "diagnosticSeverity": {
+          "floatingEffect": "error",
+          "missingEffectContext": "error",
+          "missingEffectError": "error",
+          "missingLayerContext": "error",
+          "outdatedApi": "error",
+          "unsafeEffectTypeAssertion": "error"
+        }
+      }
+    ]
   },
   "include": ["src/**/*.ts"]
 }

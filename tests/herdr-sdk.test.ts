@@ -1,9 +1,9 @@
-import test from 'node:test';
 import assert from 'node:assert/strict';
-import net from 'node:net';
 import { mkdtempSync, rmSync } from 'node:fs';
+import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { test } from 'bun:test';
 import { HerdrClient, HerdrError } from '../src/herdr-sdk.js';
 
 test('SDK refuses implicit session discovery and invalid deadlines', async () => {

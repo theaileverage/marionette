@@ -1,41 +1,43 @@
 # Releasing Marionette
 
-The public repository is [theaileverage/marionette](https://github.com/theaileverage/marionette). Source changes go through pull requests into `main`. GitHub Actions runs formatting, metadata validation, type checks, tests, a production build and an installed-package smoke test on Linux and macOS with Node 22 and 24. These checks use protocol fixtures, not paid agent sessions.
+The public repository is [theaileverage/marionette](https://github.com/theaileverage/marionette). Source changes go through pull requests into `main`. GitHub Actions runs formatting, metadata validation, type checks, tests, a production build and an installed-package smoke test on Linux and macOS with the pinned Bun runtime. These checks use protocol fixtures, not paid agent sessions.
 
 ## Prepare a version
 
 From a clean checkout, create a branch and run:
 
 ```sh
-git switch -c release/0.2.1
-npm run release:prepare -- 0.2.1
+git switch -c release/0.3.0
+bun run release:prepare 0.3.0
 ```
 
-The helper updates `package.json`, `package-lock.json`, `src/version.ts` and a dated changelog section. Replace the placeholder with concrete release notes. Do not change the setup protocol number unless the protocol changes. Update verification evidence when behavior changes, then run:
+The helper updates `package.json`, `src/version.ts` and a dated changelog section. The dependency-only `bun.lock` does not need a version bump. Replace the placeholder with concrete release notes. Do not change the setup protocol number unless the protocol changes. Update verification evidence when behavior changes, then run:
 
 ```sh
-npm run format
-npm run release:check
-npm pack --pack-destination /private/tmp
+bun run format
+bun run release:check
+bun pm pack --destination /private/tmp
 ```
 
-Commit the release preparation and open a pull request. `Required CI` must pass before merging. A tag must point at a commit contained in `main`; it must exactly match the package, lockfile, runtime version and changelog. Stable versions go to npm `latest`; prereleases such as `0.3.0-beta.1` go to `next`.
+Commit the release preparation and open a pull request. `Required CI` must pass before merging. A tag must point at a commit contained in `main`; it must exactly match the package, runtime version and changelog. Stable versions go to npm `latest`; prereleases such as `0.3.0-beta.1` go to `next`.
 
 ## Publish the merged version
 
 ```sh
 git switch main
 git pull --ff-only
-git tag -a v0.2.1 -m 'Release 0.2.1'
-git push origin v0.2.1
+git tag -a v0.3.0 -m 'Release 0.3.0'
+git push origin v0.3.0
 ```
+
+Node and npm remain isolated to the npm OIDC publishing step; application builds, tests, and package smoke checks run on Bun.
 
 The `Release` workflow rebuilds and verifies the package, publishes the tested tarball using npm OIDC, compares the registry integrity, then creates a GitHub release with the tarball and `SHA256SUMS`. It uses pinned official actions, read-only checkout credentials, a dedicated `npm` environment, and an explicitly scoped OIDC permission. No npm token is stored in GitHub.
 
 If a run fails after npm publication, rerun the failed job. Existing package integrity must match before the workflow continues; it never overwrites an npm version or a differing GitHub asset. You can also dispatch on the existing tag:
 
 ```sh
-gh workflow run release.yml --ref v0.2.1 -f tag=v0.2.1
+gh workflow run release.yml --ref v0.3.0 -f tag=v0.3.0
 ```
 
 Do not move or delete published tags. Fix a bad release with a new version. Registry publication is irreversible in the usual release workflow; removing a GitHub release does not remove its npm package.

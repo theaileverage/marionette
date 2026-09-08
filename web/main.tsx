@@ -81,11 +81,17 @@ type Briefing = Omit<OutcomeBoardData, 'tasks'> & {
   decisions: { id: string; text: string; rationale: string; owner: string; createdAt: string }[];
 };
 type Notice = { id: number; type: string; message: string; taskId?: string; createdAt: string };
+type AssignmentLinks = {
+  outcomeId?: string;
+  expectedTreeRevision?: number;
+  parentId?: string;
+  profileId?: string;
+};
 const short = (id: string) => id.slice(0, 8);
-const pretty = (v: unknown) => JSON.stringify(v, null, 2);
+const pretty = <Value,>(v: Value) => JSON.stringify(v, null, 2);
 const active = new Set(['preparing', 'running', 'redirecting', 'cancelling', 'verifying']);
 const needsAttention = new Set(['blocked', 'uncertain', 'failed']);
-function download(name: string, value: unknown) {
+function download<Value>(name: string, value: Value) {
   const url = URL.createObjectURL(new Blob([pretty(value)], { type: 'application/json' }));
   const a = document.createElement('a');
   a.href = url;
@@ -123,7 +129,7 @@ function App() {
     }
     return v;
   });
-  async function api(action: string, input: unknown = {}) {
+  async function api<Input>(action: string, input: Input) {
     const response = await fetch('/api/call', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -143,7 +149,7 @@ function App() {
     return data.result;
   }
   async function refresh() {
-    const ps = await api('project.list');
+    const ps = await api('project.list', {});
     setProjects(ps);
     if (!ps.some((p: Project) => p.id === projectId)) setProjectId(ps[0]?.id ?? '');
     if (projectId) {
@@ -167,7 +173,7 @@ function App() {
       if (busy) return;
       busy = true;
       try {
-        const ps: Project[] = await api('project.list');
+        const ps: Project[] = await api('project.list', {});
         if (cancelled) return;
         setProjects(ps);
         if (!ps.some((p) => p.id === projectId)) {
@@ -225,7 +231,7 @@ function App() {
   }, [toast]);
   useEffect(() => {
     if (!modal && !selected) return;
-    const previous = document.activeElement as HTMLElement | null;
+    const previous = document.activeElement;
     const panel = document.querySelector<HTMLElement>(modal ? '.modal' : '.task-drawer');
     const items = () =>
       Array.from(
@@ -236,7 +242,8 @@ function App() {
     items()[0]?.focus();
     const key = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        modal ? setModal(null) : setSelected(null);
+        if (modal) setModal(null);
+        else setSelected(null);
         return;
       }
       if (e.key === 'Tab') {
@@ -255,7 +262,7 @@ function App() {
     document.addEventListener('keydown', key);
     return () => {
       document.removeEventListener('keydown', key);
-      previous?.focus();
+      if (previous instanceof HTMLElement) previous.focus();
     };
   }, [modal, selected]);
   const mine = !!(
@@ -265,7 +272,7 @@ function App() {
   );
   const task = brief?.tasks.find((t) => t.id === selected);
   const questions = brief?.questions.filter((q) => !q.answeredAt) ?? [];
-  async function perform(action: string, input: unknown, success = 'Saved') {
+  async function perform<Input>(action: string, input: Input, success = 'Saved') {
     setPending(true);
     setError('');
     try {
@@ -336,6 +343,27 @@ function App() {
         sessionStorage.removeItem('marionette-lease:' + projectId);
         setLease(null);
       } else if (modal === 'assignment') {
+        const options: AssignmentLinks = {};
+        const outcomeId = value('outcomeId');
+        if (outcomeId) {
+          const outcome = brief?.outcomes.find((o) => o.id === outcomeId);
+          if (!outcome) throw new Error('The selected outcome is no longer available');
+          options.outcomeId = outcomeId;
+          options.expectedTreeRevision = outcome.revision;
+        }
+        if (value('parentId')) options.parentId = value('parentId');
+        const profileId = value('profileId');
+        const profile = brief?.profiles.find((p) => p.id === profileId);
+        if (profileId) {
+          if (!profile) throw new Error('The selected model profile is no longer available');
+          options.profileId = profileId;
+        }
+        const execution: NonNullable<Task['execution']> = {
+          mode: value('execution') === 'worktree' ? 'worktree' : 'shared',
+        };
+        if (execution.mode === 'worktree' && value('baseRef').trim()) {
+          execution.baseRef = value('baseRef').trim();
+        }
         await perform(
           'task.submit',
           {
@@ -345,27 +373,11 @@ function App() {
               key: crypto.randomUUID(),
               title: value('title'),
               workstream: value('workstream'),
-              kind: value('profileId')
-                ? brief!.profiles.find((p) => p.id === value('profileId'))!.kind
-                : value('kind'),
-              ...(value('outcomeId')
-                ? {
-                    outcomeId: value('outcomeId'),
-                    expectedTreeRevision: brief!.outcomes.find((o) => o.id === value('outcomeId'))!
-                      .revision,
-                  }
-                : {}),
-              ...(value('parentId') ? { parentId: value('parentId') } : {}),
-              ...(value('profileId') ? { profileId: value('profileId') } : {}),
+              kind: profile?.kind ?? value('kind'),
+              ...options,
               canDelegate: f.get('canDelegate') === 'on',
               prompt: value('prompt'),
-              execution:
-                value('execution') === 'worktree'
-                  ? {
-                      mode: 'worktree',
-                      ...(value('baseRef').trim() ? { baseRef: value('baseRef').trim() } : {}),
-                    }
-                  : { mode: 'shared' },
+              execution,
               ownership: value('ownership')
                 .split(',')
                 .map((s) => s.trim())
@@ -418,7 +430,7 @@ function App() {
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            const v = new FormData(e.currentTarget).get('token') as string;
+            const v = String(new FormData(e.currentTarget).get('token') ?? '');
             sessionStorage.setItem('marionette-token', v);
             setToken(v);
           }}

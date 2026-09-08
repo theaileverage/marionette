@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { chmodSync, existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 const packages = new Set([
   'node_modules/react',
@@ -14,7 +14,8 @@ for (const name of ['cli', 'mcp']) {
     bundle: true,
     platform: 'node',
     format: 'esm',
-    target: 'node22.13',
+    target: 'esnext',
+    external: ['bun:*'],
     legalComments: 'eof',
     metafile: true,
     banner: {

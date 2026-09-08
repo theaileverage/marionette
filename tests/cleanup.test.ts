@@ -1,26 +1,26 @@
-import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import {
-  mkdtempSync,
-  mkdirSync,
-  writeFileSync,
-  readFileSync,
   existsSync,
-  rmSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
   realpathSync,
+  rmSync,
   symlinkSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execFileSync } from 'node:child_process';
-import { Store } from '../src/store.js';
-import { Service } from '../src/service.js';
-import { Supervisor } from '../src/supervisor.js';
+import { test } from 'bun:test';
 import { Cleanup, type Archive } from '../src/cleanup.js';
-import { AppError, now, type Task, type Run, type HerdrPort, type Project } from '../src/types.js';
-import { hash, digest } from '../src/files.js';
-import { planWorktree, createWorktree } from '../src/worktrees.js';
+import { digest, hash } from '../src/files.js';
 import type { Outcome } from '../src/orchestration-types.js';
+import { Service } from '../src/service.js';
+import { Store } from '../src/store.js';
+import { Supervisor } from '../src/supervisor.js';
+import { AppError, now, type HerdrPort, type Project, type Run, type Task } from '../src/types.js';
+import { createWorktree, planWorktree } from '../src/worktrees.js';
 
 // Deterministic Herdr protocol fixture; no user terminals or paid agents.
 class Terminal implements HerdrPort {
@@ -37,7 +37,8 @@ class Terminal implements HerdrPort {
   reads = 0;
   async call(method: string): Promise<any> {
     if (method === 'tab.get') {
-      if (this.closed) throw new AppError('tab_not_found', 'absent');
+      if (this.closed)
+        throw new AppError({ code: 'tab_not_found', message: 'absent', status: 400 });
       return { tab: { tab_id: 'w1:t1', workspace_id: 'w1', pane_count: this.paneCount } };
     }
     if (method === 'pane.list')
@@ -69,13 +70,15 @@ class Terminal implements HerdrPort {
     if (method === 'pane.close') {
       this.paneCloseCalls++;
       if (this.closeBeforeLoss || !this.loseAcknowledgement) this.closed = true;
-      if (this.loseAcknowledgement) throw new AppError('herdr_timeout', 'acknowledgement lost');
+      if (this.loseAcknowledgement)
+        throw new AppError({ code: 'herdr_timeout', message: 'acknowledgement lost', status: 400 });
       return {};
     }
     if (method === 'tab.close') {
       this.closeCalls++;
       if (this.closeBeforeLoss || !this.loseAcknowledgement) this.closed = true;
-      if (this.loseAcknowledgement) throw new AppError('herdr_timeout', 'acknowledgement lost');
+      if (this.loseAcknowledgement)
+        throw new AppError({ code: 'herdr_timeout', message: 'acknowledgement lost', status: 400 });
       return {};
     }
     throw new Error('Unexpected protocol method ' + method);
@@ -232,11 +235,11 @@ function fixture() {
     });
     return cwd;
   };
-  const archived = async () => {
+  const archived = async (): Promise<Archive> => {
     await worktree();
     await invoke('cleanup.release');
     await invoke('cleanup.deliver', { disposition: 'merged', targetRef: 'refs/heads/main' });
-    return invoke('cleanup.archive') as Promise<Archive>;
+    return invoke('cleanup.archive');
   };
   return {
     root,

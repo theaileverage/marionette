@@ -1,43 +1,35 @@
-import { discoverModels, catalogProfiles } from './model-catalog.js';
-import { builtinProfiles, probeProfile } from './profiles.js';
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, resolve, relative } from 'node:path';
+import { Effect, Result, Schema } from 'effect';
 import { randomUUID } from 'node:crypto';
-import { z } from 'zod';
-import { safePath, inside, digest } from './files.js';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, relative, resolve } from 'node:path';
+import { boundaryError, BoundaryError, sync } from './effect-runtime.js';
+import { digest, inside, safePath } from './files.js';
+import { catalogProfiles, discoverModelsEffect } from './model-catalog.js';
 import {
-  AppError,
-  now,
-  type Task,
-  type Run,
-  type Assignment,
-  type Project,
-  type Credentials,
-} from './types.js';
-import type { Service } from './service.js';
-import {
-  outcomeSchema,
   criterionSchema,
   limitsSchema,
-  profileSchema,
+  outcomeSchema,
   planPatchSchema,
+  profileSchema,
   strategySchema,
-  type Outcome,
-  type Revision,
-  type Profile,
-  type Limits,
-  type Strategy,
   type Assessment,
+  type Limits,
+  type Outcome,
+  type Profile,
+  type Revision,
+  type Strategy,
 } from './orchestration-types.js';
-
+import { builtinProfiles, probeProfileEffect } from './profiles.js';
+import type { Service } from './service.js';
+import { AppError, now, type Assignment, type Credentials, type Run, type Task } from './types.js';
 const fail = (code: string, message: string): never => {
-  throw new AppError(code, message, 409);
+  throw new AppError({ code: code, message: message, status: 409 });
 };
-const text = z.string().trim().min(1);
+const text = Schema.Trim.check(Schema.isMinLength(1));
 export class Orchestration {
   constructor(public s: Service) {}
-  probeProfile = probeProfile;
-  discoverModels = discoverModels;
+  probeProfile = probeProfileEffect;
+  discoverModels = discoverModelsEffect;
   migrateLegacyTasks() {
     this.s.store.transaction(() => {
       for (const t of this.s.store.all<Task>('task').filter((t) => !t.outcomeId)) {
@@ -228,8 +220,8 @@ export class Orchestration {
     o: Outcome,
     reason: string,
     owner: string,
-    before: unknown,
-    after: unknown,
+    before: Revision['before'],
+    after: Revision['after'],
     taskId?: string,
     evidence: string[] = [],
   ) {
@@ -257,7 +249,7 @@ export class Orchestration {
     reason: string,
     owner: string,
     task?: Task,
-    before?: unknown,
+    before?: Revision['before'],
     evidence: string[] = [],
   ) {
     const o = this.outcome(outcomeId);
@@ -294,21 +286,16 @@ export class Orchestration {
         }
       }
       for (const dependent of affected.values()) {
-        this.s.updateTask(
-          dependent,
-          {
-            revision: dependent.revision + 1,
-            receipt: undefined,
-            verification: undefined,
-            ...(['completed', 'verifying'].includes(dependent.status)
-              ? {
-                  status: 'paused' as const,
-                  waitReason: 'Required work changed; integrate and verify again',
-                }
-              : {}),
-          },
-          `Reopened acceptance: ${reason}`,
-        );
+        const patch: Partial<Task> = {
+          revision: dependent.revision + 1,
+          receipt: undefined,
+          verification: undefined,
+        };
+        if (['completed', 'verifying'].includes(dependent.status)) {
+          patch.status = 'paused';
+          patch.waitReason = 'Required work changed; integrate and verify again';
+        }
+        this.s.updateTask(dependent, patch, `Reopened acceptance: ${reason}`);
       }
       const otherOutcomes = new Set(
         [...affected.values()].map((t) => t.outcomeId).filter((id) => id && id !== outcomeId),
@@ -345,27 +332,25 @@ export class Orchestration {
     );
     return updated;
   }
-  checkRevision(o: Outcome, expected: unknown) {
-    if (z.number().int().parse(expected) !== o.revision)
+  checkRevision(o: Outcome, expected: number | undefined) {
+    if (Schema.decodeUnknownSync(Schema.Finite.check(Schema.isInt()))(expected) !== o.revision)
       fail('tree_revision', 'The task tree changed. Refresh and evaluate the current revision.');
   }
-  references(projectId: string, paths: unknown) {
-    return z
-      .array(text)
-      .min(1)
-      .parse(paths)
-      .map((path) => {
-        const taskReference = /^task:([^:]+):/.exec(path);
-        if (taskReference && this.s.cleanup.active(taskReference[1]))
-          fail('cleanup_busy', 'Evidence is being archived; retry after cleanup finishes');
-        const value = digest(this.evidencePath(projectId, path));
-        if (!value)
-          fail(
-            'evidence_file',
-            'Evidence must reference an existing regular file inside the project',
-          );
-        return { path, digest: value! };
-      });
+  references(projectId: string, paths: string[]) {
+    return Schema.decodeSync(Schema.mutable(Schema.Array(text)).check(Schema.isMinLength(1)))(
+      paths,
+    ).map((path) => {
+      const taskReference = /^task:([^:]+):/.exec(path);
+      if (taskReference && this.s.cleanup.active(taskReference[1]))
+        fail('cleanup_busy', 'Evidence is being archived; retry after cleanup finishes');
+      const value = digest(this.evidencePath(projectId, path));
+      if (!value)
+        fail(
+          'evidence_file',
+          'Evidence must reference an existing regular file inside the project',
+        );
+      return { path, digest: value! };
+    });
   }
   validateGraph(tasks: Task[]) {
     const map = new Map(tasks.map((t) => [t.id, t]));
@@ -523,7 +508,10 @@ export class Orchestration {
       'instance',
     );
     return {
-      ...(local ?? limitsSchema.parse({ project: this.s.project(projectId).maxConcurrency })),
+      ...(local ??
+        Schema.decodeSync(limitsSchema)({
+          project: this.s.project(projectId).maxConcurrency,
+        })),
       ...(shared ?? { global: 8, providers: {}, models: {} }),
     };
   }
@@ -587,43 +575,70 @@ export class Orchestration {
     if (!t.canDelegate) fail('delegation_denied', 'This assignment has no delegation authority');
     return t;
   }
-  async delegate(taskId: string, token: string, raw: any) {
-    const t = this.worker(taskId, token, z.number().int().parse(raw.revision));
-    const a = raw.assignment;
-    if (!a || a.projectId !== t.projectId || a.parentId !== t.id || a.outcomeId !== t.outcomeId)
-      fail(
-        'delegation_scope',
-        'Children must name their authenticated parent and inherit its outcome',
-      );
-    if (a.cwd && a.cwd !== t.cwd)
-      fail('delegation_scope', 'Children inherit their parent working directory');
-    if (a.execution?.mode === 'worktree')
-      fail('delegation_scope', 'Child delegation must stay in the parent working directory');
-    for (const p of z.array(text).min(1).parse(a.ownership))
-      if (!t.ownership.some((owned) => inside(safePath(t.cwd, owned), safePath(t.cwd, p))))
-        fail('delegation_scope', 'Child ownership exceeds delegated scope');
-    // A scoped internal submission is never returned as a reusable lead credential.
-    const child = this.s.submitAssignment(
-      { ...a, cwd: t.cwd },
-      { projectId: t.projectId, owner: `worker:${t.id}`, epoch: 0, token: '' },
-    );
-    return {
-      task: child,
-      parentRevision: this.s.task(t.id).revision,
-      outcomeRevision: this.outcome(t.outcomeId!).revision,
-    };
+  delegate(taskId: string, token: string, raw: any) {
+    return Effect.runPromise(this.delegateEffect(taskId, token, raw));
   }
+  delegateEffect = Effect.fn('Orchestration.delegate')(
+    { self: this },
+    function* (this: Orchestration, taskId: string, token: string, raw: any) {
+      const t = yield* sync('Orchestration.delegate', () =>
+        this.worker(
+          taskId,
+          token,
+          Schema.decodeUnknownSync(Schema.Finite.check(Schema.isInt()))(raw.revision),
+        ),
+      );
+      const a = raw.assignment;
+      if (!a || a.projectId !== t.projectId || a.parentId !== t.id || a.outcomeId !== t.outcomeId)
+        return yield* sync('Orchestration.delegate', () =>
+          fail(
+            'delegation_scope',
+            'Children must name their authenticated parent and inherit its outcome',
+          ),
+        );
+      if (a.cwd && a.cwd !== t.cwd)
+        return yield* sync('Orchestration.delegate', () =>
+          fail('delegation_scope', 'Children inherit their parent working directory'),
+        );
+      if (a.execution?.mode === 'worktree')
+        return yield* sync('Orchestration.delegate', () =>
+          fail('delegation_scope', 'Child delegation must stay in the parent working directory'),
+        );
+      for (const p of yield* Schema.decodeUnknownEffect(
+        Schema.mutable(Schema.Array(text)).check(Schema.isMinLength(1)),
+      )(a.ownership).pipe(Effect.mapError(boundaryError('orchestration.decode'))))
+        if (!t.ownership.some((owned) => inside(safePath(t.cwd, owned), safePath(t.cwd, p))))
+          return yield* sync('Orchestration.delegate', () =>
+            fail('delegation_scope', 'Child ownership exceeds delegated scope'),
+          );
+      // A scoped internal submission is never returned as a reusable lead credential.
+      const child = yield* sync('Orchestration.delegate', () =>
+        this.s.submitAssignment(
+          { ...a, cwd: t.cwd },
+          { projectId: t.projectId, owner: `worker:${t.id}`, epoch: 0, token: '' },
+        ),
+      );
+      return yield* sync('Orchestration.delegate', () => ({
+        task: child,
+        parentRevision: this.s.task(t.id).revision,
+        outcomeRevision: this.outcome(t.outcomeId!).revision,
+      }));
+    },
+  );
   reviseTask(raw: any, c: Credentials) {
-    const t = this.s.task(text.parse(raw.taskId));
+    const t = this.s.task(Schema.decodeUnknownSync(text)(raw.taskId));
     this.s.cleanup.assertMutable(t);
     if (t.projectId !== c.projectId || !t.outcomeId)
       fail('project_mismatch', 'Task must belong to this lead and an outcome');
     const o = this.outcome(t.outcomeId!);
     this.checkRevision(o, raw.expectedTreeRevision);
-    if (t.revision !== z.number().int().parse(raw.expectedRevision))
+    if (
+      t.revision !==
+      Schema.decodeUnknownSync(Schema.Finite.check(Schema.isInt()))(raw.expectedRevision)
+    )
       fail('stale_revision', 'Task changed; refresh before revising');
-    const patch = planPatchSchema.parse(raw.patch),
-      reason = text.parse(raw.reason);
+    const patch = Schema.decodeUnknownSync(planPatchSchema)(raw.patch),
+      reason = Schema.decodeUnknownSync(text)(raw.reason);
     for (const id of patch.dependencies ?? [])
       if (this.s.cleanup.active(id))
         fail('cleanup_busy', 'Dependency is being cleaned up; retry after it finishes');
@@ -658,84 +673,122 @@ export class Orchestration {
       this.s.tasks(c.projectId).map((task) => (task.id === t.id ? updated : task)),
     );
     this.s.store.put('task', t.id, updated);
-    this.changed(o.id, reason, c.owner, updated, t, z.array(text).parse(raw.evidence ?? []));
+    this.changed(
+      o.id,
+      reason,
+      c.owner,
+      updated,
+      t,
+      Schema.decodeUnknownSync(Schema.mutable(Schema.Array(text)))(raw.evidence ?? []),
+    );
     return updated;
   }
-  async workerAction(taskId: string, token: string, raw: any) {
-    const task = this.s.task(taskId);
-    const t = this.s.workerGuard(
-      taskId,
-      token,
-      raw.action === 'inspect' ? task.revision : z.number().int().parse(raw.revision),
-    );
-    const descendants = this.descendants(t.id);
-    if (raw.action === 'inspect') {
-      if (
-        raw.taskId &&
-        raw.taskId !== t.id &&
-        !descendants.some((child) => child.id === raw.taskId)
-      )
-        fail('worker_scope', 'Only this assignment and its descendants may be inspected');
-      if (raw.taskId) return this.s.invoke('task.get', { taskId: raw.taskId });
-      const outcome = t.outcomeId ? this.outcome(t.outcomeId) : undefined;
-      return {
-        task: { ...t, output: '', prompt: t.prompt.slice(0, 800) },
-        children: descendants.map((child) => ({
-          ...child,
-          output: '',
-          prompt: child.prompt.slice(0, 800),
-          receipt: child.receipt
-            ? { ...child.receipt, summary: child.receipt.summary.slice(0, 1000) }
-            : undefined,
-        })),
-        outcome: outcome
-          ? {
-              id: outcome.id,
-              revision: outcome.revision,
-              objective: outcome.objective,
-              scope: outcome.scope,
-              criteria: outcome.criteria,
-              maxDepth: outcome.maxDepth,
-              maxTurns: outcome.maxTurns,
-              turnsUsed: outcome.turnsUsed,
-            }
-          : null,
-      };
-    }
-    if (raw.action === 'finding') {
-      const finding = {
-        id: randomUUID(),
-        projectId: t.projectId,
-        outcomeId: t.outcomeId,
-        taskId: t.id,
-        createdAt: now(),
-        summary: text.parse(raw.summary),
-        evidence: z.array(text).min(1).parse(raw.evidence),
-        taskRevision: t.revision,
-      };
-      this.s.store.put('finding', finding.id, finding);
-      this.s.store.event(t.projectId, 'worker.finding', finding.summary, t.id, finding);
-      return finding;
-    }
-    if (raw.action === 'delegate') return this.delegate(taskId, token, raw);
-    this.worker(taskId, token, raw.revision);
-    if (!descendants.some((child) => child.id === raw.taskId))
-      fail('worker_scope', 'Coordinators can only change their own descendants');
-    const actor: Credentials = {
-      projectId: t.projectId,
-      owner: `worker:${t.id}`,
-      epoch: 0,
-      token: '',
-    };
-    if (raw.action === 'revise') return this.s.store.transaction(() => this.reviseTask(raw, actor));
-    if (raw.action === 'control') return this.s.controlTask(raw, actor);
-    fail('worker_action', 'Supported worker actions: inspect, finding, delegate, revise, control');
+  workerAction(taskId: string, token: string, raw: any) {
+    return Effect.runPromise(this.workerActionEffect(taskId, token, raw));
   }
+  workerActionEffect = Effect.fn('Orchestration.workerAction')(
+    { self: this },
+    function* (this: Orchestration, taskId: string, token: string, raw: any) {
+      const task = yield* sync('Orchestration.workerAction', () => this.s.task(taskId));
+      const t = yield* sync('Orchestration.workerAction', () =>
+        this.s.workerGuard(
+          taskId,
+          token,
+          raw.action === 'inspect'
+            ? task.revision
+            : Schema.decodeUnknownSync(Schema.Finite.check(Schema.isInt()))(raw.revision),
+        ),
+      );
+      const descendants = yield* sync('Orchestration.workerAction', () => this.descendants(t.id));
+      if (raw.action === 'inspect') {
+        if (
+          raw.taskId &&
+          raw.taskId !== t.id &&
+          !descendants.some((child) => child.id === raw.taskId)
+        )
+          return yield* sync('Orchestration.workerAction', () =>
+            fail('worker_scope', 'Only this assignment and its descendants may be inspected'),
+          );
+        if (raw.taskId) return yield* this.s.invokeEffect('task.get', { taskId: raw.taskId });
+        const outcome = yield* sync('Orchestration.workerAction', () =>
+          t.outcomeId ? this.outcome(t.outcomeId) : undefined,
+        );
+        return yield* sync('Orchestration.workerAction', () => ({
+          task: { ...t, output: '', prompt: t.prompt.slice(0, 800) },
+          children: descendants.map((child) => ({
+            ...child,
+            output: '',
+            prompt: child.prompt.slice(0, 800),
+            receipt: child.receipt
+              ? { ...child.receipt, summary: child.receipt.summary.slice(0, 1000) }
+              : undefined,
+          })),
+          outcome: outcome
+            ? {
+                id: outcome.id,
+                revision: outcome.revision,
+                objective: outcome.objective,
+                scope: outcome.scope,
+                criteria: outcome.criteria,
+                maxDepth: outcome.maxDepth,
+                maxTurns: outcome.maxTurns,
+                turnsUsed: outcome.turnsUsed,
+              }
+            : null,
+        }));
+      }
+      if (raw.action === 'finding') {
+        const finding = yield* sync('Orchestration.workerAction', () => ({
+          id: randomUUID(),
+          projectId: t.projectId,
+          outcomeId: t.outcomeId,
+          taskId: t.id,
+          createdAt: now(),
+          summary: Schema.decodeUnknownSync(text)(raw.summary),
+          evidence: Schema.decodeUnknownSync(
+            Schema.mutable(Schema.Array(text)).check(Schema.isMinLength(1)),
+          )(raw.evidence),
+          taskRevision: t.revision,
+        }));
+        yield* sync('Orchestration.workerAction', () =>
+          this.s.store.put('finding', finding.id, finding),
+        );
+        yield* sync('Orchestration.workerAction', () =>
+          this.s.store.event(t.projectId, 'worker.finding', finding.summary, t.id, finding),
+        );
+        return finding;
+      }
+      if (raw.action === 'delegate') return yield* this.delegateEffect(taskId, token, raw);
+      yield* sync('Orchestration.workerAction', () => this.worker(taskId, token, raw.revision));
+      if (!descendants.some((child) => child.id === raw.taskId))
+        return yield* sync('Orchestration.workerAction', () =>
+          fail('worker_scope', 'Coordinators can only change their own descendants'),
+        );
+      const actor: Credentials = {
+        projectId: t.projectId,
+        owner: `worker:${t.id}`,
+        epoch: 0,
+        token: '',
+      };
+      if (raw.action === 'revise')
+        return yield* sync('Orchestration.workerAction', () =>
+          this.s.store.transaction(() => this.reviseTask(raw, actor)),
+        );
+      if (raw.action === 'control')
+        return yield* sync('Orchestration.workerAction', () => this.s.controlTask(raw, actor));
+      return yield* sync('Orchestration.workerAction', () =>
+        fail(
+          'worker_action',
+          'Supported worker actions: inspect, finding, delegate, revise, control',
+        ),
+      );
+    },
+  );
   board(projectId: string) {
     const outcomes = this.outcomes(projectId).map((o) => ({ ...o, unmet: this.unmet(o) }));
     return {
       outcomes,
-      tasks: this.s.tasks(projectId).map(({ output, prompt, ...task }) => ({
+      tasks: this.s.tasks(projectId).map(({ output: _output, prompt, ...task }) => ({
         ...task,
         prompt: prompt.slice(0, 1200),
         output: '',
@@ -743,7 +796,7 @@ export class Orchestration {
       revisions: this.s.store
         .all<Revision>('revision')
         .filter((r) => r.projectId === projectId)
-        .map(({ before, after, ...summary }) => summary),
+        .map(({ before: _before, after: _after, ...summary }) => summary),
       findings: this.s.store.all<any>('finding').filter((f) => f.projectId === projectId),
       profiles: this.profiles(projectId),
       profileDefaults:
@@ -752,233 +805,280 @@ export class Orchestration {
       strategies: this.s.store.all<Strategy>('strategy').filter((s) => s.projectId === projectId),
     };
   }
-  async invoke(action: string, raw: any): Promise<any> {
-    if (action === 'outcome.list' || action === 'board.get')
-      return this.board(text.parse(raw.projectId));
-    if (action === 'outcome.get') {
-      const o = this.outcome(text.parse(raw.outcomeId));
-      return { ...o, unmet: this.unmet(o) };
-    }
-    if (action === 'plan.get')
-      return (
-        this.s.store.get<Revision>('revision', text.parse(raw.revisionId)) ??
-        fail('revision_missing', 'Revision not found')
-      );
-    const c = this.s.guard(raw.lease);
-    if (action === 'profile.discover') {
-      const kind = z.enum(['codex', 'claude', 'agy']).parse(raw.kind);
-      const catalog = await this.discoverModels(kind, this.s.project(c.projectId).root);
-      this.s.guard(raw.lease);
-      return this.s.store.transaction(() => {
-        const profiles = this.profiles(c.projectId);
-        const added = catalogProfiles(catalog).filter(
-          (candidate) =>
-            !profiles.some((p) => p.kind === candidate.kind && p.model === candidate.model),
-        );
-        const merged = [...profiles, ...added];
-        if (new Set(merged.map((p) => p.id)).size !== merged.length)
-          fail(
-            'profile_ids',
-            'A discovered profile ID conflicts with a configured profile; rename the custom profile first',
-          );
-        this.s.store.put('profiles', c.projectId, merged);
-        this.s.store.put('model-catalog', c.projectId + ':' + kind, catalog);
-        this.s.store.event(
-          c.projectId,
-          'profiles.discovered',
-          `Read ${catalog.models.length} ${kind} models; added ${added.length} profiles without changing defaults or existing profiles`,
-        );
-        return { catalog, added: added.map((p) => p.id), profiles: merged };
-      });
-    }
-    if (action === 'profile.validate') {
-      const id = text.parse(raw.profileId),
-        profile =
-          this.profiles(c.projectId).find((p) => p.id === id) ??
-          fail('profile_missing', 'Profile not found');
-      const fingerprint = JSON.stringify(profile);
-      let result: { output: string; evidence: string },
-        availability: Profile['availability'] = 'available';
-      try {
-        result = await this.probeProfile(profile, this.s.project(c.projectId).root);
-      } catch (e) {
-        result = { output: String(e), evidence: String(e) };
-        availability = 'unavailable';
-      }
-      this.s.guard(raw.lease);
-      const profiles = this.profiles(c.projectId);
-      if (JSON.stringify(profiles.find((p) => p.id === id)) !== fingerprint)
-        fail(
-          'profile_changed',
-          'Profile changed during validation; validate the current configuration',
-        );
-      const path = resolve(dirname(this.s.store.path), 'profile-evidence', randomUUID() + '.json');
-      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-      writeFileSync(path, result.output, { mode: 0o600 });
-      const updated = {
-        ...profile,
-        availability,
-        availabilityEvidence: `${result.evidence}. Probe ${now()}; evidence ${path}`,
-      };
-      this.s.store.put(
-        'profiles',
-        c.projectId,
-        profiles.map((p) => (p.id === id ? updated : p)),
-      );
-      this.s.store.event(c.projectId, 'profile.validated', updated.availabilityEvidence);
-      return updated;
-    }
-    return this.s.store.transaction(() => {
-      if (action === 'outcome.create') {
-        const i = outcomeSchema.parse(raw.outcome);
-        if (i.projectId !== c.projectId) fail('project_mismatch', 'Outcome and lead differ');
-        if (new Set(i.criteria.map((c) => c.id)).size !== i.criteria.length)
-          fail('criteria_ids', 'Criterion IDs must be unique');
-        for (const p of i.scope) safePath(this.s.project(c.projectId).root, p);
-        return this.s.idempotent(c.projectId, 'outcome:' + i.key, i, () => {
-          const { key, ...fields } = i;
-          const o: Outcome = {
-            ...fields,
-            id: randomUUID(),
-            leadOwner: c.owner,
-            revision: 1,
-            status: 'open',
-            turnsUsed: 0,
-            assessments: [],
-            createdAt: now(),
-            updatedAt: now(),
-          };
-          this.s.store.put('outcome', o.id, o);
-          this.revision(o, 'Established observable completion criteria', c.owner, null, o);
-          return o;
-        });
-      }
-      if (action === 'profile.configure') {
-        const oldProfiles = this.profiles(c.projectId);
-        const profiles = z
-          .array(profileSchema)
-          .parse(raw.profiles)
-          .map((profile) => {
-            const old = oldProfiles.find(
-              (p) =>
-                p.id === profile.id &&
-                p.kind === profile.kind &&
-                p.model === profile.model &&
-                p.reasoning === profile.reasoning &&
-                JSON.stringify(p.supportedReasoning) === JSON.stringify(profile.supportedReasoning),
-            );
-            return {
-              ...profile,
-              availability: old?.availability ?? ('unverified' as const),
-              availabilityEvidence:
-                old?.availabilityEvidence ??
-                'Run profile.validate to verify this exact model on the current account',
-            };
-          });
-        if (new Set(profiles.map((p) => p.id)).size !== profiles.length)
-          fail('profile_ids', 'Profile IDs must be unique');
-        for (const p of profiles)
-          if (p.reasoning && !p.supportedReasoning.includes(p.reasoning))
-            fail('reasoning_unsupported', 'Default effort must be supported');
-        const defaults = z.record(text, text).parse(raw.defaults ?? {});
-        for (const [category, id] of Object.entries(defaults))
-          if (!profiles.some((p) => p.id === id && p.categories.includes(category)))
-            fail('profile_default', 'Category default does not match a configured profile');
-        this.s.store.put('profiles', c.projectId, profiles);
-        this.s.store.put('profile-defaults', c.projectId, defaults);
-        this.s.store.event(
-          c.projectId,
-          'profiles.configured',
-          'Updated exact model profiles and category defaults',
-        );
-        return { profiles, defaults };
-      }
-      if (action === 'limits.configure') {
-        const limits = limitsSchema.parse(raw.limits),
-          reason = text.parse(raw.reason);
-        this.s.store.put('limits', c.projectId, limits);
-        this.s.store.put('shared-limits', 'instance', {
-          global: limits.global,
-          providers: limits.providers,
-          models: limits.models,
-        });
-        this.s.store.event(c.projectId, 'limits.configured', reason, undefined, limits);
-        return limits;
-      }
-      if (action === 'plan.revise') {
-        return this.reviseTask(raw, c);
-      }
-      if (action.startsWith('strategy.')) return this.strategy(action, raw, c);
-      const o = this.outcome(text.parse(raw.outcomeId));
-      this.s.cleanup.assertOutcomeMutable(o.id);
-      if (o.projectId !== c.projectId) fail('project_mismatch', 'Outcome and lead differ');
-      this.checkRevision(o, raw.expectedRevision);
-      if (action === 'outcome.revise') {
-        const criteria = z.array(criterionSchema).min(1).parse(raw.criteria),
-          reason = text.parse(raw.reason);
-        if (new Set(criteria.map((c) => c.id)).size !== criteria.length)
-          fail('criteria_ids', 'Criterion IDs must be unique');
-        const updated: Outcome = {
-          ...o,
-          criteria,
-          revision: o.revision + 1,
-          status: 'open',
-          integrated: undefined,
-          updatedAt: now(),
-        };
-        this.s.store.put('outcome', o.id, updated);
-        this.revision(updated, reason, c.owner, o, updated);
-        return updated;
-      }
-      if (action === 'outcome.assess') {
-        const criterionId = text.parse(raw.criterionId);
-        if (!o.criteria.some((c) => c.id === criterionId))
-          fail('criterion_missing', 'Criterion not found');
-        const a: Assessment = {
-          criterionId,
-          rationale: text.parse(raw.rationale),
-          references: this.references(o.projectId, raw.references),
-          revision: o.revision,
-          owner: c.owner,
-          createdAt: now(),
-        };
-        o.assessments = [...o.assessments.filter((a) => a.criterionId !== criterionId), a];
-        this.s.store.put('outcome', o.id, o);
-        this.s.store.event(o.projectId, 'outcome.assessed', a.rationale);
-        return a;
-      }
-      if (action === 'outcome.integrate') {
-        o.integrated = {
-          revision: o.revision,
-          summary: text.parse(raw.summary),
-          evidence: this.references(o.projectId, raw.references),
-          owner: c.owner,
-          createdAt: now(),
-        };
-        this.s.store.put('outcome', o.id, o);
-        return o.integrated;
-      }
-      if (action === 'outcome.complete') {
-        const unmet = this.unmet(o);
-        if (unmet.length) fail('outcome_unmet', unmet.join('\n'));
-        o.status = 'completed';
-        o.updatedAt = now();
-        this.s.store.put('outcome', o.id, o);
-        this.s.store.event(o.projectId, 'outcome.completed', o.objective, undefined, {
-          outcomeId: o.id,
-          revision: o.revision,
-        });
-        return {
-          outcome: o,
-          satisfied: o.criteria,
-          evidence: o.assessments,
-          integrated: o.integrated,
-          unresolved: [],
-        };
-      }
-      throw new AppError('unknown_action', `Unknown action: ${action}`, 404);
-    });
+  invoke(action: string, raw: any) {
+    return Effect.runPromise(this.invokeEffect(action, raw));
   }
+  invokeEffect: (action: string, raw?: any) => Effect.Effect<any, AppError | BoundaryError> =
+    Effect.fn('Orchestration.invoke')(
+      { self: this },
+      function* (this: Orchestration, action: string, raw: any) {
+        if (action === 'outcome.list' || action === 'board.get')
+          return yield* sync('Orchestration.invoke', () =>
+            this.board(Schema.decodeUnknownSync(text)(raw.projectId)),
+          );
+        if (action === 'outcome.get') {
+          const o = yield* sync('Orchestration.invoke', () =>
+            this.outcome(Schema.decodeUnknownSync(text)(raw.outcomeId)),
+          );
+          return yield* sync('Orchestration.invoke', () => ({ ...o, unmet: this.unmet(o) }));
+        }
+        if (action === 'plan.get')
+          return yield* sync(
+            'Orchestration.invoke',
+            () =>
+              this.s.store.get<Revision>(
+                'revision',
+                Schema.decodeUnknownSync(text)(raw.revisionId),
+              ) ?? fail('revision_missing', 'Revision not found'),
+          );
+        const c = yield* sync('Orchestration.invoke', () => this.s.guard(raw.lease));
+        if (action === 'profile.discover') {
+          const kind = yield* sync('Orchestration.invoke', () =>
+            Schema.decodeUnknownSync(Schema.Literals(['codex', 'claude', 'agy']))(raw.kind),
+          );
+          const catalog = yield* this.discoverModels(kind, this.s.project(c.projectId).root);
+          yield* sync('Orchestration.invoke', () => this.s.guard(raw.lease));
+          return yield* sync('Orchestration.invoke', () =>
+            this.s.store.transaction(() => {
+              const profiles = this.profiles(c.projectId);
+              const added = catalogProfiles(catalog).filter(
+                (candidate) =>
+                  !profiles.some((p) => p.kind === candidate.kind && p.model === candidate.model),
+              );
+              const merged = [...profiles, ...added];
+              if (new Set(merged.map((p) => p.id)).size !== merged.length)
+                fail(
+                  'profile_ids',
+                  'A discovered profile ID conflicts with a configured profile; rename the custom profile first',
+                );
+              this.s.store.put('profiles', c.projectId, merged);
+              this.s.store.put('model-catalog', c.projectId + ':' + kind, catalog);
+              this.s.store.event(
+                c.projectId,
+                'profiles.discovered',
+                `Read ${catalog.models.length} ${kind} models; added ${added.length} profiles without changing defaults or existing profiles`,
+              );
+              return { catalog, added: added.map((p) => p.id), profiles: merged };
+            }),
+          );
+        }
+        if (action === 'profile.validate') {
+          const id = yield* sync('Orchestration.invoke', () =>
+              Schema.decodeUnknownSync(text)(raw.profileId),
+            ),
+            profile = yield* sync(
+              'Orchestration.invoke',
+              () =>
+                this.profiles(c.projectId).find((p) => p.id === id) ??
+                fail('profile_missing', 'Profile not found'),
+            );
+          const fingerprint = yield* sync('Orchestration.invoke', () => JSON.stringify(profile));
+          let result: Effect.Success<ReturnType<typeof this.probeProfile>>,
+            availability: Profile['availability'] = 'available';
+          const probe = yield* Effect.result(
+            this.probeProfile(profile, this.s.project(c.projectId).root),
+          );
+          if (Result.isFailure(probe)) {
+            result = { output: String(probe.failure), evidence: String(probe.failure) };
+            availability = 'unavailable';
+          } else result = probe.success;
+          yield* sync('Orchestration.invoke', () => this.s.guard(raw.lease));
+          const profiles = yield* sync('Orchestration.invoke', () => this.profiles(c.projectId));
+          if (JSON.stringify(profiles.find((p) => p.id === id)) !== fingerprint)
+            return yield* sync('Orchestration.invoke', () =>
+              fail(
+                'profile_changed',
+                'Profile changed during validation; validate the current configuration',
+              ),
+            );
+          const path = yield* sync('Orchestration.invoke', () =>
+            resolve(dirname(this.s.store.path), 'profile-evidence', randomUUID() + '.json'),
+          );
+          yield* sync('Orchestration.invoke', () =>
+            mkdirSync(dirname(path), { recursive: true, mode: 0o700 }),
+          );
+          yield* sync('Orchestration.invoke', () =>
+            writeFileSync(path, result.output, { mode: 0o600 }),
+          );
+          const updated = yield* sync('Orchestration.invoke', () => ({
+            ...profile,
+            availability,
+            availabilityEvidence: `${result.evidence}. Probe ${now()}; evidence ${path}`,
+          }));
+          yield* sync('Orchestration.invoke', () =>
+            this.s.store.put(
+              'profiles',
+              c.projectId,
+              profiles.map((p) => (p.id === id ? updated : p)),
+            ),
+          );
+          yield* sync('Orchestration.invoke', () =>
+            this.s.store.event(c.projectId, 'profile.validated', updated.availabilityEvidence),
+          );
+          return updated;
+        }
+        return yield* sync('Orchestration.invoke', () =>
+          this.s.store.transaction(() => {
+            if (action === 'outcome.create') {
+              const i = Schema.decodeUnknownSync(outcomeSchema)(raw.outcome);
+              if (i.projectId !== c.projectId) fail('project_mismatch', 'Outcome and lead differ');
+              if (new Set(i.criteria.map((c) => c.id)).size !== i.criteria.length)
+                fail('criteria_ids', 'Criterion IDs must be unique');
+              for (const p of i.scope) safePath(this.s.project(c.projectId).root, p);
+              return this.s.idempotent(c.projectId, 'outcome:' + i.key, i, () => {
+                const { key: _key, ...fields } = i;
+                const o: Outcome = {
+                  ...fields,
+                  id: randomUUID(),
+                  leadOwner: c.owner,
+                  revision: 1,
+                  status: 'open',
+                  turnsUsed: 0,
+                  assessments: [],
+                  createdAt: now(),
+                  updatedAt: now(),
+                };
+                this.s.store.put('outcome', o.id, o);
+                this.revision(o, 'Established observable completion criteria', c.owner, null, o);
+                return o;
+              });
+            }
+            if (action === 'profile.configure') {
+              const oldProfiles = this.profiles(c.projectId);
+              const profiles = Schema.decodeUnknownSync(
+                Schema.mutable(Schema.Array(profileSchema)),
+              )(raw.profiles).map((profile) => {
+                const old = oldProfiles.find(
+                  (p) =>
+                    p.id === profile.id &&
+                    p.kind === profile.kind &&
+                    p.model === profile.model &&
+                    p.reasoning === profile.reasoning &&
+                    JSON.stringify(p.supportedReasoning) ===
+                      JSON.stringify(profile.supportedReasoning),
+                );
+                return {
+                  ...profile,
+                  availability: old?.availability ?? ('unverified' as const),
+                  availabilityEvidence:
+                    old?.availabilityEvidence ??
+                    'Run profile.validate to verify this exact model on the current account',
+                };
+              });
+              if (new Set(profiles.map((p) => p.id)).size !== profiles.length)
+                fail('profile_ids', 'Profile IDs must be unique');
+              for (const p of profiles)
+                if (p.reasoning && !p.supportedReasoning.includes(p.reasoning))
+                  fail('reasoning_unsupported', 'Default effort must be supported');
+              const defaults = Schema.decodeUnknownSync(
+                Schema.Record(text, Schema.mutableKey(text)),
+              )(raw.defaults ?? {});
+              for (const [category, id] of Object.entries(defaults))
+                if (!profiles.some((p) => p.id === id && p.categories.includes(category)))
+                  fail('profile_default', 'Category default does not match a configured profile');
+              this.s.store.put('profiles', c.projectId, profiles);
+              this.s.store.put('profile-defaults', c.projectId, defaults);
+              this.s.store.event(
+                c.projectId,
+                'profiles.configured',
+                'Updated exact model profiles and category defaults',
+              );
+              return { profiles, defaults };
+            }
+            if (action === 'limits.configure') {
+              const limits = Schema.decodeUnknownSync(limitsSchema)(raw.limits),
+                reason = Schema.decodeUnknownSync(text)(raw.reason);
+              this.s.store.put('limits', c.projectId, limits);
+              this.s.store.put('shared-limits', 'instance', {
+                global: limits.global,
+                providers: limits.providers,
+                models: limits.models,
+              });
+              this.s.store.event(c.projectId, 'limits.configured', reason, undefined, limits);
+              return limits;
+            }
+            if (action === 'plan.revise') {
+              return this.reviseTask(raw, c);
+            }
+            if (action.startsWith('strategy.')) return this.strategy(action, raw, c);
+            const o = this.outcome(Schema.decodeUnknownSync(text)(raw.outcomeId));
+            this.s.cleanup.assertOutcomeMutable(o.id);
+            if (o.projectId !== c.projectId) fail('project_mismatch', 'Outcome and lead differ');
+            this.checkRevision(o, raw.expectedRevision);
+            if (action === 'outcome.revise') {
+              const criteria = Schema.decodeUnknownSync(
+                  Schema.mutable(Schema.Array(criterionSchema)).check(Schema.isMinLength(1)),
+                )(raw.criteria),
+                reason = Schema.decodeUnknownSync(text)(raw.reason);
+              if (new Set(criteria.map((c) => c.id)).size !== criteria.length)
+                fail('criteria_ids', 'Criterion IDs must be unique');
+              const updated: Outcome = {
+                ...o,
+                criteria,
+                revision: o.revision + 1,
+                status: 'open',
+                integrated: undefined,
+                updatedAt: now(),
+              };
+              this.s.store.put('outcome', o.id, updated);
+              this.revision(updated, reason, c.owner, o, updated);
+              return updated;
+            }
+            if (action === 'outcome.assess') {
+              const criterionId = Schema.decodeUnknownSync(text)(raw.criterionId);
+              if (!o.criteria.some((c) => c.id === criterionId))
+                fail('criterion_missing', 'Criterion not found');
+              const a: Assessment = {
+                criterionId,
+                rationale: Schema.decodeUnknownSync(text)(raw.rationale),
+                references: this.references(o.projectId, raw.references),
+                revision: o.revision,
+                owner: c.owner,
+                createdAt: now(),
+              };
+              o.assessments = [...o.assessments.filter((a) => a.criterionId !== criterionId), a];
+              this.s.store.put('outcome', o.id, o);
+              this.s.store.event(o.projectId, 'outcome.assessed', a.rationale);
+              return a;
+            }
+            if (action === 'outcome.integrate') {
+              o.integrated = {
+                revision: o.revision,
+                summary: Schema.decodeUnknownSync(text)(raw.summary),
+                evidence: this.references(o.projectId, raw.references),
+                owner: c.owner,
+                createdAt: now(),
+              };
+              this.s.store.put('outcome', o.id, o);
+              return o.integrated;
+            }
+            if (action === 'outcome.complete') {
+              const unmet = this.unmet(o);
+              if (unmet.length) fail('outcome_unmet', unmet.join('\n'));
+              o.status = 'completed';
+              o.updatedAt = now();
+              this.s.store.put('outcome', o.id, o);
+              this.s.store.event(o.projectId, 'outcome.completed', o.objective, undefined, {
+                outcomeId: o.id,
+                revision: o.revision,
+              });
+              return {
+                outcome: o,
+                satisfied: o.criteria,
+                evidence: o.assessments,
+                integrated: o.integrated,
+                unresolved: [],
+              };
+            }
+            throw new AppError({
+              code: 'unknown_action',
+              message: `Unknown action: ${action}`,
+              status: 404,
+            });
+          }),
+        );
+      },
+    );
   strategy(action: string, raw: any, c: Credentials) {
     const cleanupOutcome =
       raw.strategy?.outcomeId ??
@@ -988,7 +1088,7 @@ export class Orchestration {
         : undefined);
     if (cleanupOutcome) this.s.cleanup.assertOutcomeMutable(cleanupOutcome);
     if (action === 'strategy.create') {
-      const i = strategySchema.parse(raw.strategy),
+      const i = Schema.decodeUnknownSync(strategySchema)(raw.strategy),
         o = this.outcome(i.outcomeId);
       if (o.projectId !== c.projectId) fail('project_mismatch', 'Strategy and lead differ');
       this.checkRevision(o, raw.expectedRevision);
@@ -1007,7 +1107,7 @@ export class Orchestration {
         round: 1,
         status: 'open',
         entries: [],
-        reason: text.parse(raw.reason),
+        reason: Schema.decodeUnknownSync(text)(raw.reason),
       };
       const participants = i.participants.map((id) => this.s.task(id));
       if (
@@ -1036,7 +1136,7 @@ export class Orchestration {
       return strategy;
     }
     const strategy =
-      this.s.store.get<Strategy>('strategy', text.parse(raw.strategyId)) ??
+      this.s.store.get<Strategy>('strategy', Schema.decodeUnknownSync(text)(raw.strategyId)) ??
       fail('strategy_missing', 'Strategy not found');
     if (strategy.projectId !== c.projectId) fail('project_mismatch', 'Strategy and lead differ');
     if (
@@ -1045,7 +1145,7 @@ export class Orchestration {
     )
       fail('strategy_revision', 'Strategy completed or revision changed');
     if (action === 'strategy.contribute') {
-      const taskId = text.parse(raw.taskId),
+      const taskId = Schema.decodeUnknownSync(text)(raw.taskId),
         task = this.s.task(taskId);
       if (!strategy.participants.includes(taskId) || task.status !== 'completed')
         fail('strategy_evidence', 'A contribution requires a verified participant result');
@@ -1074,13 +1174,15 @@ export class Orchestration {
         taskId,
         taskRevision: task.revision,
         round: strategy.round,
-        claim: text.parse(raw.claim),
-        evidence: z.array(text).min(1).parse(raw.evidence),
-        rebuttal: z.string().optional().parse(raw.rebuttal),
+        claim: Schema.decodeUnknownSync(text)(raw.claim),
+        evidence: Schema.decodeUnknownSync(
+          Schema.mutable(Schema.Array(text)).check(Schema.isMinLength(1)),
+        )(raw.evidence),
+        rebuttal: Schema.decodeUnknownSync(Schema.optional(Schema.String))(raw.rebuttal),
       });
     } else if (action === 'strategy.reopen') {
       strategy.status = 'open';
-      strategy.reason = text.parse(raw.reason);
+      strategy.reason = Schema.decodeUnknownSync(text)(raw.reason);
       strategy.synthesis = undefined;
       this.changed(strategy.outcomeId, strategy.reason, c.owner);
     } else if (action === 'strategy.advance') {
@@ -1106,8 +1208,10 @@ export class Orchestration {
         ).length < (strategy.quorum ?? strategy.participants.length)
       )
         fail('quorum', 'Cannot synthesize before quorum');
-      strategy.synthesis = text.parse(raw.synthesis);
-      strategy.disagreements = z.array(text).parse(raw.disagreements);
+      strategy.synthesis = Schema.decodeUnknownSync(text)(raw.synthesis);
+      strategy.disagreements = Schema.decodeUnknownSync(Schema.mutable(Schema.Array(text)))(
+        raw.disagreements,
+      );
       strategy.status = 'completed';
     } else fail('unknown_action', 'Unknown strategy operation');
     strategy.revision++;

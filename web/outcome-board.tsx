@@ -47,7 +47,7 @@ type Props = {
   pending: boolean;
   onTask: (id: string) => void;
   onAddTask: () => void;
-  onAction: (action: string, input: Record<string, unknown>, success?: string) => Promise<any>;
+  onAction: <Input>(action: string, input: Input, success?: string) => Promise<any>;
 };
 function RevisionDetail({ id, onAction }: { id: string; onAction: Props['onAction'] }) {
   const [value, setValue] = useState<Revision>();
@@ -157,7 +157,7 @@ export function OutcomeBoard({
   const outcome = data.outcomes.find((o) => o.id === selected) ?? data.outcomes[0];
   const tasks = outcome ? data.tasks.filter((t) => t.outcomeId === outcome.id) : data.tasks;
   const revisions = outcome ? data.revisions.filter((r) => r.outcomeId === outcome.id) : [];
-  const submit = (action: string, input: Record<string, unknown>, success: string) =>
+  const submit = <Input,>(action: string, input: Input, success: string) =>
     onAction(action, input, success).catch(() => undefined);
   const expected = outcome ? { outcomeId: outcome.id, expectedRevision: outcome.revision } : {};
   return (

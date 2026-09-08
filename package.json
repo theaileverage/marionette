@@ -1,41 +1,51 @@
 {
   "name": "@theaileverage/marionette",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "type": "module",
   "engines": {
-    "node": ">=22.13"
+    "bun": ">=1.3.14"
   },
   "scripts": {
-    "dev": "node --import tsx src/cli.ts serve",
-    "start": "node dist/cli.js serve",
-    "build": "tsc && vite build && node scripts/bundle.mjs",
-    "check": "tsc --noEmit && tsc -p tsconfig.web.json && tsc -p tsconfig.tests.json",
-    "test": "node --import tsx --test tests/*.test.ts",
-    "cli": "node --import tsx src/cli.ts",
-    "mcp": "node --import tsx src/mcp.ts",
-    "format": "prettier --write src web skills .github tests scripts *.json *.ts *.md",
-    "format:check": "prettier --check src web skills .github tests scripts *.json *.ts *.md",
-    "prepack": "npm run check && npm test && npm run build",
-    "release:prepare": "node scripts/release.mjs prepare",
-    "release:check": "node scripts/release.mjs check",
-    "sdk:generate": "node scripts/generate-herdr-sdk.mjs"
+    "dev": "bun src/cli.ts serve",
+    "start": "bun dist/cli.js serve",
+    "build": "bun --bun tsc && bun --bun vite build && bun scripts/bundle.mjs",
+    "check": "bun --bun tsc --noEmit && bun --bun tsc -p tsconfig.web.json && bun --bun tsc -p tsconfig.tests.json && bun run lint",
+    "test": "bun test ./tests --timeout 120000",
+    "cli": "bun src/cli.ts",
+    "mcp": "bun src/mcp.ts",
+    "format": "bun --bun prettier --write src web documentation skills .github tests scripts .oxlintrc.json .vscode *.json *.ts *.md",
+    "format:check": "bun --bun prettier --check src web documentation skills .github tests scripts .oxlintrc.json .vscode *.json *.ts *.md",
+    "prepack": "bun run check && bun run test && bun run runtime:check && bun run build",
+    "release:prepare": "bun scripts/release.mjs prepare",
+    "release:check": "bun scripts/release.mjs check",
+    "sdk:generate": "bun scripts/generate-herdr-sdk.mjs",
+    "prepare": "bun --bun effect-tsgo patch --typescript --oxlint",
+    "lint": "bun --bun oxlint src web tests scripts vite.config.ts",
+    "effect:diagnostics": "bun --bun effect-tsgo diagnostics --project tsconfig.json",
+    "tooling:check": "bun scripts/check-quality-tooling.mjs",
+    "runtime:check": "bun scripts/check-runtime-lifecycle.mjs"
   },
   "devDependencies": {
+    "@effect/tsgo": "0.43.0",
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@oxlint/plugins": "1.82.0",
     "@types/express": "^5.0.0",
     "@types/node": "^22.15.0",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
+    "effect": "4.0.0-rc.112",
     "esbuild": "^0.28.2",
-    "prettier": "^3.9.6",
-    "tsx": "^4.20.0",
-    "typescript": "^5.8.3",
-    "vite": "^6.3.5",
-    "@modelcontextprotocol/sdk": "^1.27.1",
     "express": "^5.1.0",
     "lucide-react": "^0.468.0",
+    "oxlint": "1.82.0",
+    "prettier": "^3.9.6",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "zod": "^3.25.0"
+    "typescript": "7.0.2",
+    "vite": "^6.3.5",
+    "zod": "^3.25.0",
+    "oxlint-tsgolint": "7.0.2001",
+    "@types/bun": "1.3.14"
   },
   "description": "Persistent multi-agent orchestration for Herdr, with a named lead, MCP tools, and a local dashboard.",
   "bin": {
@@ -63,7 +73,9 @@
     "dist/herdr-streams.d.ts",
     "dist/herdr-transport.js",
     "dist/herdr-transport.d.ts",
-    "vendor/herdr-0.9.0/LICENSE"
+    "vendor/herdr-0.9.0/LICENSE",
+    "documentation/effect-runtime.md",
+    "documentation/effect-compatibility.md"
   ],
   "publishConfig": {
     "access": "public"
@@ -82,5 +94,6 @@
       "types": "./dist/herdr-sdk.d.ts",
       "import": "./dist/herdr-sdk.js"
     }
-  }
+  },
+  "packageManager": "bun@1.3.14"
 }

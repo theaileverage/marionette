@@ -1,25 +1,25 @@
-import test from 'node:test';
+import { Effect, Latch } from 'effect';
 import assert from 'node:assert/strict';
-import {
-  mkdtempSync,
-  mkdirSync,
-  writeFileSync,
-  symlinkSync,
-  rmSync,
-  realpathSync,
-  readFileSync,
-  existsSync,
-} from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { Store } from '../src/store.js';
+import { test, setSystemTime } from 'bun:test';
+import { command, safePath } from '../src/files.js';
 import { Service } from '../src/service.js';
+import { Store } from '../src/store.js';
 import { Supervisor } from '../src/supervisor.js';
-import { hash, command, safePath } from '../src/files.js';
-import { AppError, now, type Project, type HerdrPort, type Run } from '../src/types.js';
-import { planWorktree, createWorktree } from '../src/worktrees.js';
+import { AppError, now, type HerdrPort, type Project, type Run } from '../src/types.js';
+import { createWorktree, planWorktree } from '../src/worktrees.js';
 
 // A deterministic protocol double for failure injection, NOT evidence of live Herdr success.
 class ProtocolDouble implements HerdrPort {
@@ -74,11 +74,12 @@ class ProtocolDouble implements HerdrPort {
     }
     if (method === 'agent.get') {
       const a = this.agents.get(params.target);
-      if (!a) throw new AppError('agent_not_found', 'missing');
+      if (!a) throw new AppError({ code: 'agent_not_found', message: 'missing', status: 400 });
       return { agent: { ...a } };
     }
     if (method === 'agent.prompt') {
-      if (this.failPrompt) throw new AppError('herdr_timeout', 'ambiguous');
+      if (this.failPrompt)
+        throw new AppError({ code: 'herdr_timeout', message: 'ambiguous', status: 400 });
       this.agents.get(params.target).agent_status = 'working';
       return {};
     }
@@ -715,8 +716,9 @@ test('a fresh artifact and passing command produce verified completion', async (
     await f.close();
   }
 });
-test('redirect rejects stale reports and waits for the previous turn to settle', async (context) => {
-  context.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+test('redirect rejects stale reports and waits for the previous turn to settle', async () => {
+  const clockStart = Date.now();
+  setSystemTime(clockStart);
   const f = await fixture();
   try {
     const a = await f.submit('a');
@@ -745,12 +747,13 @@ test('redirect rejects stale reports and waits for the previous turn to settle',
     assert.equal(f.herdr.calls.filter((c) => c.method === 'agent.prompt').length, 1);
     await f.pump();
     assert.equal(f.herdr.calls.filter((c) => c.method === 'agent.prompt').length, 1);
-    context.mock.timers.tick(10);
+    setSystemTime(clockStart + 10);
     await f.pump();
     assert.equal(f.herdr.calls.filter((c) => c.method === 'agent.prompt').length, 2);
     assert.equal(f.service.task(t.id).prompt, 'Updated objective');
     assert.equal(f.store.get<any>('operation', op.id).phase, 'done');
   } finally {
+    setSystemTime();
     await f.close();
   }
 });
@@ -980,7 +983,11 @@ test('interrupted pane creation can be explicitly closed without replay or touch
     const original = f.herdr.call.bind(f.herdr);
     f.herdr.call = async (method, params) => {
       if (method === 'tab.create')
-        throw new AppError('herdr_disconnected', 'lost creation acknowledgement');
+        throw new AppError({
+          code: 'herdr_disconnected',
+          message: 'lost creation acknowledgement',
+          status: 400,
+        });
       if (method === 'tab.list') return { tabs: [] };
       return original(method, params);
     };
@@ -1016,7 +1023,8 @@ test('reconciliation refuses an orphan tab now occupied by another agent', async
   try {
     const original = f.herdr.call.bind(f.herdr);
     f.herdr.call = async (method, params) => {
-      if (method === 'tab.create') throw new AppError('herdr_disconnected', 'lost ACK');
+      if (method === 'tab.create')
+        throw new AppError({ code: 'herdr_disconnected', message: 'lost ACK', status: 400 });
       if (method === 'tab.list') {
         const t = f.service.tasks('project')[0],
           r = f.store.get<Run>('run', t.runId!)!;
@@ -1175,7 +1183,8 @@ test('lost split acknowledgement persists intent and reconciles without replayin
     const original = f.herdr.call.bind(f.herdr);
     f.herdr.call = async (method, params) => {
       const result = await original(method, params);
-      if (method === 'pane.split') throw new AppError('herdr_disconnected', 'Lost split ACK');
+      if (method === 'pane.split')
+        throw new AppError({ code: 'herdr_disconnected', message: 'Lost split ACK', status: 400 });
       return result;
     };
     const child = await f.submit('split-lost');
@@ -1210,6 +1219,41 @@ test('lost split acknowledgement persists intent and reconciles without replayin
     assert.equal(f.herdr.calls.filter((c) => c.method === 'pane.split').length, 1);
     assert.equal(f.herdr.calls.filter((c) => c.method === 'agent.prompt').length, 1);
   } finally {
+    await f.close();
+  }
+});
+
+test('graceful supervisor shutdown drains a held prompt before the final database write', async () => {
+  const f = await fixture();
+  const entered = Latch.makeUnsafe();
+  const release = Latch.makeUnsafe();
+  const original = f.herdr.call.bind(f.herdr);
+  f.herdr.call = async (method, params = {}) => {
+    if (method === 'agent.prompt') {
+      entered.openUnsafe();
+      await Effect.runPromise(release.await);
+    }
+    return original(method, params);
+  };
+  try {
+    const task = await f.submit('held-shutdown');
+    f.supervisor.tick();
+    await Effect.runPromise(entered.await);
+    let stopped = false;
+    const stopping = f.supervisor.stop().then(() => {
+      stopped = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(stopped, false);
+    const calls = f.herdr.calls.length;
+    f.supervisor.tick();
+    assert.equal(f.herdr.calls.length, calls);
+    release.openUnsafe();
+    await stopping;
+    assert.equal(f.store.all<Run>('run').find((run) => run.taskId === task.id)?.phase, 'running');
+    assert.equal(f.service.task(task.id).status, 'running');
+  } finally {
+    release.openUnsafe();
     await f.close();
   }
 });

@@ -1,6 +1,10 @@
-import net from 'node:net';
 import { randomUUID } from 'node:crypto';
+import net from 'node:net';
 import { isAbsolute } from 'node:path';
+
+/** JSON payload accepted by the dependency-free wire transport, including omitted object fields. */
+export type HerdrJson =
+  string | number | boolean | null | HerdrJson[] | { [key: string]: HerdrJson | undefined };
 
 export class HerdrError extends Error {
   constructor(
@@ -241,7 +245,11 @@ export class JsonConnection {
       clearTimeout(timer);
     }
   }
-  async start(method: string, params: unknown, timeoutMs: number | null) {
+  async start(
+    method: string,
+    params: Record<string, HerdrJson | undefined>,
+    timeoutMs: number | null,
+  ) {
     return this.within(timeoutMs, async () => {
       await this.write(JSON.stringify({ id: this.id, method, params }) + '\n');
       const message = await this.read();
@@ -255,7 +263,7 @@ export class JsonConnection {
 export async function socketRequest<T>(
   socketPath: string,
   method: string,
-  params: unknown,
+  params: Record<string, HerdrJson | undefined>,
   options: RequestOptions = {},
 ): Promise<T> {
   const timeoutMs = options.timeoutMs === undefined ? 10000 : options.timeoutMs;
@@ -264,7 +272,7 @@ export async function socketRequest<T>(
   JSON.stringify(params);
   const connection = new JsonConnection(socketPath, options);
   try {
-    return (await connection.start(method, params, timeoutMs)) as T;
+    return await connection.start(method, params, timeoutMs);
   } finally {
     connection.close();
   }

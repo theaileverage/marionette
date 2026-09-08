@@ -1,18 +1,19 @@
+import { Schema } from 'effect';
+import { randomUUID } from 'node:crypto';
 import {
+  closeSync,
   existsSync,
   mkdirSync,
   openSync,
-  closeSync,
   readFileSync,
-  writeFileSync,
-  renameSync,
-  unlinkSync,
-  statSync,
   realpathSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
 } from 'node:fs';
-import { dirname, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { randomUUID } from 'node:crypto';
+import { dirname, resolve } from 'node:path';
 
 export function agySettingsPath() {
   return resolve(
@@ -35,12 +36,14 @@ export function trustAgyWorkspace(root: string, settingsPath = agySettingsPath()
   const temp = settingsPath + '.' + randomUUID() + '.tmp';
   try {
     const before = existsSync(settingsPath) ? readFileSync(settingsPath, 'utf8') : null;
-    const settings = before === null ? {} : JSON.parse(before);
-    if (!settings || typeof settings !== 'object' || Array.isArray(settings))
-      throw new Error('AGY settings must be a JSON object');
-    const trusted = settings.trustedWorkspaces ?? [];
-    if (!Array.isArray(trusted) || trusted.some((p: unknown) => typeof p !== 'string'))
-      throw new Error('AGY trustedWorkspaces must be a string array');
+    const settings = {
+      ...Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.MutableJson))(
+        before === null ? {} : JSON.parse(before),
+      ),
+    };
+    const trusted = Schema.decodeUnknownSync(Schema.Array(Schema.String))(
+      settings.trustedWorkspaces ?? [],
+    );
     if (trusted.includes(root)) return { changed: false, root, settingsPath };
     settings.trustedWorkspaces = [...trusted, root];
     const mode = before === null ? 0o600 : statSync(settingsPath).mode & 0o777;

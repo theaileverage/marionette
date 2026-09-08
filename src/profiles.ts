@@ -1,11 +1,12 @@
-import { catalogProfiles, parseCatalog } from './model-catalog.js';
+import { Effect, Schema } from 'effect';
+import { sync } from './effect-runtime.js';
+import { commandEffect } from './files.js';
 import { catalogSnapshot } from './model-catalog-snapshot.js';
-import { command } from './files.js';
-import { AppError } from './types.js';
+import { catalogProfiles, parseCatalog } from './model-catalog.js';
 import { profileSchema, type Profile } from './orchestration-types.js';
-
+import { AppError } from './types.js';
 export const builtinProfiles: Profile[] = [
-  profileSchema.parse({
+  Schema.decodeSync(profileSchema)({
     id: 'claude-fable-orchestration',
     name: 'Claude Fable',
     kind: 'claude',
@@ -33,7 +34,6 @@ export const builtinProfiles: Profile[] = [
     }),
   ),
 ];
-
 export function profileArgs(p: Pick<Profile, 'kind' | 'model' | 'reasoning'>) {
   const args = ['--model', p.model];
   if (p.reasoning) {
@@ -44,35 +44,42 @@ export function profileArgs(p: Pick<Profile, 'kind' | 'model' | 'reasoning'>) {
   return args;
 }
 /** Small opt-in account probe with no task data, tools or model fallback. */
-export async function probeProfile(profile: Profile, cwd: string) {
+export const probeProfileEffect = Effect.fn('probeProfile')(function* (
+  profile: Profile,
+  cwd: string,
+) {
   if (/^(default|fable|opus|sonnet|haiku|auto|latest)$/i.test(profile.model))
-    throw new AppError(
-      'model_alias',
-      'Use an exact model ID so availability and run history are reproducible',
-    );
+    return yield* new AppError({
+      code: 'model_alias',
+      message: 'Use an exact model ID so availability and run history are reproducible',
+      status: 400,
+    });
   if (profile.reasoning && !profile.supportedReasoning.includes(profile.reasoning))
-    throw new AppError(
-      'reasoning_unsupported',
-      'Requested effort is absent from the profile capability list',
-    );
+    return yield* new AppError({
+      code: 'reasoning_unsupported',
+      message: 'Requested effort is absent from the profile capability list',
+      status: 400,
+    });
   if (profile.kind === 'agy') {
-    const result = await command('agy', ['models'], cwd, 30000);
+    const result = yield* commandEffect('agy', ['models'], cwd, 30000);
     if (result.code !== 0 || result.timedOut)
-      throw new AppError(
-        'model_probe',
-        'AGY model availability query failed: ' + result.output.slice(-2000),
-      );
+      return yield* new AppError({
+        code: 'model_probe',
+        message: 'AGY model availability query failed: ' + result.output.slice(-2000),
+        status: 400,
+      });
     // Match complete IDs rather than allowing substrings of another available model.
     if (!result.output.split(/[^a-zA-Z0-9_.:/-]+/).includes(profile.model))
-      throw new AppError(
-        'model_unavailable',
-        'The exact model is absent from the current AGY model list',
-      );
+      return yield* new AppError({
+        code: 'model_unavailable',
+        message: 'The exact model is absent from the current AGY model list',
+        status: 400,
+      });
     return { output: result.output, evidence: `agy models includes exact ID ${profile.model}` };
   }
   const prompt =
     'Reply exactly MARIONETTE_PROFILE_OK. Do not use tools, inspect files, or perform any other work.';
-  const args =
+  const args = yield* sync('probeProfile.probeProfile', () =>
     profile.kind === 'claude'
       ? [
           '--print',
@@ -93,29 +100,32 @@ export async function probeProfile(profile: Profile, cwd: string) {
           'read-only',
           ...profileArgs(profile),
           prompt,
-        ];
-  const result = await command(profile.kind, args, cwd, 120000);
+        ],
+  );
+  const result = yield* commandEffect(profile.kind, args, cwd, 120000);
   if (result.code !== 0 || result.timedOut)
-    throw new AppError(
-      'model_unavailable',
-      `Exact model probe failed (${result.timedOut ? 'timeout' : result.code}): ${result.output.slice(-3000)}`,
-    );
-  let records: any[];
-  try {
-    const value = JSON.parse(result.output);
-    records = Array.isArray(value) ? value : [value];
-  } catch {
-    records = result.output
-      .split('\n')
-      .filter(Boolean)
-      .flatMap((line) => {
-        try {
-          return [JSON.parse(line)];
-        } catch {
-          return [];
-        }
-      });
-  }
+    return yield* new AppError({
+      code: 'model_unavailable',
+      message: `Exact model probe failed (${result.timedOut ? 'timeout' : result.code}): ${result.output.slice(-3000)}`,
+      status: 400,
+    });
+  const records = yield* sync('Profile.decodeResponse', () => {
+    try {
+      const value = JSON.parse(result.output);
+      return Array.isArray(value) ? value : [value];
+    } catch {
+      return result.output
+        .split('\n')
+        .filter(Boolean)
+        .flatMap((line) => {
+          try {
+            return [JSON.parse(line)];
+          } catch {
+            return [];
+          }
+        });
+    }
+  });
   if (
     !records.some(
       (item) =>
@@ -127,12 +137,15 @@ export async function probeProfile(profile: Profile, cwd: string) {
           item.item.text?.includes('MARIONETTE_PROFILE_OK')),
     )
   )
-    throw new AppError(
-      'model_probe',
-      'Native CLI did not return a successful model response; no fallback accepted',
-    );
+    return yield* new AppError({
+      code: 'model_probe',
+      message: 'Native CLI did not return a successful model response; no fallback accepted',
+      status: 400,
+    });
   return {
     output: result.output,
     evidence: `${profile.kind} responded successfully with explicit model ${profile.model}${profile.reasoning ? ` and effort ${profile.reasoning}` : ''}`,
   };
-}
+});
+export const probeProfile = (profile: Profile, cwd: string) =>
+  Effect.runPromise(probeProfileEffect(profile, cwd));

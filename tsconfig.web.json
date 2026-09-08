@@ -7,6 +7,7 @@
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
+    "types": ["node", "vite/client", "bun"],
     "lib": ["ES2022", "DOM"]
   },
   "include": ["web/**/*.tsx"]

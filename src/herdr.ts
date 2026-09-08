@@ -1,3 +1,4 @@
+import type { Schema } from 'effect';
 import { HerdrClient, HerdrError } from './herdr-sdk.js';
 import { AppError, type HerdrPort } from './types.js';
 
@@ -5,14 +6,19 @@ import { AppError, type HerdrPort } from './types.js';
 export class Herdr extends HerdrClient implements HerdrPort {
   override async call<T = any>(
     method: string,
-    params: Record<string, unknown> = {},
+    params: Record<string, Schema.MutableJson | undefined> = {},
     timeoutMs = 10000,
+    signal?: AbortSignal,
   ): Promise<T> {
     try {
-      return await super.call<T>(method, params, timeoutMs);
+      return await super.call<T>(method, params, timeoutMs, signal);
     } catch (error) {
       if (error instanceof HerdrError)
-        throw new AppError(error.code, error.message, error.code.startsWith('herdr_') ? 503 : 502);
+        throw new AppError({
+          code: error.code,
+          message: error.message,
+          status: error.code.startsWith('herdr_') ? 503 : 502,
+        });
       throw error;
     }
   }

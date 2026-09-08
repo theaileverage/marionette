@@ -1,5 +1,19 @@
 # Verification record
 
+## Effect v4 on Bun — 0.3.0 local acceptance (8 September 2026)
+
+Verified locally on macOS arm64 with Bun 1.3.14, Effect 4.0.0-rc.112, TypeScript 7.0.2, and `@effect/tsgo` 0.43.0. The implementation was coordinated through a dedicated Marionette session. The complete Bun suite passed **127 tests across 14 files**, including all 125 retained Effect-era tests and two Bun SQLite compatibility tests.
+
+`bun run check`, `bun run effect:diagnostics`, `bun run format:check`, and `bun run runtime:check` passed. Effect diagnostics reported zero errors, warnings, or messages. A separate clean `bun install --frozen-lockfile` applied the compiler/linter patches successfully; `bun run tooling:check` proved that valid Effects pass while floating Effects and chained casts fail.
+
+`bun pm pack` passed the full prepack checks, tests, lifecycle checks, and production build. The tarball installed into an isolated Bun consumer and passed executable CLI, standalone Herdr SDK, and TypeScript declaration smoke checks without an installed Effect dependency.
+
+The dedicated supervisor was gracefully stopped, its SQLite files preserved, and the new bundled runtime started with the actual Bun executable. The original project identity, complete lead record, and completed task IDs/revisions matched before and after restart. The pre-existing unrelated validation instance was preserved.
+
+Persistence uses `bun:sqlite` directly, with Effect managing its lifetime; it does not yet use Effect's SQL adapter. Tests cover version-2 records, WAL/FULL settings, nested rollback, rejection of deferred transaction results, restart, monotonic event IDs, and refusal of a newer schema. Other new regressions cover graceful draining after client disconnection, explicit fiber interruption, process descendants, socket cancellation, and uncertainty without replay.
+
+Linux CI is configured but was not executed locally. These are local results; the release workflow separately gates publication on CI. Older release evidence below remains historical.
+
 ## Herdr SDK and pane layout 0.2.2 (8 September 2026)
 
 The SDK exposes all 102 methods from the installed Herdr 0.9.0/protocol-22 schema plus the documented graphics-stream transport. The 117-test suite covers generated API coverage, socket framing, event cancellation and buffer limits, graphics errors and acknowledgements, pane layout selection, interrupted creation recovery, and sibling-safe terminal cleanup. The packed SDK was imported independently and its public TypeScript types compiled in a fresh consumer.

@@ -1,7 +1,7 @@
-import test from 'node:test';
 import assert from 'node:assert/strict';
+import { test } from 'bun:test';
 // @ts-expect-error Build/release helpers intentionally execute as dependency-free JavaScript.
-import { versionParts, compareVersions, notesFor } from '../scripts/release.mjs';
+import { compareVersions, notesFor, versionParts } from '../scripts/release.mjs';
 
 test('release versions reject ambiguous tags and order prereleases before stable versions', () => {
   for (const invalid of ['v1.0.0', '01.2.3', '1.0.0+build', '1.0.0-01', '../main'])

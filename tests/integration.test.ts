@@ -1,22 +1,25 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import net from 'node:net';
-import http from 'node:http';
-import { mkdtempSync, rmSync, existsSync, writeFileSync, realpathSync } from 'node:fs';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { serve } from '../src/server.js';
+import { Schema } from 'effect';
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import http from 'node:http';
+import net from 'node:net';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { test } from 'bun:test';
+import { promisify } from 'node:util';
 import { loadConfig } from '../src/config.js';
+import { serve } from '../src/server.js';
 
 test('real HTTP and STDIO MCP enforce instance auth and expose the same durable state', async () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'marionette-http-'))),
     probe = net.createServer();
   await new Promise<void>((r) => probe.listen(0, '127.0.0.1', r));
-  const port = (probe.address() as net.AddressInfo).port;
+  const port = Schema.decodeUnknownSync(Schema.Struct({ port: Schema.Finite }))(
+    probe.address(),
+  ).port;
   await new Promise<void>((r) => probe.close(() => r()));
   const runtime = await serve(home, port),
     config = loadConfig(home),
@@ -66,7 +69,7 @@ test('real HTTP and STDIO MCP enforce instance auth and expose the same durable 
     await client.connect(
       new StdioClientTransport({
         command: process.execPath,
-        args: ['--no-warnings', '--import', 'tsx', resolve('src/mcp.ts'), '--home', home],
+        args: [resolve('src/mcp.ts'), '--home', home],
         stderr: 'pipe',
       }),
     );
@@ -90,13 +93,23 @@ test('real HTTP and STDIO MCP enforce instance auth and expose the same durable 
       assert.ok(tools.tools.some((t) => t.name === name));
     const projects = await client.callTool({ name: 'project_list', arguments: {} });
     assert.equal(projects.isError, undefined);
-    assert.equal((projects.content as any)[0].text, '[]');
+    assert.equal(
+      Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ text: Schema.String })))(
+        projects.content,
+      )[0].text,
+      '[]',
+    );
     const missing = await client.callTool({
       name: 'project_briefing',
       arguments: { projectId: 'missing' },
     });
     assert.equal(missing.isError, true);
-    assert.match((missing.content as any)[0].text, /Project not found/);
+    assert.match(
+      Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ text: Schema.String })))(
+        missing.content,
+      )[0].text,
+      /Project not found/,
+    );
     await runtime.supervisor.stop();
     runtime.service.store.put('project', 'parity', {
       id: 'parity',
@@ -114,7 +127,7 @@ test('real HTTP and STDIO MCP enforce instance auth and expose the same durable 
         ...request,
         body: JSON.stringify({ action, input }),
       });
-      return { status: response.status, ...((await response.json()) as any) };
+      return { status: response.status, ...(await response.json()) };
     };
     const {
       result: { lease },
@@ -140,7 +153,11 @@ test('real HTTP and STDIO MCP enforce instance auth and expose the same durable 
       },
     });
     assert.equal(created.isError, undefined);
-    const outcome = JSON.parse((created.content as any)[0].text);
+    const outcome = JSON.parse(
+      Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ text: Schema.String })))(
+        created.content,
+      )[0].text,
+    );
     writeFileSync(join(home, 'lease.json'), JSON.stringify(lease), { mode: 0o600 });
     writeFileSync(
       join(home, 'assignment.json'),
@@ -160,9 +177,6 @@ test('real HTTP and STDIO MCP enforce instance auth and expose the same durable 
       }),
     );
     const cli = await promisify(execFile)(process.execPath, [
-      '--no-warnings',
-      '--import',
-      'tsx',
       resolve('src/cli.ts'),
       'call',
       'task.submit',
@@ -186,7 +200,12 @@ test('real HTTP and STDIO MCP enforce instance auth and expose the same durable 
       },
     });
     assert.equal(blocked.isError, true);
-    assert.match((blocked.content as any)[0].text, /required|criterion|integrated/i);
+    assert.match(
+      Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ text: Schema.String })))(
+        blocked.content,
+      )[0].text,
+      /required|criterion|integrated/i,
+    );
     const unauthorized = await fetch(url + '/api/worker/' + task.id + '/call', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer wrong' },
@@ -197,6 +216,68 @@ test('real HTTP and STDIO MCP enforce instance auth and expose the same durable 
     await client.close();
     await runtime.shutdown();
     assert.equal(existsSync(join(home, 'supervisor.lock')), false);
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('shutdown drains an in-flight HTTP operation even after its client disconnects', async () => {
+  const { Effect, Latch } = await import('effect');
+  const { Store } = await import('../src/store.js');
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'marionette-http-drain-')));
+  const probe = net.createServer();
+  await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+  const port = Schema.decodeUnknownSync(Schema.Struct({ port: Schema.Finite }))(
+    probe.address(),
+  ).port;
+  await new Promise<void>((resolve) => probe.close(() => resolve()));
+  const runtime = await serve(home, port);
+  const entered = Latch.makeUnsafe();
+  const release = Latch.makeUnsafe();
+  const config = loadConfig(home);
+  runtime.service.store.put('project', 'held', { id: 'held', workspaceId: 'w1' });
+  runtime.service.port = () => ({
+    async call(method) {
+      if (method === 'workspace.get') {
+        entered.openUnsafe();
+        await Effect.runPromise(release.await);
+        runtime.service.store.event(
+          'held',
+          'test.late-write',
+          'Request drained before SQLite close',
+        );
+      }
+      return { agents: [], panes: [] };
+    },
+  });
+  const controller = new AbortController();
+  const request = fetch(`http://127.0.0.1:${port}/api/call`, {
+    method: 'POST',
+    signal: controller.signal,
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.token}` },
+    body: JSON.stringify({ action: 'project.inspect', input: { projectId: 'held' } }),
+  }).catch(() => undefined);
+  try {
+    await Effect.runPromise(entered.await.pipe(Effect.timeout(3000)));
+    controller.abort();
+    await request;
+    let stopped = false;
+    const stopping = runtime.shutdown().then(() => {
+      stopped = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(stopped, false);
+    release.openUnsafe();
+    await stopping;
+    const store = new Store(join(home, 'state.sqlite'));
+    try {
+      assert.ok(store.events('held').some((event) => event.type === 'test.late-write'));
+    } finally {
+      store.close();
+    }
+  } finally {
+    release.openUnsafe();
+    controller.abort();
+    await runtime.shutdown();
     rmSync(home, { recursive: true, force: true });
   }
 });

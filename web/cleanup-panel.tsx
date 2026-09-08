@@ -15,6 +15,7 @@ type Preview = {
   delivery?: Delivery;
   archive?: Archive;
 };
+type DeliveryInput = { disposition: string; targetRef?: string };
 export function CleanupPanel({
   taskId,
   canEdit,
@@ -24,7 +25,7 @@ export function CleanupPanel({
   taskId: string;
   canEdit: boolean;
   pending: boolean;
-  onAction: (action: string, input: Record<string, unknown>) => Promise<any>;
+  onAction: <Input>(action: string, input: Input) => Promise<any>;
 }) {
   const [preview, setPreview] = useState<Preview>();
   const [error, setError] = useState('');
@@ -35,7 +36,7 @@ export function CleanupPanel({
   const [hours, setHours] = useState('');
   const [autoRelease, setAutoRelease] = useState(true);
   const [autoDelete, setAutoDelete] = useState(false);
-  const run = async (action: string, input: Record<string, unknown> = {}) => {
+  const run = async <Input,>(action: string, input: Input) => {
     setError('');
     try {
       const result = await onAction(action, { taskId, reason, ...input });
@@ -57,7 +58,7 @@ export function CleanupPanel({
         Completion keeps branches and worktrees. Release terminals after consuming results, then
         record delivery and preserve evidence before collection.
       </p>
-      <button disabled={pending} onClick={() => void run('cleanup.preview')}>
+      <button disabled={pending} onClick={() => void run('cleanup.preview', {})}>
         Inspect cleanup eligibility
       </button>
       {error ? <p role="alert">{error}</p> : null}
@@ -169,19 +170,18 @@ export function CleanupPanel({
               ) : null}
               <button
                 disabled={disabled}
-                onClick={() =>
-                  void run('cleanup.deliver', {
-                    disposition,
-                    ...(disposition !== 'abandoned' ? { targetRef } : {}),
-                  })
-                }
+                onClick={() => {
+                  const delivery: DeliveryInput = { disposition };
+                  if (disposition !== 'abandoned') delivery.targetRef = targetRef;
+                  void run('cleanup.deliver', delivery);
+                }}
               >
                 Record delivery decision
               </button>
               {!preview.archive ? (
                 <button
                   disabled={disabled || !preview.delivery}
-                  onClick={() => void run('cleanup.archive')}
+                  onClick={() => void run('cleanup.archive', {})}
                 >
                   Preserve evidence and seal finished tasks
                 </button>

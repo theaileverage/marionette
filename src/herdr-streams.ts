@@ -1,11 +1,11 @@
 import { isAbsolute } from 'node:path';
+import type { HerdrEvent, HerdrResult, RequestTypes } from './herdr-protocol.js';
 import {
   HerdrError,
   JsonConnection,
   validateTimeout,
   type StreamOptions,
 } from './herdr-transport.js';
-import type { HerdrEvent, HerdrResult, RequestTypes } from './herdr-protocol.js';
 
 export class HerdrEventStream implements AsyncIterableIterator<HerdrEvent> {
   private constructor(private connection: JsonConnection) {}
@@ -37,12 +37,14 @@ export class HerdrEventStream implements AsyncIterableIterator<HerdrEvent> {
   async next(): Promise<IteratorResult<HerdrEvent>> {
     const value = await this.connection.read();
     if (value === undefined) return { done: true, value: undefined };
+    // The published SDK has no runtime dependencies; validate its wire envelope here.
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Dependency-free JSON protocol boundary.
     if (!value || typeof value.event !== 'string' || !Object.hasOwn(value, 'data')) {
       const error = new HerdrError('herdr_invalid_response', 'Expected a Herdr event envelope');
       this.connection.fail(error, true);
       throw error;
     }
-    return { done: false, value: value as HerdrEvent };
+    return { done: false, value };
   }
   close() {
     this.connection.close();
@@ -54,11 +56,11 @@ export class HerdrEventStream implements AsyncIterableIterator<HerdrEvent> {
 }
 
 /** This wire method is documented but omitted from Herdr 0.9.0's exported JSON schema. */
-export interface GraphicsStreamParams {
+export type GraphicsStreamParams = {
   pane_id: string;
   layer_id?: string | null;
   z_index?: number;
-}
+};
 export interface GraphicsFrame {
   format: RequestTypes.PaneGraphicsFormat;
   image_width: number;
@@ -82,14 +84,15 @@ function frameHeader(frame: GraphicsFrame) {
   integer(frame.image_height, 'image_height', 1, 0xffffffff);
   if (!['png', 'rgb', 'rgba', 'bgra'].includes(frame.format))
     throw new TypeError('Invalid frame format');
-  return {
+  const header: GraphicsFrame = {
     format: frame.format,
     image_width: frame.image_width,
     image_height: frame.image_height,
-    ...(frame.placement ? { placement: frame.placement } : {}),
   };
+  if (frame.placement) header.placement = frame.placement;
+  return header;
 }
-function encodeHeader(header: unknown) {
+function encodeHeader<Header>(header: Header) {
   const line = JSON.stringify(header) + '\n';
   if (Buffer.byteLength(line) > 64 * 1024) throw new TypeError('Graphics header exceeds 64 KiB');
   return line;
@@ -174,7 +177,7 @@ export class HerdrGraphicsStream {
           this.connection.fail(error, true);
           throw error;
         }
-        return result as GraphicsFrameAck;
+        return result;
       }),
     );
   }

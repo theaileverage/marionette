@@ -65,10 +65,15 @@ export function notesFor(changelog, version) {
 }
 function check(tag) {
   const pkg = read('package.json'),
-    lock = read('package-lock.json');
+    lock = Bun.JSON5.parse(readFileSync(join(root, 'bun.lock'), 'utf8'));
   versionParts(pkg.version);
-  assert.equal(lock.version, pkg.version);
-  assert.equal(lock.packages[''].version, pkg.version);
+  assert.equal(lock.workspaces[''].name, pkg.name);
+  assert.deepEqual(
+    lock.workspaces[''].devDependencies,
+    pkg.devDependencies,
+    'bun.lock must match package.json',
+  );
+  assert.equal(pkg.packageManager, 'bun@1.3.14');
   const source = readFileSync(join(root, 'src/version.ts'), 'utf8');
   assert.ok(
     source.includes(`VERSION = '${pkg.version}'`),
@@ -92,12 +97,8 @@ function prepare(version) {
   const pkg = read('package.json');
   assert.ok(compareVersions(version, pkg.version) > 0, 'New version must increase');
   assert.equal(run('git', ['status', '--porcelain']), '', 'Start from a clean checkout');
-  const lock = read('package-lock.json');
   pkg.version = version;
-  lock.version = version;
-  lock.packages[''].version = version;
   writeFileSync(join(root, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');
-  writeFileSync(join(root, 'package-lock.json'), JSON.stringify(lock, null, 2) + '\n');
   const source = readFileSync(join(root, 'src/version.ts'), 'utf8').replace(
     /VERSION = '[^']+'/g,
     `VERSION = '${version}'`,
@@ -123,25 +124,76 @@ function prepare(version) {
 function smoke(tarball) {
   const pkg = check(),
     dir = mkdtempSync(join(tmpdir(), 'marionette-package-'));
-  const output = run(
-    'npm',
-    [
-      'exec',
-      '--yes',
-      '--offline',
-      '--ignore-scripts',
-      '--cache',
-      join(dir, 'cache'),
-      '--package',
-      resolve(tarball),
-      '--',
-      'marionette',
-      '--version',
-    ],
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({
+      private: true,
+      dependencies: { [pkg.name]: resolve(tarball) },
+    }),
+  );
+  run(
+    process.execPath,
+    ['install', '--production', '--ignore-scripts', '--cache-dir', join(dir, 'cache')],
     { cwd: dir, timeout: 60000 },
   );
+  const output = run(join(dir, 'node_modules', '.bin', 'marionette'), ['--version'], {
+    cwd: dir,
+    timeout: 30000,
+  });
   assert.equal(output, pkg.version, 'Installed package CLI version differs');
-  console.log(`Installed tarball smoke passed: ${output}`);
+  assert.equal(
+    existsSync(join(dir, 'node_modules', 'effect')),
+    false,
+    'The published package must remain self-contained',
+  );
+  run(
+    process.execPath,
+    [
+      '--input-type=module',
+      '--eval',
+      `import assert from 'node:assert/strict';
+       import { HerdrClient, HERDR_PROTOCOL } from '@theaileverage/marionette/herdr-sdk';
+       assert.equal(HERDR_PROTOCOL, 22);
+       const client = new HerdrClient('/tmp/marionette-sdk-smoke.sock');
+       assert.equal(client.socketPath, '/tmp/marionette-sdk-smoke.sock');
+       assert.ok(Object.hasOwn(client.api, 'agent.prompt'));
+       await assert.rejects(client.call('events.subscribe'), /subscribe|stream/);`,
+    ],
+    { cwd: dir, timeout: 30000 },
+  );
+  writeFileSync(
+    join(dir, 'sdk-smoke.mts'),
+    `import { HerdrClient } from '@theaileverage/marionette/herdr-sdk';
+     const client = new HerdrClient('/tmp/marionette-sdk-smoke.sock');
+     void client.request('ping');
+     void client.agent.get('w1:p1');\n`,
+  );
+  writeFileSync(
+    join(dir, 'tsconfig.json'),
+    JSON.stringify({
+      compilerOptions: {
+        target: 'ES2022',
+        module: 'NodeNext',
+        moduleResolution: 'NodeNext',
+        strict: true,
+        noEmit: true,
+        types: ['node'],
+        typeRoots: [join(root, 'node_modules', '@types')],
+      },
+      files: ['sdk-smoke.mts'],
+    }),
+  );
+  run(
+    process.execPath,
+    ['--bun', join(root, 'node_modules', '.bin', 'tsc'), '--project', join(dir, 'tsconfig.json')],
+    {
+      cwd: dir,
+      timeout: 30000,
+    },
+  );
+  console.log(
+    `Installed tarball smoke passed: CLI ${output}, standalone Herdr SDK and declarations`,
+  );
 }
 const sri = (path) => 'sha512-' + createHash('sha512').update(readFileSync(path)).digest('base64');
 async function registry(pkg) {

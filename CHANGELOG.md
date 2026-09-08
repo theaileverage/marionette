@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 — 2026-09-08
+
+- **Runtime change:** the CLI and supervisor now require Bun 1.3.14+. `npx` remains supported when Bun is on PATH. Development, tests, and CI use Bun with a frozen lockfile.
+- Compose application workflows and resource lifetimes with Effect v4, including typed errors, scoped polling, graceful shutdown, and cancellable subprocesses and sockets.
+- Use Bun's SQLite driver while preserving the version-2 database format, synchronous transactions, lease fencing, and recovery behavior.
+- Enforce Effect diagnostics and anti-slop lint rules, install the project Effect skill, and expand verification to 127 tests plus isolated package checks.
+
+Upgrade by stopping the existing supervisor, starting this version against the same state directory, and rerunning setup. Existing worker runtime paths and SQLite state are preserved.
+
 ## 0.2.2 — 2026-09-08
 
 - Ship a Marionette agent skill with setup, task coordination, recovery, and SDK guidance.

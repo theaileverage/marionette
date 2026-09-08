@@ -80,7 +80,7 @@ if (stage === 'init') {
     'acceptance/nested.mjs',
     "import assert from 'node:assert/strict'; import {readFileSync} from 'node:fs'; const a=JSON.parse(readFileSync('nested/child/result.json','utf8')); const b=JSON.parse(readFileSync('nested/integrated.json','utf8')); assert.deepEqual(a.values,[2,3,5]); assert.equal(b.total,10); assert.equal(b.childVerified,true); console.log('NESTED_PASS');\n",
   );
-  const setup = await runSetup({
+  await runSetup({
     project: projectRoot,
     home,
     name: 'Marionette 0.2 real acceptance',
@@ -456,16 +456,16 @@ if (stage === 'init') {
         round === 1
           ? 'council/' + name.slice(-1) + '/assessment.md'
           : 'debate/' + name.slice(-1) + '/round2.md';
-      strategy = await invoke('strategy.contribute', {
+      const contribution = {
         strategyId: strategy.id,
         expectedRevision: strategy.revision,
         taskId: id,
         claim: readFileSync(resolve(projectRoot, path), 'utf8'),
         evidence: [path],
-        ...(round === 2
-          ? { rebuttal: 'Fresh final-round rebuttal and concessions recorded in ' + path }
-          : {}),
-      });
+      };
+      if (round === 2)
+        contribution.rebuttal = 'Fresh final-round rebuttal and concessions recorded in ' + path;
+      strategy = await invoke('strategy.contribute', contribution);
     }
     const synthesis =
       round === 1
