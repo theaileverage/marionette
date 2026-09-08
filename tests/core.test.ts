@@ -566,7 +566,7 @@ test('worktree paths must be relative and symlinks are rechecked in the selected
       }),
       /relative/,
     );
-    symlinkSync('/private/tmp', join(f.root, 'escape'));
+    symlinkSync(realpathSync(tmpdir()), join(f.root, 'escape'));
     repoGit(f.root, 'add', 'escape');
     repoGit(f.root, 'commit', '-m', 'Symlink base');
     const base = repoGit(f.root, 'rev-parse', 'HEAD');
@@ -697,7 +697,8 @@ test('a fresh artifact and passing command produce verified completion', async (
     await f.close();
   }
 });
-test('redirect rejects stale reports and waits for the previous turn to settle', async () => {
+test('redirect rejects stale reports and waits for the previous turn to settle', async (context) => {
+  context.mock.timers.enable({ apis: ['Date'], now: Date.now() });
   const f = await fixture();
   try {
     const a = await f.submit('a');
@@ -726,6 +727,7 @@ test('redirect rejects stale reports and waits for the previous turn to settle',
     assert.equal(f.herdr.calls.filter((c) => c.method === 'agent.prompt').length, 1);
     await f.pump();
     assert.equal(f.herdr.calls.filter((c) => c.method === 'agent.prompt').length, 1);
+    context.mock.timers.tick(10);
     await f.pump();
     assert.equal(f.herdr.calls.filter((c) => c.method === 'agent.prompt').length, 2);
     assert.equal(f.service.task(t.id).prompt, 'Updated objective');
