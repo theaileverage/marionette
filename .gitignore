@@ -1,0 +1,18 @@
+node_modules/
+dist/
+public/
+.marionette/
+.runtime/
+.DS_Store
+*.log
+*.tgz
+
+# Local agent configuration and credentials
+.codex/
+.agents/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+release-assets/
