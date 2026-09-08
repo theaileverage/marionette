@@ -107,3 +107,36 @@ Combine a sequential implementation/review dependency with new repair and re-ver
 Stop the existing supervisor, retain its state, then start 0.2 with the same `--home` and rerun setup. Database schema 2 migrates legacy tasks into persistent implicit outcomes while preserving IDs, run identity, receipts, verification, leases and setup bindings. Newer database schemas fail closed. Old runtime directories remain available to existing workers.
 
 Legacy submissions without an outcome remain compatible through implicit criteria derived from their assignment checks. New lead prompts establish an explicit outcome first. The 0.2 setup contract refuses an older running supervisor and prints the stop/start remedy instead of mixing protocol versions.
+
+## Delivery, archival and cleanup in 0.2.1
+
+Cleanup has five stages: verify the result, release execution resources, record delivery, archive evidence, and collect eligible Git resources. Task completion alone never deletes branches or worktrees. Project sessions and workspaces remain until the operator retires the project through Herdr.
+
+`cleanup.preview` takes `taskId` and returns run identities, cleanup states, blocking consumers, delivery, archive and project policy without deleting anything. The dashboard exposes these operations under **Delivery and cleanup** in task details. Every mutation requires the current lead `lease` and a meaningful `reason`.
+
+- `cleanup.release` takes `taskId` and optional `runId`. After the lead has inspected the result and decided that no native continuation is needed, it preserves bounded output and closes the settled worker's single-pane tab. Herdr has no separate worker-stop endpoint in protocol 20; closing that tab releases its terminal and worker together. The exact workspace, tab, pane, terminal, agent name/kind and native session must still match. Split tabs, busy agents, pending controls, lead waits, active dependent tasks and waiting parents prevent closure. Failed/cancelled results need this explicit inspection; their files remain intact.
+- Automatic release defaults on and waits for a completed integrated outcome, a settled completed task, and no active consumers. It runs at most once per ten-second scan. Failed, blocked, paused, yielding and uncertain work stays available. A failed preflight is retained for inspection instead of being retried continuously.
+- A close intent is durable before `tab.close`. Lost acknowledgements or restart during closure become `uncertain` and never replay automatically. `cleanup.reconcile` takes `taskId`, optional `runId`, and `resolution: "closed" | "not-closed"`. Closed requires both the original tab and terminal to be absent; not-closed requires the original settled identity. A later explicit release can retry a reconciled retained tab. Closing a tab manually is also recognized only after confirming the original terminal is absent.
+- `cleanup.deliver` records `disposition: "merged" | "published" | "abandoned"` and, except for abandonment, `targetRef`. It performs no commit, merge, fetch or push. Supply a full branch ref such as `refs/heads/main`; published work requires a refreshed remote-tracking ref such as `refs/remotes/origin/review`. The clean worktree's HEAD must be an ancestor of that target. Local remote-tracking metadata must be refreshed using the normal Git workflow first. Squash/rebase integration without ancestry proof needs manual review; it is not inferred from similar content. Modified, untracked and ignored files block delivery and collection. Preserve or remove those files explicitly; collection never forces their removal.
+- `cleanup.archive` seals all finished tasks sharing a managed checkout after every recorded worker terminal has been released and all live consumers have finished. Completed tasks require integrated outcome completion. It stores receipt artifacts, file-check evidence and referenced outcome evidence with SHA-256 digests, a manifest containing reports/checks/output and public run identity, and a standalone Git bundle retaining committed history, including abandoned unique commits. Files and directories are flushed before the durable archive record is committed. Archives live in `<state>/archives/<archive-id>` and remain private. Sealed tasks cannot resume or retry; create a new assignment for further work.
+- `cleanup.collect` requires the preview's exact `archiveId`, `taskId`, and optional `deleteBranch` (default false). It rechecks archive integrity, original worker absence, all tasks/projects sharing the checkout, Git identity, clean files, delivery ancestry and unchanged evidence. It removes the worktree through non-forced `git worktree remove`. Merged branch deletion rechecks ancestry and compares the branch tip against the archived commit with `git update-ref -d REF EXPECTED_COMMIT`; a moved tip is retained and exposes a recoverable partial result. Explicit abandonment plus `deleteBranch: true` permits compare-and-delete of the exact archived branch tip after checking that no checkout uses it. Published PR branches remain until a subsequent merged or abandoned delivery decision. That decision and branch collection can happen after the worktree has already been removed.
+
+Live files remain authoritative while the checkout exists: archival does not mask edits or stale verification. Once an authorized collection removes it, existing `task:TASK_ID:path` evidence references resolve to their verified archived bytes. Missing or tampered archived evidence still invalidates acceptance. An interrupted removal retains its phase and error; inspect and repeat `cleanup.collect` with the same archive ID. It checks whether Git actually removed the original worktree before proceeding. A branch that moved is preserved. No session, workspace, source checkout, remote branch, archive, or unrelated file is collected.
+
+`cleanup.configure` stores a project-wide authorized retention policy:
+
+```json
+{
+  "lease": { "projectId": "PROJECT_ID", "owner": "LEAD", "epoch": 1, "token": "PRIVATE" },
+  "reason": "User authorized retaining delivered work for seven days",
+  "policy": {
+    "autoRelease": true,
+    "collectAfterHours": 168,
+    "deleteMergedBranches": false
+  }
+}
+```
+
+The default `collectAfterHours: null` retains worktrees until explicit collection; the default `deleteMergedBranches: false` retains branches. A configured delay begins at recorded delivery and never bypasses checks, archives or consumers. Only completed, delivered work is automatically archived and collected; failures and abandonment require explicit actions. Revoking/changing policy before a pending side effect stops that automatic operation. Cleanup errors remain in the inbox and archive/run records for inspection. Closing the supervisor drains cleanup operations along with other work; it does not initiate cleanup during shutdown.
+
+Upgrade with `stop`, `start`, and setup using the existing state directory. The additive records retain schema 2 and existing run identities. A new supervisor is required for the cleanup tools; existing workers keep their versioned report executable paths.

@@ -119,7 +119,7 @@ export class Orchestration {
         if (!v.passed) return false;
         if (v.check.type !== 'file') return true;
         try {
-          return !!v.digest && digest(safePath(t.cwd, v.check.path, true)) === v.digest;
+          return !!v.digest && digest(this.s.cleanup.evidencePath(t, v.check.path)) === v.digest;
         } catch {
           return false;
         }
@@ -163,8 +163,17 @@ export class Orchestration {
     const t = this.s.task(taskReference[1]);
     if (t.projectId !== projectId)
       fail('evidence_scope', 'Evidence task belongs to another project');
-    const path = safePath(t.cwd, taskReference[2], true);
-    if (!t.ownership.some((owned) => inside(safePath(t.cwd, owned), path)))
+    const original = resolve(t.cwd, taskReference[2]);
+    const path = this.s.cleanup.evidencePath(t, taskReference[2]);
+    const archived = !inside(t.cwd, path);
+    if (
+      !t.ownership.some((owned) =>
+        inside(
+          archived ? resolve(t.cwd, owned) : safePath(t.cwd, owned),
+          archived ? original : path,
+        ),
+      )
+    )
       fail('evidence_scope', 'Task evidence must be inside its ownership');
     return path;
   }
@@ -346,6 +355,9 @@ export class Orchestration {
       .min(1)
       .parse(paths)
       .map((path) => {
+        const taskReference = /^task:([^:]+):/.exec(path);
+        if (taskReference && this.s.cleanup.active(taskReference[1]))
+          fail('cleanup_busy', 'Evidence is being archived; retry after cleanup finishes');
         const value = digest(this.evidencePath(projectId, path));
         if (!value)
           fail(
@@ -437,6 +449,7 @@ export class Orchestration {
         fail('depth_limit', 'Outcome delegation depth reached');
     }
     if (task.outcomeId) {
+      this.s.cleanup.assertOutcomeMutable(task.outcomeId);
       const o = this.outcome(task.outcomeId!);
       if (o.projectId !== task.projectId)
         fail('outcome_scope', 'Outcome belongs to another project');
@@ -602,6 +615,7 @@ export class Orchestration {
   }
   reviseTask(raw: any, c: Credentials) {
     const t = this.s.task(text.parse(raw.taskId));
+    this.s.cleanup.assertMutable(t);
     if (t.projectId !== c.projectId || !t.outcomeId)
       fail('project_mismatch', 'Task must belong to this lead and an outcome');
     const o = this.outcome(t.outcomeId!);
@@ -610,6 +624,9 @@ export class Orchestration {
       fail('stale_revision', 'Task changed; refresh before revising');
     const patch = planPatchSchema.parse(raw.patch),
       reason = text.parse(raw.reason);
+    for (const id of patch.dependencies ?? [])
+      if (this.s.cleanup.active(id))
+        fail('cleanup_busy', 'Dependency is being cleaned up; retry after it finishes');
     if (
       t.runId &&
       this.s.store.get<Run>('run', t.runId)?.phase !== 'stopped' &&
@@ -626,13 +643,15 @@ export class Orchestration {
         fail('supersede_scope', 'Replacement must be required work in the same outcome');
     }
     for (const check of patch.checks ?? []) if (check.type === 'file') safePath(t.cwd, check.path);
+    const released = t.runId && this.s.store.get<Run>('run', t.runId)?.cleanup?.state === 'closed';
     const updated: Task = {
       ...t,
       ...patch,
       revision: t.revision + 1,
       receipt: undefined,
       verification: undefined,
-      status: patch.supersededBy ? 'cancelled' : t.runId ? 'paused' : 'queued',
+      runId: released ? undefined : t.runId,
+      status: patch.supersededBy ? 'cancelled' : t.runId && !released ? 'paused' : 'queued',
       updatedAt: now(),
     };
     this.validateGraph(
@@ -891,6 +910,7 @@ export class Orchestration {
       }
       if (action.startsWith('strategy.')) return this.strategy(action, raw, c);
       const o = this.outcome(text.parse(raw.outcomeId));
+      this.s.cleanup.assertOutcomeMutable(o.id);
       if (o.projectId !== c.projectId) fail('project_mismatch', 'Outcome and lead differ');
       this.checkRevision(o, raw.expectedRevision);
       if (action === 'outcome.revise') {
@@ -960,6 +980,13 @@ export class Orchestration {
     });
   }
   strategy(action: string, raw: any, c: Credentials) {
+    const cleanupOutcome =
+      raw.strategy?.outcomeId ??
+      raw.outcomeId ??
+      (raw.strategyId
+        ? this.s.store.get<Strategy>('strategy', raw.strategyId)?.outcomeId
+        : undefined);
+    if (cleanupOutcome) this.s.cleanup.assertOutcomeMutable(cleanupOutcome);
     if (action === 'strategy.create') {
       const i = strategySchema.parse(raw.strategy),
         o = this.outcome(i.outcomeId);

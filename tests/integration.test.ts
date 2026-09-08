@@ -71,13 +71,20 @@ test('real HTTP and STDIO MCP enforce instance auth and expose the same durable 
       }),
     );
     const tools = await client.listTools();
-    assert.equal(tools.tools.length, 40);
+    assert.equal(tools.tools.length, 47);
     for (const name of [
       'outcome_create',
       'outcome_complete',
       'plan_revise',
       'lead_wait',
       'strategy_finish',
+      'cleanup_preview',
+      'cleanup_release',
+      'cleanup_reconcile',
+      'cleanup_deliver',
+      'cleanup_archive',
+      'cleanup_collect',
+      'cleanup_configure',
       'profile_validate',
     ])
       assert.ok(tools.tools.some((t) => t.name === name));

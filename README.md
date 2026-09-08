@@ -166,7 +166,7 @@ The lead assesses likely file conflicts before dispatch: overlapping files, cros
 - Independent worktrees can edit the same repository files concurrently. Ownership remains a filesystem-path contract; it does not predict merge conflicts or protect shared external resources. Dependencies wait for completion but do not merge another task's changes into a worktree. Select an appropriate committed base when one task needs another's result.
 - Worktree creation requires an existing Git repository and a valid commit. Failure starts no worker and never falls back silently to the shared checkout. Git hooks are disabled for supervisor worktree operations; dependency installation, submodule initialization, and other project setup remain explicit task instructions.
 
-After verification, the lead recommends a next step and asks the user to choose unless already authorized: review locally, merge, or push the task branch and open a PR through the user's Git hosting workflow. Marionette retains the branch and worktree on completion, failure, and cancellation; it does not automatically commit, publish, merge, or delete them. Ordinary Git and PR tools can operate in `task.cwd`. Retries reuse the same worktree and preserve worker commits and uncommitted changes.
+After verification, the lead recommends a next step and asks the user to choose unless already authorized: review locally, merge, or push the task branch and open a PR through the user's Git hosting workflow. Marionette retains the branch and worktree on completion, failure, and cancellation. It does not automatically commit, publish, or merge; the separate delivery/archive/cleanup lifecycle governs later removal. Ordinary Git and PR tools can operate in `task.cwd`. Retries reuse the same worktree and preserve worker commits and uncommitted changes.
 
 For existing worktrees created outside Marionette, supply an in-root `cwd` in shared mode or register an external worktree as a separate project. Separate projects cannot have cross-project task dependencies.
 
@@ -220,6 +220,14 @@ node dist/cli.js call decision.record --lease /private/tmp/marionette-lead.json 
 `redirect` replaces the objective and invalidates old reports. The MCP/CLI accepts replacement `checks`; dashboard redirects retain the displayed checks. `pause` interrupts and waits for the agent to settle. `reply` resumes a paused assignment or answers a blocked worker. `cancel` stops the task without closing its tab. Native permission dialogs require inspecting the actual output and resolving the specific prompt in Herdr or sending explicit keys through the dashboard. Marionette does not auto-approve permissions. If interruption does not settle within 30 seconds, the control fails visibly so the lead can resolve the native screen.
 
 Workers receive an attempt-scoped report credential through their new pane environment. The supplied instructions explain `worker-report --file REPORT.json`, including revision, summary, artifact paths, and evidence. Credentials are not included in briefings. Workers must request normal sandbox approval if their report command needs permission to reach the local supervisor.
+
+## Delivery and cleanup
+
+Version 0.2.1 separates terminal release from delivery and Git cleanup. After integrated outcome completion, the supervisor can save worker diagnostics and close an eligible settled worker tab automatically. Failed/cancelled work needs explicit inspection; blocked, paused, waiting and uncertain workers stay intact.
+
+Task completion preserves branches and worktrees. Use the task drawer's **Delivery and cleanup** panel or `cleanup.preview`, `cleanup.release`, `cleanup.deliver`, `cleanup.archive`, and `cleanup.collect` through CLI/MCP. Record merged, published or explicitly abandoned work, preserve evidence and committed history, then collect only the exact eligible checkout. A published PR branch stays available for later review and merge. Archives preserve completion evidence after the worktree is removed.
+
+Automatic worktree collection is disabled by default. `cleanup.configure` can authorize a retention delay and optional merged-branch deletion. Dirty/untracked/ignored files, active consumers, changed resource identities and ambiguous operations prevent removal. Project Herdr sessions and workspaces remain. See [the full cleanup contract](ORCHESTRATION.md#delivery-archival-and-cleanup-in-021) for safeguards, recovery, and API inputs.
 
 ## Handover
 
