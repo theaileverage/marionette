@@ -1,6 +1,6 @@
 # Verification record
 
-## Effect v4 on Bun — unreleased (8 September 2026)
+## Effect v4 on Bun — 0.3.0 local acceptance (8 September 2026)
 
 Verified locally on macOS arm64 with Bun 1.3.14, Effect 4.0.0-rc.112, TypeScript 7.0.2, and `@effect/tsgo` 0.43.0. The implementation was coordinated through a dedicated Marionette session. The complete Bun suite passed **127 tests across 14 files**, including all 125 retained Effect-era tests and two Bun SQLite compatibility tests.
 
@@ -12,7 +12,7 @@ The dedicated supervisor was gracefully stopped, its SQLite files preserved, and
 
 Persistence uses `bun:sqlite` directly, with Effect managing its lifetime; it does not yet use Effect's SQL adapter. Tests cover version-2 records, WAL/FULL settings, nested rollback, rejection of deferred transaction results, restart, monotonic event IDs, and refusal of a newer schema. Other new regressions cover graceful draining after client disconnection, explicit fiber interruption, process descendants, socket cancellation, and uncertainty without replay.
 
-Linux CI is configured but was not executed locally. This migration is uncommitted and unpublished at the time of this verification; older release evidence below remains historical.
+Linux CI is configured but was not executed locally. These are local results; the release workflow separately gates publication on CI. Older release evidence below remains historical.
 
 ## Herdr SDK and pane layout 0.2.2 (8 September 2026)
 
