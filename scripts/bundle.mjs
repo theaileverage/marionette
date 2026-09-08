@@ -44,4 +44,8 @@ for (const dir of [...packages].sort()) {
   for (const file of licenses)
     notices += `\n\`\`\`text\n${readFileSync(resolve(dir, file), 'utf8').trim()}\n\`\`\`\n`;
 }
+notices +=
+  '\n## Herdr 0.9.0 API schema\n\nThe SDK protocol types are generated from Herdr (https://github.com/herdrdev/herdr/tree/v0.9.0), licensed under Apache-2.0.\n\n```text\n' +
+  readFileSync('vendor/herdr-0.9.0/LICENSE', 'utf8').trim() +
+  '\n```\n';
 writeFileSync('THIRD_PARTY_NOTICES.md', notices);
