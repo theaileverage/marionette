@@ -1,3 +1,4 @@
+import { agentAccessSchema, agentAccessArgs } from './agent-access.js';
 import { Effect, Config as Environment, Option, Result, Schedule, Schema, Struct } from 'effect';
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -74,6 +75,7 @@ export const setupSchema = Schema.Struct({
   trustWorkspaces: Schema.mutableKey(
     Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   ),
+  agentAccess: Schema.mutableKey(Schema.optionalKey(agentAccessSchema)),
   trustAgy: Schema.mutableKey(Schema.optional(Schema.Boolean)),
   mcp: Schema.mutableKey(
     Schema.Literals(['install', 'print', 'skip']).pipe(
@@ -110,6 +112,7 @@ export function setupPlan<Input extends object>(input: Input) {
     trustAgy: binding?.trustAgy,
     mcp: binding?.mcp,
     ...supplied,
+    agentAccess: { ...binding?.agentAccess, ...supplied.agentAccess },
     trustWorkspaces:
       supplied.trustWorkspaces ??
       (supplied.trustAgy === false
@@ -154,6 +157,12 @@ export function setupPlan<Input extends object>(input: Input) {
     workspaceLabel: `Marionette ${hash}`,
     effects: [
       'Check required tools and report optional worker CLIs',
+      ...Object.entries(options.agentAccess ?? {})
+        .filter(([, mode]) => mode === 'full-access')
+        .map(
+          ([kind]) =>
+            `Launch new ${kind} leads and workers with full harness access; host-managed restrictions still apply`,
+        ),
       ...(options.installTools
         ? ['Install missing required tools using supported installers']
         : []),
@@ -230,6 +239,25 @@ export const wizardEffect = Effect.fn('Setup.wizard')(function* (input: Partial<
       output: process.stderr,
     }),
   );
+  input.agentAccess ??= {};
+  for (const kind of ['codex', 'claude', 'agy'] as const) {
+    input.agentAccess[kind] ??= yield* promptEffect((signal) =>
+      prompts.select({
+        message: `${kind} access for new Marionette sessions`,
+        initialValue: defaults.agentAccess?.[kind] ?? 'inherit',
+        signal,
+        output: process.stderr,
+        options: [
+          { value: 'inherit' as const, label: 'Use native settings' },
+          {
+            value: 'full-access' as const,
+            label: 'Full access',
+            hint: 'Disable harness sandbox and approval prompts; host restrictions still apply',
+          },
+        ],
+      }),
+    );
+  }
   input.mcp ??= yield* promptEffect((signal) =>
     prompts.select({
       message: 'Marionette MCP configuration',
@@ -467,6 +495,7 @@ export const runSetupEffect = Effect.fn('runSetup')(function* (
         socketPath: p.socket,
         workspaceId,
         trustWorkspaces: p.trustWorkspaces,
+        agentAccess: p.agentAccess ?? {},
       }),
     ).pipe(Effect.mapError(boundaryError('setup.decode')));
   const leasePath = yield* sync('runSetup.runSetup', () =>
@@ -509,7 +538,11 @@ export const runSetupEffect = Effect.fn('runSetup')(function* (
     ).pipe(Effect.mapError(boundaryError('setup.decode')))).lease;
     yield* sync('runSetup.runSetup', () => privateJson(leasePath, lease));
   }
-  yield* callEffect(p.home, 'project.configure', { lease, trustWorkspaces: p.trustWorkspaces });
+  yield* callEffect(p.home, 'project.configure', {
+    lease,
+    trustWorkspaces: p.trustWorkspaces,
+    agentAccess: p.agentAccess ?? {},
+  });
   const binding = {
     version: 1,
     home: p.home,
@@ -527,6 +560,7 @@ export const runSetupEffect = Effect.fn('runSetup')(function* (
     leasePath,
     runtime,
     runtimeExecutable: process.execPath,
+    agentAccess: p.agentAccess,
     trustWorkspaces: p.trustWorkspaces,
     mcp: p.mcp,
   };
@@ -663,6 +697,7 @@ export const launchLeadEffect = Effect.fn('launchLead')(function* (
   const binary = yield* Schema.decodeUnknownEffect(leadAgentSchema)(binding.lead).pipe(
     Effect.mapError(boundaryError('Setup.lead')),
   );
+  if (binary === 'codex-desktop') return;
   if (
     binding.socket !== resolve(homedir(), '.config/herdr/sessions', binding.session, 'herdr.sock')
   )
@@ -713,7 +748,11 @@ export const launchLeadEffect = Effect.fn('launchLead')(function* (
       epoch: lease.epoch,
       owner,
       kind: binary,
-      args: terminalLeadArgs(binary, model, prompt),
+      args: terminalLeadArgs(
+        binary,
+        agentAccessArgs(binary, current.project.agentAccess, model),
+        prompt,
+      ),
     });
     if (opened.status === 'inspect') {
       console.log(opened.message);

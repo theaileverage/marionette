@@ -28,6 +28,14 @@ const fail = (code: string, message: string): never => {
 const text = Schema.Trim.check(Schema.isMinLength(1));
 export class Orchestration {
   constructor(public s: Service) {}
+  scopePath(projectId: string, path: string) {
+    if (/[?*[\]\r\n]/.test(path))
+      fail(
+        'outcome_scope',
+        `Invalid outcome.scope path ${JSON.stringify(path)}. Use file paths or directory prefixes ("src", not "src/**"), never prose.`,
+      );
+    return safePath(this.s.project(projectId).root, path);
+  }
   probeProfile = probeProfileEffect;
   discoverModels = discoverModelsEffect;
   migrateLegacyTasks() {
@@ -55,6 +63,7 @@ export class Orchestration {
           assessments: [],
         };
         this.s.store.put('outcome', o.id, o);
+        this.s.swarm.captureIntent(o);
         this.s.store.put('task', t.id, { ...t, outcomeId: o.id });
         this.revision(
           o,
@@ -144,14 +153,30 @@ export class Orchestration {
         );
     }
   }
+  taskCurrent(t: Task) {
+    return (
+      t.status === 'completed' &&
+      this.taskEvidenceCurrent(t) &&
+      this.s.swarm.unmetTask(t).length === 0
+    );
+  }
   unmetTask(t: Task) {
     return this.descendants(t.id)
-      .filter((d) => this.required(d) && (d.status !== 'completed' || !this.taskEvidenceCurrent(d)))
-      .map((d) => `${d.title}: ${d.status}`);
+      .filter((d) => this.required(d) && !this.taskCurrent(d))
+      .map((d) => `${d.title}: ${d.status}`)
+      .concat(this.s.swarm.unmetTask(t));
   }
   evidencePath(projectId: string, reference: string) {
     const taskReference = /^task:([^:]+):(.+)$/.exec(reference);
-    if (!taskReference) return safePath(this.s.project(projectId).root, reference, true);
+    if (!taskReference) {
+      const path = safePath(this.s.project(projectId).root, reference);
+      if (!digest(path))
+        fail(
+          'evidence_file',
+          `Evidence reference ${JSON.stringify(reference)} must be an existing regular file inside the project. Conversation labels and user-message IDs are not files; cite a saved artifact or record concrete evidence first.`,
+        );
+      return path;
+    }
     const t = this.s.task(taskReference[1]);
     if (t.projectId !== projectId)
       fail('evidence_scope', 'Evidence task belongs to another project');
@@ -184,15 +209,24 @@ export class Orchestration {
   unmet(o: Outcome) {
     const items = this.s
       .tasks(o.projectId)
-      .filter(
-        (t) =>
-          t.outcomeId === o.id &&
-          this.required(t) &&
-          (t.status !== 'completed' || !this.taskEvidenceCurrent(t)),
-      )
+      .filter((t) => t.outcomeId === o.id && this.required(t) && !this.taskCurrent(t))
       .map(
         (t) => `${t.title}: ${t.status === 'completed' ? 'stale completion evidence' : t.status}`,
       );
+    items.push(...this.s.swarm.unmet(o.id));
+    for (const experiment of this.s.store
+      .all<import('./swarm-types.js').Experiment>('swarm-experiment')
+      .filter((e) => e.outcomeId === o.id)) {
+      if (
+        experiment.taskIds.some(
+          (id) => !['completed', 'failed', 'cancelled'].includes(this.s.task(id).status),
+        )
+      )
+        items.push(`Experiment ${experiment.id} has unsettled candidates`);
+      if (!experiment.selection) items.push(`Experiment ${experiment.id} has no selected result`);
+      else if (!this.s.swarm.compare(experiment.id).selectionCurrent)
+        items.push(`Experiment ${experiment.id} selection is stale`);
+    }
     for (const c of o.criteria) {
       const a = o.assessments.find((a) => a.criterionId === c.id && a.revision === o.revision);
       if (!a || !this.evidenceCurrent(a.references, o.projectId))
@@ -253,6 +287,7 @@ export class Orchestration {
     evidence: string[] = [],
   ) {
     const o = this.outcome(outcomeId);
+    this.s.swarm.captureIntent(o);
     const updated = {
       ...o,
       status: 'open' as const,
@@ -333,8 +368,16 @@ export class Orchestration {
     return updated;
   }
   checkRevision(o: Outcome, expected: number | undefined) {
-    if (Schema.decodeUnknownSync(Schema.Finite.check(Schema.isInt()))(expected) !== o.revision)
-      fail('tree_revision', 'The task tree changed. Refresh and evaluate the current revision.');
+    if (expected === undefined)
+      fail(
+        'tree_revision_required',
+        `expectedTreeRevision (or expectedRevision for outcome actions) is required for outcome ${o.id}. Read outcome_get: the current revision is ${o.revision}.`,
+      );
+    if (expected !== o.revision)
+      fail(
+        'tree_revision',
+        `The task tree changed. Outcome ${o.id} is at revision ${o.revision}, received ${expected}. Refresh outcome_get and evaluate the current revision before retrying.`,
+      );
   }
   references(projectId: string, paths: string[]) {
     return Schema.decodeSync(Schema.mutable(Schema.Array(text)).check(Schema.isMinLength(1)))(
@@ -453,7 +496,10 @@ export class Orchestration {
             ),
           )
         )
-          fail('outcome_scope', 'Task ownership exceeds the outcome scope');
+          fail(
+            'outcome_scope',
+            `Task ownership ${JSON.stringify(owned)} exceeds outcome ${o.id} scope ${JSON.stringify(o.scope)}. Scope must contain file paths or directory prefixes, not prose. Use outcome_revise with scope and a reason to correct the existing outcome; preserve its criteria.`,
+          );
       this.changed(
         o.id,
         assignment.planReason ?? `Added required work: ${task.title}`,
@@ -466,7 +512,7 @@ export class Orchestration {
         id: randomUUID(),
         projectId: task.projectId,
         objective: task.prompt,
-        scope: task.ownership.map((p) => safePath(task.cwd, p)),
+        scope: task.readOnly ? [task.cwd] : task.ownership.map((p) => safePath(task.cwd, p)),
         category: 'software',
         criteria: task.checks.map((c, i) => ({
           id: `check-${i + 1}`,
@@ -484,6 +530,7 @@ export class Orchestration {
         assessments: [],
       };
       this.s.store.put('outcome', o.id, o);
+      this.s.swarm.captureIntent(o);
       task.outcomeId = o.id;
     }
     task.resolvedProfile = this.resolveProfile(assignment);
@@ -491,7 +538,7 @@ export class Orchestration {
       task.profileId = task.resolvedProfile.id;
       task.model = task.resolvedProfile.model;
       task.reasoning = task.resolvedProfile.reasoning;
-      task.canDelegate ??= task.resolvedProfile.canDelegate;
+      task.canDelegate ??= task.readOnly ? false : task.resolvedProfile.canDelegate;
     }
     if (task.model && !task.resolvedProfile)
       fail(
@@ -521,34 +568,42 @@ export class Orchestration {
       .filter((t) => t.id !== task.id && t.status !== 'queued' && holds(t));
     const limits = this.limits(task.projectId);
     const leads = this.s.continuation.reservations();
-    if (all.length + leads.length >= limits.global) return 'Global execution capacity reached';
-    if (
-      all.filter((t) => t.projectId === task.projectId).length +
-        leads.filter((w) => w.projectId === task.projectId).length >=
-      limits.project
-    )
-      return 'Waiting for an available project execution slot';
-    if (
-      all.filter((t) => t.kind === task.kind).length +
-        leads.filter((w) => w.kind === task.kind).length >=
-      (limits.providers[task.kind] ?? limits.global)
-    )
-      return `${task.kind} provider capacity reached`;
-    if (
-      task.model &&
-      all.filter((t) => t.model === task.model).length +
-        leads.filter((w) => w.model === task.model).length >=
-        (limits.models[task.model] ?? limits.global)
-    )
-      return `${task.model} model capacity reached`;
-    if (
-      task.resolvedProfile &&
-      all.filter((t) => t.projectId === task.projectId && t.profileId === task.profileId).length +
-        leads.filter((w) => w.projectId === task.projectId && w.profileId === task.profileId)
-          .length >=
-        task.resolvedProfile.maxConcurrency
-    )
-      return 'Profile capacity reached';
+    if (this.s.swarm.runtime.adaptive()) {
+      const blocked = this.s.swarm.runtime.capacityBlock(task.projectId, task.kind, task.model, [
+        ...all,
+        ...leads,
+      ]);
+      if (blocked) return blocked;
+    } else {
+      if (all.length + leads.length >= limits.global) return 'Global execution capacity reached';
+      if (
+        all.filter((t) => t.projectId === task.projectId).length +
+          leads.filter((w) => w.projectId === task.projectId).length >=
+        limits.project
+      )
+        return 'Waiting for an available project execution slot';
+      if (
+        all.filter((t) => t.kind === task.kind).length +
+          leads.filter((w) => w.kind === task.kind).length >=
+        (limits.providers[task.kind] ?? limits.global)
+      )
+        return `${task.kind} provider capacity reached`;
+      if (
+        task.model &&
+        all.filter((t) => t.model === task.model).length +
+          leads.filter((w) => w.model === task.model).length >=
+          (limits.models[task.model] ?? limits.global)
+      )
+        return `${task.model} model capacity reached`;
+      if (
+        task.resolvedProfile &&
+        all.filter((t) => t.projectId === task.projectId && t.profileId === task.profileId).length +
+          leads.filter((w) => w.projectId === task.projectId && w.profileId === task.profileId)
+            .length >=
+          task.resolvedProfile.maxConcurrency
+      )
+        return 'Profile capacity reached';
+    }
     if (
       task.outcomeId &&
       this.outcome(task.outcomeId).turnsUsed +
@@ -558,7 +613,10 @@ export class Orchestration {
       return 'Shared outcome execution budget exhausted';
     if (task.parentId) {
       const parent = this.s.task(task.parentId);
-      if (!['waiting', 'completed'].includes(parent.status))
+      if (
+        !['waiting', 'completed'].includes(parent.status) &&
+        !parent.concurrentChildren?.includes(task.id)
+      )
         return 'Parent must yield ownership before children execute';
     }
     return undefined;
@@ -697,6 +755,7 @@ export class Orchestration {
           raw.action === 'inspect'
             ? task.revision
             : Schema.decodeUnknownSync(Schema.Finite.check(Schema.isInt()))(raw.revision),
+          raw.action === 'inspect',
         ),
       );
       const descendants = yield* sync('Orchestration.workerAction', () => this.descendants(t.id));
@@ -714,7 +773,8 @@ export class Orchestration {
           t.outcomeId ? this.outcome(t.outcomeId) : undefined,
         );
         return yield* sync('Orchestration.workerAction', () => ({
-          task: { ...t, output: '', prompt: t.prompt.slice(0, 800) },
+          task: { ...t, output: '', prompt: t.prompt },
+          ...this.s.swarm.context(t),
           children: descendants.map((child) => ({
             ...child,
             output: '',
@@ -737,6 +797,10 @@ export class Orchestration {
             : null,
         }));
       }
+      if (['message.send', 'message.ack', 'activity', 'decision.open'].includes(raw.action))
+        return yield* sync('Swarm.worker', () =>
+          this.s.store.transaction(() => this.s.swarm.worker(t, raw)),
+        );
       if (raw.action === 'finding') {
         const finding = yield* sync('Orchestration.workerAction', () => ({
           id: randomUUID(),
@@ -924,7 +988,7 @@ export class Orchestration {
               if (i.projectId !== c.projectId) fail('project_mismatch', 'Outcome and lead differ');
               if (new Set(i.criteria.map((c) => c.id)).size !== i.criteria.length)
                 fail('criteria_ids', 'Criterion IDs must be unique');
-              for (const p of i.scope) safePath(this.s.project(c.projectId).root, p);
+              for (const p of i.scope) this.scopePath(c.projectId, p);
               return this.s.idempotent(c.projectId, 'outcome:' + i.key, i, () => {
                 const { key: _key, ...fields } = i;
                 const o: Outcome = {
@@ -939,6 +1003,7 @@ export class Orchestration {
                   updatedAt: now(),
                 };
                 this.s.store.put('outcome', o.id, o);
+                this.s.swarm.captureIntent(o);
                 this.revision(o, 'Established observable completion criteria', c.owner, null, o);
                 return o;
               });
@@ -1006,20 +1071,52 @@ export class Orchestration {
             if (o.projectId !== c.projectId) fail('project_mismatch', 'Outcome and lead differ');
             this.checkRevision(o, raw.expectedRevision);
             if (action === 'outcome.revise') {
-              const criteria = Schema.decodeUnknownSync(
-                  Schema.mutable(Schema.Array(criterionSchema)).check(Schema.isMinLength(1)),
-                )(raw.criteria),
+              const criteria =
+                  raw.criteria === undefined
+                    ? o.criteria
+                    : Schema.decodeUnknownSync(
+                        Schema.mutable(Schema.Array(criterionSchema)).check(Schema.isMinLength(1)),
+                      )(raw.criteria),
                 reason = Schema.decodeUnknownSync(text)(raw.reason);
+              const scope =
+                raw.scope === undefined
+                  ? o.scope
+                  : Schema.decodeUnknownSync(outcomeSchema.fields.scope)(raw.scope);
+              for (const path of scope) this.scopePath(c.projectId, path);
+              for (const task of this.s.tasks(c.projectId).filter((t) => t.outcomeId === o.id))
+                for (const owned of task.ownership)
+                  if (
+                    !scope.some((path) =>
+                      inside(
+                        this.scopePath(c.projectId, path),
+                        safePath(task.worktree?.sourceCwd ?? task.cwd, owned),
+                      ),
+                    )
+                  )
+                    fail(
+                      'outcome_scope',
+                      `Revised scope would exclude task ${task.id} ownership ${JSON.stringify(owned)}. Preserve existing task boundaries.`,
+                    );
               if (new Set(criteria.map((c) => c.id)).size !== criteria.length)
                 fail('criteria_ids', 'Criterion IDs must be unique');
               const updated: Outcome = {
                 ...o,
                 criteria,
+                scope,
+                maxTurns:
+                  raw.maxTurns === undefined
+                    ? o.maxTurns
+                    : Schema.decodeUnknownSync(outcomeSchema.fields.maxTurns)(raw.maxTurns),
+                maxDepth:
+                  raw.maxDepth === undefined
+                    ? o.maxDepth
+                    : Schema.decodeUnknownSync(outcomeSchema.fields.maxDepth)(raw.maxDepth),
                 revision: o.revision + 1,
                 status: 'open',
                 integrated: undefined,
                 updatedAt: now(),
               };
+              this.s.swarm.captureIntent(o);
               this.s.store.put('outcome', o.id, updated);
               this.revision(updated, reason, c.owner, o, updated);
               return updated;
@@ -1038,6 +1135,7 @@ export class Orchestration {
               };
               o.assessments = [...o.assessments.filter((a) => a.criterionId !== criterionId), a];
               this.s.store.put('outcome', o.id, o);
+              this.s.swarm.captureIntent(o);
               this.s.store.event(o.projectId, 'outcome.assessed', a.rationale);
               return a;
             }
@@ -1050,6 +1148,7 @@ export class Orchestration {
                 createdAt: now(),
               };
               this.s.store.put('outcome', o.id, o);
+              this.s.swarm.captureIntent(o);
               return o.integrated;
             }
             if (action === 'outcome.complete') {
@@ -1058,6 +1157,7 @@ export class Orchestration {
               o.status = 'completed';
               o.updatedAt = now();
               this.s.store.put('outcome', o.id, o);
+              this.s.swarm.captureIntent(o);
               this.s.store.event(o.projectId, 'outcome.completed', o.objective, undefined, {
                 outcomeId: o.id,
                 revision: o.revision,

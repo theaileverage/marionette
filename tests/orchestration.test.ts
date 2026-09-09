@@ -1,229 +1,14 @@
+import { fixture } from './swarm-fixture.js';
 import { Effect, Fiber, Latch } from 'effect';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'bun:test';
 import { parseUsage, type LeadWait } from '../src/continuation.js';
 import type { Outcome } from '../src/orchestration-types.js';
 import { Service } from '../src/service.js';
 import { Store } from '../src/store.js';
-import { Supervisor } from '../src/supervisor.js';
-import { AppError, now, type HerdrPort, type Project, type Run, type Task } from '../src/types.js';
-
-class Agents implements HerdrPort {
-  agents = new Map<string, any>();
-  envs = new Map<string, any>();
-  panes = new Map<string, any>();
-  calls: { method: string; params: any }[] = [];
-  failPrompt = false;
-  next = 0;
-  async call(method: string, params: any = {}): Promise<any> {
-    this.calls.push({ method, params });
-    if (method === 'ping' || method === 'workspace.get') return {};
-    if (method === 'pane.list') return { panes: [...this.panes.values()] };
-    if (method === 'pane.layout') {
-      const tab = this.panes.get(params.pane_id).tab_id;
-      return {
-        layout: {
-          workspace_id: 'w1',
-          tab_id: tab,
-          panes: [...this.panes.values()]
-            .filter((p) => p.tab_id === tab)
-            .map((p) => ({ pane_id: p.pane_id, rect: { x: 0, y: 0, width: 180, height: 48 } })),
-        },
-      };
-    }
-    if (method === 'tab.create' || method === 'pane.split') {
-      const n = ++this.next,
-        pane = {
-          pane_id: `w1:p${n}`,
-          tab_id:
-            method === 'pane.split' ? this.panes.get(params.target_pane_id).tab_id : `w1:t${n}`,
-          workspace_id: 'w1',
-          terminal_id: `terminal-${n}`,
-        };
-      this.envs.set(pane.pane_id, params.env);
-      this.panes.set(pane.pane_id, { ...pane, cwd: params.cwd });
-      return method === 'pane.split' ? { pane } : { root_pane: pane };
-    }
-    if (method === 'agent.start') {
-      const n = params.pane_id.split('p')[1];
-      const a = {
-        pane_id: params.pane_id,
-        terminal_id: `terminal-${n}`,
-        workspace_id: 'w1',
-        name: params.name,
-        agent: params.kind,
-        agent_status: 'idle',
-        state_change_seq: 0,
-        agent_session: { value: `native-${n}` },
-      };
-      this.agents.set(a.pane_id, a);
-      return { agent: a };
-    }
-    if (method === 'agent.get') {
-      const a = this.agents.get(params.target);
-      if (!a)
-        throw new AppError({ code: 'agent_not_found', message: 'Missing test agent', status: 400 });
-      return { agent: { ...a } };
-    }
-    if (method === 'agent.prompt') {
-      if (this.failPrompt)
-        throw new AppError({
-          code: 'herdr_timeout',
-          message: 'Lost delivery acknowledgement',
-          status: 400,
-        });
-      const a = this.agents.get(params.target);
-      a.agent_status = 'working';
-      a.state_change_seq++;
-      return {};
-    }
-    if (method === 'agent.send_keys') {
-      this.agents.get(params.target).agent_status = 'idle';
-      return {};
-    }
-    if (method === 'pane.read') return { read: { text: 'Protocol fixture; no real agent work.' } };
-    throw new Error('Unexpected protocol method ' + method);
-  }
-}
-async function fixture() {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'marionette-outcomes-'))),
-    store = new Store(join(root, 'state.sqlite'));
-  const agents = new Agents(),
-    service = new Service(store, () => agents),
-    supervisor = new Supervisor(service, 'http://localhost:1', '/test/cli.js', 1);
-  const p: Project = {
-    id: 'project',
-    name: 'Test',
-    root,
-    session: 'test',
-    socketPath: join(root, 'herdr.sock'),
-    workspaceId: 'w1',
-    maxConcurrency: 3,
-    agentArgs: {},
-    createdAt: now(),
-  };
-  store.put('project', p.id, p);
-  const lease = (
-    await service.invoke('lead.acquire', {
-      projectId: p.id,
-      owner: 'lead',
-      expectedEpoch: 0,
-      reason: 'Test outcome orchestration',
-    })
-  ).lease;
-  const invoke = (action: string, raw: any = {}) => service.invoke(action, { ...raw, lease });
-  const outcome = await invoke('outcome.create', {
-    outcome: {
-      projectId: p.id,
-      key: 'outcome',
-      objective: 'Deliver the integrated result',
-      scope: ['.'],
-      criteria: [
-        {
-          id: 'correct',
-          description: 'The result meets the contract',
-          requiredEvidence: 'Independent tests and integrated review',
-        },
-      ],
-    },
-  });
-  const submit = (title: string, extra: any = {}) =>
-    invoke('task.submit', {
-      assignment: {
-        projectId: p.id,
-        key: title,
-        title,
-        kind: 'codex',
-        prompt: title,
-        ownership: [title],
-        checks: [{ type: 'command', command: process.execPath, args: ['-e', 'process.exit(0)'] }],
-        outcomeId: outcome.id,
-        expectedTreeRevision: service.orchestration.outcome(outcome.id).revision,
-        ...extra,
-      },
-    });
-  const run = (t: Task) => store.get<Run>('run', service.task(t.id).runId!)!;
-  const token = (t: Task) => agents.envs.get(run(t).paneId!).MARIONETTE_WORKER_TOKEN;
-  const settle = (t: Task) => {
-    const a = agents.agents.get(run(t).paneId!);
-    a.agent_status = 'idle';
-    a.state_change_seq++;
-    run(t).settledAt = Date.now() - 50;
-  };
-  const tick = async () => {
-    supervisor.tick();
-    await new Promise((resolve) => setTimeout(resolve, 30));
-  };
-  const complete = async (t: Task) => {
-    const current = service.task(t.id);
-    service.report(t.id, token(t), {
-      revision: current.revision,
-      type: 'complete',
-      summary: 'Produced tested result',
-      evidence: ['Independent check pending'],
-    });
-    settle(t);
-    for (let n = 0; n < 80 && !['completed', 'failed'].includes(service.task(t.id).status); n++)
-      await tick();
-    return service.task(t.id);
-  };
-  const done = (t: Task) =>
-    service.updateTask(t, {
-      status: 'completed',
-      verification: [
-        { check: t.checks[0], passed: true, detail: 'Fixture evidence', checkedAt: now() },
-      ],
-    });
-  const leadAgent = () => {
-    const a = {
-      pane_id: 'w1:plead',
-      terminal_id: 'lead-terminal',
-      workspace_id: 'w1',
-      name: 'root-lead',
-      agent: 'claude',
-      agent_status: 'idle',
-      state_change_seq: 0,
-      agent_session: { value: 'lead-native-session' },
-    };
-    agents.agents.set(a.pane_id, a);
-    return {
-      type: 'herdr' as const,
-      paneId: a.pane_id,
-      terminalId: a.terminal_id,
-      name: a.name,
-      kind: 'claude' as const,
-      nativeSession: a.agent_session.value,
-    };
-  };
-  const close = async () => {
-    await supervisor.stop();
-    store.close();
-    rmSync(root, { recursive: true, force: true });
-  };
-  return {
-    root,
-    store,
-    agents,
-    service,
-    supervisor,
-    p,
-    lease,
-    invoke,
-    outcome,
-    submit,
-    run,
-    token,
-    settle,
-    tick,
-    complete,
-    done,
-    leadAgent,
-    close,
-  };
-}
+import { AppError, now } from '../src/types.js';
 
 test('outcome criteria, history and independent assessments survive restart and handover', async () => {
   const f = await fixture();
@@ -539,6 +324,204 @@ test('completed parents require their own integration checks after all children 
     f.done(child);
     await f.tick();
     assert.equal((await f.complete(parent)).status, 'failed');
+  } finally {
+    await f.close();
+  }
+});
+
+test('lead waits accept a missing launch name only with a pinned native session', async () => {
+  const f = await fixture();
+  try {
+    const task = await f.submit('result'),
+      adapter = f.leadAgent();
+    const agent = f.agents.agents.get(adapter.paneId);
+    delete agent.name;
+    const wait = await f.invoke('lead.wait', {
+      key: 'nameless-lead',
+      outcomeId: f.outcome.id,
+      condition: { tasks: [task.id] },
+      adapter,
+    });
+    f.done(task);
+    f.store.put('lead-wait', wait.id, { ...wait, state: 'ready', readyAt: 0 });
+    await f.service.continuation.process(f.store.get<LeadWait>('lead-wait', wait.id)!);
+    assert.equal(f.store.get<LeadWait>('lead-wait', wait.id)!.state, 'delivered');
+    assert.equal(f.agents.calls.filter((c) => c.method === 'agent.prompt').length, 1);
+    for (const invalid of [
+      { ...adapter, nativeSession: undefined },
+      { ...adapter, nativeSession: 'other-session' },
+      { ...adapter, terminalId: 'replacement-terminal' },
+      { ...adapter, kind: 'codex' },
+    ]) {
+      await assert.rejects(
+        f.invoke('lead.wait', {
+          key: JSON.stringify(invalid),
+          outcomeId: f.outcome.id,
+          condition: { tasks: [task.id] },
+          adapter: invalid,
+        }),
+        /exact lead session/,
+      );
+    }
+    assert.equal(f.store.all('lead-wait').length, 1);
+    const { name: _name, ...withoutName } = adapter;
+    const namedBySession = await f.invoke('lead.wait', {
+      key: 'session-only',
+      outcomeId: f.outcome.id,
+      condition: { tasks: [task.id] },
+      adapter: withoutName,
+    });
+    assert.ok(namedBySession.id);
+    agent.agent_session.value = 'replacement';
+    f.store.put('lead-wait', namedBySession.id, { ...namedBySession, state: 'ready', readyAt: 0 });
+    await f.service.continuation.process(f.store.get<LeadWait>('lead-wait', namedBySession.id)!);
+    assert.equal(f.agents.calls.filter((c) => c.method === 'agent.prompt').length, 1);
+    assert.equal(f.store.get<LeadWait>('lead-wait', namedBySession.id)!.state, 'uncertain');
+  } finally {
+    await f.close();
+  }
+});
+
+test('dispatch returns fresh tree revisions, supports readers, and repairs scope without duplicating outcomes', async () => {
+  const f = await fixture();
+  try {
+    const badScope = await f.invoke('outcome.create', {
+      outcome: {
+        projectId: f.p.id,
+        key: 'scope-repair',
+        objective: 'Remove legacy integration',
+        scope: ['A legacy prose scope'],
+        criteria: f.outcome.criteria,
+      },
+    });
+    await assert.rejects(
+      f.submit('source', { outcomeId: badScope.id, expectedTreeRevision: undefined }),
+      /expectedTreeRevision.*current revision is 1/,
+    );
+    await assert.rejects(
+      f.submit('source', { outcomeId: badScope.id, expectedTreeRevision: 1 }),
+      /outcome_revise/,
+    );
+    assert.equal(f.service.tasks(f.p.id).length, 0);
+    const repaired = await f.invoke('outcome.revise', {
+      outcomeId: badScope.id,
+      expectedRevision: 1,
+      scope: ['source'],
+      reason: 'Correct prose to a filesystem boundary',
+    });
+    assert.deepEqual(repaired.criteria, badScope.criteria);
+    const task = await f.submit('source', {
+      outcomeId: repaired.id,
+      expectedTreeRevision: repaired.revision,
+      deferStart: true,
+    });
+    assert.equal(task.treeRevision, repaired.revision + 1);
+    assert.equal(f.service.orchestration.outcome(repaired.id).revision, task.treeRevision);
+    await assert.rejects(f.submit('reader', { ownership: [] }), /read-only reviewer/);
+    const reader = await f.submit('reader', {
+      outcomeId: repaired.id,
+      expectedTreeRevision: task.treeRevision,
+      ownership: [],
+      readOnly: true,
+      canDelegate: false,
+      dependencies: [task.id],
+      deferStart: true,
+    });
+    assert.equal(reader.treeRevision, task.treeRevision + 1);
+    assert.deepEqual(reader.ownership, []);
+    await assert.rejects(
+      f.submit('bad-reader', { readOnly: true, ownership: ['source'] }),
+      /read-only reviewer/,
+    );
+    await assert.rejects(
+      f.submit('delegating-reader', { readOnly: true, ownership: [], canDelegate: true }),
+      /read-only reviewer/,
+    );
+    await assert.rejects(
+      f.invoke('outcome.revise', {
+        outcomeId: repaired.id,
+        expectedRevision: reader.treeRevision,
+        scope: ['elsewhere'],
+        reason: 'Invalid shrink',
+      }),
+      /exclude task/,
+    );
+    assert.equal(f.service.orchestration.outcomes(f.p.id).length, 2);
+    assert.equal(f.service.orchestration.outcome(repaired.id).revision, reader.treeRevision);
+  } finally {
+    await f.close();
+  }
+});
+
+test('simple submissions atomically establish an outcome and worker MCP configuration without widening permissions', async () => {
+  const f = await fixture();
+  try {
+    const task = await f.submit('simple', {
+      outcomeId: undefined,
+      expectedTreeRevision: undefined,
+    });
+    assert.ok(task.outcomeId);
+    assert.equal(task.treeRevision, 1);
+    await f.tick();
+    const run = f.run(task),
+      args = run.resolvedArgs!;
+    assert.ok(args.includes('mcp_servers.marionette_worker.required=true'));
+    assert.ok(args.some((arg) => arg.includes('worker-mcp')));
+    assert.ok(args.some((arg) => arg.includes('MARIONETTE_WORKER_TOKEN')));
+    assert.equal(args.join(' ').includes(f.token(task)), false);
+    assert.equal(args.join(' ').includes('network_access'), false);
+    assert.equal(args.includes('--dangerously-bypass-approvals-and-sandbox'), false);
+    const agent = f.agents.agents.get(run.paneId!);
+    delete agent.name;
+    assert.equal((await f.complete(task)).status, 'completed');
+    const result = await f.service.orchestration.workerAction(task.id, f.token(task), {
+      action: 'inspect',
+    });
+    assert.equal(result.task.status, 'completed');
+    await assert.rejects(
+      f.service.orchestration.workerAction(task.id, 'wrong-token', { action: 'inspect' }),
+      /worker token/,
+    );
+    await assert.rejects(
+      f.service.orchestration.workerAction(task.id, f.token(task), {
+        action: 'finding',
+        revision: task.revision,
+        summary: 'Late mutation',
+        evidence: ['x'],
+      }),
+      /obsolete/,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test('read-only workers can attach their reserved JSON reports but cannot claim source or another task reports', async () => {
+  const f = await fixture();
+  try {
+    const task = await f.submit('reader', { ownership: [], readOnly: true, canDelegate: false });
+    await f.tick();
+    const directory = join(f.root, '.marionette-reports', task.id);
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, 'inspect.json'), '{}');
+    writeFileSync(join(f.root, 'source.json'), '{}');
+    symlinkSync(join(f.root, 'source.json'), join(directory, 'escaped.json'));
+    mkdirSync(join(f.root, '.marionette-reports', 'other'), { recursive: true });
+    writeFileSync(join(f.root, '.marionette-reports', 'other', 'report.json'), '{}');
+    const report = (path: string) =>
+      f.service.report(task.id, f.token(task), {
+        revision: task.revision,
+        type: 'progress',
+        summary: 'Inspection evidence',
+        artifacts: [path],
+      });
+    assert.equal(report(`.marionette-reports/${task.id}/inspect.json`).accepted, true);
+    for (const path of [
+      'source.json',
+      '.marionette-reports/other/report.json',
+      `.marionette-reports/${task.id}/escaped.json`,
+    ])
+      assert.throws(() => report(path), /Reported artifacts/);
   } finally {
     await f.close();
   }

@@ -11,7 +11,11 @@ import { join, resolve } from 'node:path';
 import { test } from 'bun:test';
 import { promisify } from 'node:util';
 import { loadConfig } from '../src/config.js';
+import { hash } from '../src/files.js';
 import { serve } from '../src/server.js';
+
+const cliEntry = resolve(process.env.MARIONETTE_TEST_CLI ?? 'src/cli.ts');
+const mcpEntry = resolve(process.env.MARIONETTE_TEST_MCP ?? 'src/mcp.ts');
 
 test('real HTTP and STDIO MCP enforce instance auth and expose the same durable state', async () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'marionette-http-'))),
@@ -69,13 +73,14 @@ test('real HTTP and STDIO MCP enforce instance auth and expose the same durable 
     await client.connect(
       new StdioClientTransport({
         command: process.execPath,
-        args: [resolve('src/mcp.ts'), '--home', home],
+        args: [mcpEntry, '--home', home],
         stderr: 'pipe',
       }),
     );
     const tools = await client.listTools();
-    assert.equal(tools.tools.length, 47);
+    assert.equal(tools.tools.length, 68);
     for (const name of [
+      'project_configure',
       'outcome_create',
       'outcome_complete',
       'plan_revise',
@@ -89,6 +94,11 @@ test('real HTTP and STDIO MCP enforce instance auth and expose the same durable 
       'cleanup_collect',
       'cleanup_configure',
       'profile_validate',
+      'swarm_intent_amend',
+      'swarm_dispatch',
+      'swarm_experiment_create',
+      'swarm_watch_create',
+      'swarm_trajectory',
     ])
       assert.ok(tools.tools.some((t) => t.name === name));
     const projects = await client.callTool({ name: 'project_list', arguments: {} });
@@ -104,6 +114,10 @@ test('real HTTP and STDIO MCP enforce instance auth and expose the same durable 
       arguments: { projectId: 'missing' },
     });
     assert.equal(missing.isError, true);
+    assert.deepEqual(missing.structuredContent, {
+      ok: false,
+      error: { code: 'not_found', message: 'Project not found' },
+    });
     assert.match(
       Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ text: Schema.String })))(
         missing.content,
@@ -136,6 +150,15 @@ test('real HTTP and STDIO MCP enforce instance auth and expose the same durable 
       owner: 'integration',
       expectedEpoch: 0,
       reason: 'Verify all transports',
+    });
+    const configured = await client.callTool({
+      name: 'project_configure',
+      arguments: { lease, agentAccess: { codex: 'full-access', claude: 'inherit' } },
+    });
+    assert.equal(configured.isError, undefined);
+    assert.deepEqual(runtime.service.project('parity').agentAccess, {
+      codex: 'full-access',
+      claude: 'inherit',
     });
     const created = await client.callTool({
       name: 'outcome_create',
@@ -177,7 +200,7 @@ test('real HTTP and STDIO MCP enforce instance auth and expose the same durable 
       }),
     );
     const cli = await promisify(execFile)(process.execPath, [
-      resolve('src/cli.ts'),
+      cliEntry,
       'call',
       'task.submit',
       '--home',
@@ -212,6 +235,131 @@ test('real HTTP and STDIO MCP enforce instance auth and expose the same durable 
       body: JSON.stringify({ action: 'inspect' }),
     });
     assert.equal(unauthorized.status, 401);
+
+    // This sidecar is launched by the MCP host, not by a network-enabled worker shell.
+    const workerToken = 'fixture-worker-token-not-a-lead-credential';
+    runtime.service.store.put('run', 'worker-run', {
+      id: 'worker-run',
+      taskId: task.id,
+      tokenHash: hash(workerToken),
+      phase: 'running',
+    });
+    runtime.service.updateTask(runtime.service.task(task.id), {
+      runId: 'worker-run',
+      status: 'running',
+    });
+    const worker = new Client({ name: 'scoped-worker', version: '1' });
+    try {
+      await worker.connect(
+        new StdioClientTransport({
+          command: process.execPath,
+          args: [cliEntry, 'worker-mcp'],
+          env: {
+            ...process.env,
+            MARIONETTE_URL: url,
+            MARIONETTE_TASK_ID: task.id,
+            MARIONETTE_WORKER_TOKEN: workerToken,
+          },
+          stderr: 'pipe',
+        }),
+      );
+      const catalog = await worker.listTools();
+      assert.deepEqual(catalog.tools.map((tool) => tool.name).sort(), [
+        'worker_call',
+        'worker_inspect',
+        'worker_report',
+      ]);
+      const inspected = await worker.callTool({ name: 'worker_inspect', arguments: {} });
+      assert.equal(inspected.isError, undefined);
+      assert.equal(
+        Schema.decodeUnknownSync(Schema.Struct({ ok: Schema.Boolean }))(inspected.structuredContent)
+          .ok,
+        true,
+      );
+      assert.equal(JSON.stringify(inspected).includes(workerToken), false);
+      assert.equal(JSON.stringify(inspected).includes(config.token), false);
+      const notification = await client.callTool({
+        name: 'swarm_message_send',
+        arguments: {
+          lease,
+          outcomeId: outcome.id,
+          key: 'transport-steering',
+          taskIds: [task.id],
+          text: 'Preserve the current result contract',
+        },
+      });
+      assert.equal(notification.isError, undefined);
+      const inbox = runtime.service.swarm.messages(task.id);
+      assert.equal(inbox.length, 1);
+      const ack = await worker.callTool({
+        name: 'worker_call',
+        arguments: {
+          request: { action: 'message.ack', revision: task.revision, messageId: inbox[0].id },
+        },
+      });
+      assert.equal(ack.isError, undefined);
+      assert.equal(runtime.service.swarm.unmetTask(runtime.service.task(task.id)).length, 0);
+      const recipe = await client.callTool({
+        name: 'swarm_recipe_get',
+        arguments: { name: 'recover' },
+      });
+      assert.equal(recipe.isError, undefined);
+      assert.match(JSON.stringify(recipe.content), /Version: 1/);
+      const outside = await worker.callTool({
+        name: 'worker_inspect',
+        arguments: { taskId: 'another-task' },
+      });
+      assert.equal(outside.isError, true);
+      assert.equal(
+        Schema.decodeUnknownSync(Schema.Struct({ ok: Schema.Boolean }))(outside.structuredContent)
+          .ok,
+        false,
+      );
+      const denied = await worker.callTool({
+        name: 'worker_call',
+        arguments: {
+          request: { action: 'delegate', revision: task.revision, assignment: {} },
+        },
+      });
+      assert.equal(denied.isError, true);
+      const stale = await worker.callTool({
+        name: 'worker_report',
+        arguments: {
+          revision: task.revision + 1,
+          type: 'progress',
+          summary: 'Wrong revision',
+        },
+      });
+      assert.equal(stale.isError, true);
+      const report = await worker.callTool({
+        name: 'worker_report',
+        arguments: {
+          revision: task.revision,
+          type: 'complete',
+          summary: 'Result is ready for supervisor verification',
+          evidence: ['Scoped MCP delivered'],
+        },
+      });
+      assert.equal(report.isError, undefined);
+      assert.equal(
+        runtime.service.task(task.id).receipt?.summary,
+        'Result is ready for supervisor verification',
+      );
+      runtime.service.updateTask(runtime.service.task(task.id), { status: 'completed' });
+      const settled = await worker.callTool({ name: 'worker_inspect', arguments: {} });
+      assert.equal(settled.isError, undefined);
+      const late = await worker.callTool({
+        name: 'worker_report',
+        arguments: {
+          revision: task.revision,
+          type: 'progress',
+          summary: 'Late mutation',
+        },
+      });
+      assert.equal(late.isError, true);
+    } finally {
+      await worker.close();
+    }
   } finally {
     await client.close();
     await runtime.shutdown();

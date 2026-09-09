@@ -37,6 +37,10 @@ export const waitSchema = Schema.Struct({
         ),
       ),
       strategyId: Schema.mutableKey(Schema.optional(Schema.String)),
+      watchIds: Schema.mutableKey(Schema.optionalKey(Schema.mutable(Schema.Array(Schema.String)))),
+      decisionIds: Schema.mutableKey(
+        Schema.optionalKey(Schema.mutable(Schema.Array(Schema.String))),
+      ),
       questionIds: Schema.mutableKey(
         Schema.mutable(Schema.Array(Schema.String)).pipe(
           Schema.withDecodingDefault(Effect.succeed([])),
@@ -56,7 +60,7 @@ export const waitSchema = Schema.Struct({
         type: Schema.mutableKey(Schema.Literal('herdr')),
         paneId: Schema.mutableKey(Schema.String),
         terminalId: Schema.mutableKey(Schema.String),
-        name: Schema.mutableKey(Schema.String),
+        name: Schema.mutableKey(Schema.optional(Schema.String.check(Schema.isMinLength(1)))),
         kind: Schema.mutableKey(Schema.Literals(['codex', 'claude', 'agy'])),
         nativeSession: Schema.mutableKey(Schema.optional(Schema.String)),
       }).annotate({ parseOptions: { onExcessProperty: 'error' } }),
@@ -238,41 +242,53 @@ export class Continuation {
       );
     const leads = this.reservations(),
       limits = this.s.orchestration.limits(w.projectId);
-    if (tasks.length + leads.length >= limits.global) return 'Global execution capacity reached';
-    if (
-      tasks.filter((t) => t.projectId === w.projectId).length +
-        leads.filter((l) => l.projectId === w.projectId).length >=
-      limits.project
-    )
-      return 'Project execution capacity reached';
-    if (leads.some((l) => l.projectId === w.projectId))
-      return 'Previous coordination turn has not settled';
-    const kind = w.adapter.type === 'herdr' ? w.adapter.kind : undefined;
-    if (
-      kind &&
-      tasks.filter((t) => t.kind === kind).length + leads.filter((l) => l.kind === kind).length >=
-        (limits.providers[kind] ?? limits.global)
-    )
-      return `${kind} provider capacity reached`;
-    if (Object.keys(limits.models).length && !w.model)
-      return 'An exact lead profile is required to enforce configured model capacity';
-    if (
-      w.model &&
-      tasks.filter((t) => t.model === w.model).length +
-        leads.filter((l) => l.model === w.model).length >=
-        (limits.models[w.model] ?? limits.global)
-    )
-      return `${w.model} model capacity reached`;
-    const profile = w.profileId
-      ? this.s.orchestration.profiles(w.projectId).find((p) => p.id === w.profileId)
-      : undefined;
-    if (
-      profile &&
-      tasks.filter((t) => t.projectId === w.projectId && t.profileId === w.profileId).length +
-        leads.filter((l) => l.projectId === w.projectId && l.profileId === w.profileId).length >=
-        profile.maxConcurrency
-    )
-      return 'Profile capacity reached';
+    if (this.s.swarm.runtime.adaptive()) {
+      if (leads.some((l) => l.projectId === w.projectId))
+        return 'Previous coordination turn has not settled';
+      const blocked = this.s.swarm.runtime.capacityBlock(
+        w.projectId,
+        w.adapter.type === 'herdr' ? w.adapter.kind : undefined,
+        w.model,
+        [...tasks, ...leads],
+      );
+      if (blocked) return blocked;
+    } else {
+      if (tasks.length + leads.length >= limits.global) return 'Global execution capacity reached';
+      if (
+        tasks.filter((t) => t.projectId === w.projectId).length +
+          leads.filter((l) => l.projectId === w.projectId).length >=
+        limits.project
+      )
+        return 'Project execution capacity reached';
+      if (leads.some((l) => l.projectId === w.projectId))
+        return 'Previous coordination turn has not settled';
+      const kind = w.adapter.type === 'herdr' ? w.adapter.kind : undefined;
+      if (
+        kind &&
+        tasks.filter((t) => t.kind === kind).length + leads.filter((l) => l.kind === kind).length >=
+          (limits.providers[kind] ?? limits.global)
+      )
+        return `${kind} provider capacity reached`;
+      if (Object.keys(limits.models).length && !w.model)
+        return 'An exact lead profile is required to enforce configured model capacity';
+      if (
+        w.model &&
+        tasks.filter((t) => t.model === w.model).length +
+          leads.filter((l) => l.model === w.model).length >=
+          (limits.models[w.model] ?? limits.global)
+      )
+        return `${w.model} model capacity reached`;
+      const profile = w.profileId
+        ? this.s.orchestration.profiles(w.projectId).find((p) => p.id === w.profileId)
+        : undefined;
+      if (
+        profile &&
+        tasks.filter((t) => t.projectId === w.projectId && t.profileId === w.profileId).length +
+          leads.filter((l) => l.projectId === w.projectId && l.profileId === w.profileId).length >=
+          profile.maxConcurrency
+      )
+        return 'Profile capacity reached';
+    }
     const outcome = this.s.orchestration.outcome(w.outcomeId);
     if (
       outcome.turnsUsed +
@@ -335,14 +351,25 @@ export class Continuation {
       a.pane_id === adapter.paneId &&
       a.terminal_id === adapter.terminalId &&
       a.workspace_id === this.s.project(w.projectId).workspaceId &&
-      a.name === adapter.name &&
+      // Herdr may discard a launch name after startup. A pinned native session
+      // still identifies the occupant; without it, require the exact launch name.
+      (adapter.nativeSession
+        ? !a.name || !adapter.name || a.name === adapter.name
+        : !!adapter.name && a.name === adapter.name) &&
       a.agent === adapter.kind &&
       (!adapter.nativeSession || a.agent_session?.value === adapter.nativeSession)
     );
   }
   events(w: LeadWait) {
     // Query the indexed log directly so a large backlog cannot starve a relevant intervention.
-    return this.s.store.events(w.projectId, w.cursor, -1);
+    return this.s.store
+      .events(w.projectId, w.cursor, -1)
+      .filter((e) =>
+        e.taskId
+          ? this.s.store.get<Task>('task', e.taskId)?.outcomeId === w.outcomeId
+          : !Schema.is(Schema.Struct({ outcomeId: Schema.String }))(e.data) ||
+            e.data.outcomeId === w.outcomeId,
+      );
   }
   triggered(w: LeadWait, events: Event[]) {
     const ids = w.condition.tasks;
@@ -353,6 +380,20 @@ export class Continuation {
         : w.condition.mode === 'any'
           ? 1
           : w.condition.quorum!;
+    const watchReady =
+      !!w.condition.watchIds?.length &&
+      w.condition.watchIds.every((id) =>
+        ['ready', 'failed', 'acknowledged', 'cancelled'].includes(
+          this.s.store.get<import('./swarm-types.js').Watch>('swarm-watch', id)?.state ?? '',
+        ),
+      );
+    const decisionReady =
+      !!w.condition.decisionIds?.length &&
+      w.condition.decisionIds.every(
+        (id) =>
+          !!this.s.store.get<import('./swarm-types.js').SwarmDecision>('swarm-decision', id)
+            ?.resolution,
+      );
     const questionReady =
       w.condition.questionIds.length > 0 &&
       w.condition.questionIds.every((id) => !!this.s.store.get<any>('question', id)?.answeredAt);
@@ -374,12 +415,25 @@ export class Continuation {
             'task.uncertain',
             'plan.revised',
             'worker.finding',
+            'swarm.decision',
+            'swarm.decision-resolved',
+            'swarm.watch-result',
+            'swarm.attention',
+            'swarm.message',
           ].includes(e.type) &&
-          (!e.taskId || this.s.task(e.taskId).outcomeId === w.outcomeId),
+          (e.taskId
+            ? this.s.task(e.taskId).outcomeId === w.outcomeId
+            : !Schema.is(Schema.Struct({ outcomeId: Schema.String }))(e.data) ||
+              e.data.outcomeId === w.outcomeId),
       );
     return {
       ready:
-        (ids.length > 0 && taskReady >= quorum) || questionReady || !!strategyReady || intervention,
+        (ids.length > 0 && taskReady >= quorum) ||
+        watchReady ||
+        decisionReady ||
+        questionReady ||
+        !!strategyReady ||
+        intervention,
       urgent: intervention,
     };
   }
@@ -599,6 +653,8 @@ export class Continuation {
             status: 400,
           });
         if (
+          !i.condition.watchIds?.length &&
+          !i.condition.decisionIds?.length &&
           !i.condition.tasks.length &&
           !i.condition.questionIds.length &&
           !i.condition.strategyId &&
@@ -609,6 +665,20 @@ export class Continuation {
             message: 'Provide an observable wait condition',
             status: 400,
           });
+        for (const [kind, ids] of [
+          ['swarm-watch', i.condition.watchIds ?? []],
+          ['swarm-decision', i.condition.decisionIds ?? []],
+        ] as const) {
+          for (const id of ids) {
+            const record = this.s.store.get<{ outcomeId: string }>(kind, id);
+            if (record?.outcomeId !== outcome.id)
+              return yield* new AppError({
+                code: 'wait_scope',
+                message: 'External waits and decisions must belong to this outcome',
+                status: 400,
+              });
+          }
+        }
         for (const id of i.condition.tasks)
           if (this.s.task(id).outcomeId !== outcome.id)
             return yield* new AppError({
@@ -702,7 +772,10 @@ export class Continuation {
           if (!this.identity(candidate, a))
             return yield* new AppError({
               code: 'lead_identity',
-              message: 'Could not establish the exact lead session',
+              message:
+                'Could not establish the exact lead session. Refresh project_inspect and use its paneId, ' +
+                'terminalId, kind and nativeSession; name is optional when nativeSession matches. ' +
+                'No wait was registered. Check isError and verify the returned wait id/state before ending the turn.',
               status: 400,
             });
           candidate.adapter = {

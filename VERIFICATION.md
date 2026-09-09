@@ -1,5 +1,39 @@
 # Verification record
 
+## Release 0.5.0 preparation (9 September 2026)
+
+The final `bun pm pack` gate passed all **225 tests across 24 files**, TypeScript checks, lint, the supervisor lifecycle check, and the production build. Formatting, release metadata validation, and the isolated tarball installation smoke check passed; the installed CLI reports `0.5.0`, and the standalone Herdr SDK and declarations work without development dependencies.
+
+Release validation exposed an intermittent concurrent Git worktree creation failure involving a sibling's incomplete `commondir` metadata. Creation, validation, and cleanup removal now share a per-repository Effect semaphore without retrying mutations. Cleanup rechecks authority, consumers, repository identity, branch, HEAD, and dirtiness after waiting; it writes the durable removal phase immediately before the attempt. The strengthened three-worktree regression passed six consecutive runs, core tests passed 38/38, targeted cleanup tests passed 4/4, and independent review found no remaining blocker in the final fix.
+
+## User-configured harness access — local implementation (9 September 2026)
+
+The full suite passed **225 tests across 24 files**. TypeScript checks, lint, formatting, production build, and the standalone supervisor lifecycle check passed. Both HTTP/STDIO integration tests also passed against the production CLI and MCP bundles, including the 68-tool catalog and persistence through `project_configure`.
+
+New coverage verifies inherited defaults, the native full-access argument mappings for Codex/Claude Code/AGY, setup preference round-tripping, per-harness patches, rejected conflicting arguments without a state write, and worker launches retaining scoped MCP configuration. Policy changes preserve existing run IDs. A production CLI setup dry-run selected full access for all three harnesses without changing project state.
+
+Native flags were checked against installed CLI help; Claude Code's separate sandbox setting was checked against its official sandboxing documentation. No live unrestricted model session was launched, and no existing host, global CLI configuration, or running agent policy was changed. Host-enforced restrictions and Codex desktop permissions remain outside this launcher configuration.
+
+## General swarm coordination — local implementation (9 September 2026)
+
+The full suite passed **220 tests across 23 files** after the runtime changes. The evaluator comparison test was then added; all **8 evaluator tests** passed, giving 221 distinct passing tests across the final source set. TypeScript checks, lint, formatting and the production build passed. Effect diagnostics reported zero errors and zero warnings (six existing informational suggestions). The quality-tooling sentinel passed, and regenerating the Herdr SDK produced no protocol diff.
+
+Coverage includes atomic batch rollback and idempotency, scoped amendments and acknowledgements across reopened state, durable explicit decisions, partial parent/child execution, adaptive host/provider admission, late watch and decision registration, cross-outcome continuation isolation, command timeout/cancellation, bounded notification turns, pinned common-base experiment worktrees, current selection evidence, credential-free trajectories, and retained context evidence after worktree collection. The original request and source remain distinct from the lead objective, and outcome turn allowances can be revised without replacing an objective.
+
+The standalone supervisor lifecycle check passed. The full suite required local socket/process-group permissions; sandboxed listener failures were environmental and were rerun successfully. The actual packed CLI and MCP passed both HTTP/STDIO integration tests, including the 67-tool catalog, scoped instruction acknowledgement, and embedded recipe loading. The packed evaluator listed all six scenarios and completed a fixture trial plus comparison from an isolated extraction with no development dependencies.
+
+The evaluator checks all six initial fixtures fail and reference solutions pass, injects steering after a progress marker, and preserves unavailable cost/intervention measurements as null. These are runtime and evaluation-harness results, **not real-model performance measurements**. No paid model trials, live user Herdr sessions, dashboard changes, commit, push or publication were performed. Research quality, recovery-procedure fidelity and strategy/model comparisons require independently reviewed adapter trials under comparable resource allowances.
+
+## Dispatch and reporting recovery — local 0.4.0 patch (9 September 2026)
+
+The full suite passed 198 tests across 21 files. An additional focused transport-recovery regression subsequently passed, bringing the tested set to 199 tests. TypeScript and lint checks, formatting, runtime lifecycle checks, and the production build passed. The HTTP/STDIO integration tests also passed against the production CLI and MCP bundles.
+
+New coverage verifies task-scoped worker MCP startup and authorization, report receipts after completion, no automatic mutation replay on transport failure, actionable schema/revision errors, read-only assignments, contained JSON report artifacts, in-place outcome scope repair, and continuation identity when Herdr omits a launch name. Missing names still require the pinned native session plus matching pane, terminal, workspace and agent kind. The installed Codex CLI accepted the generated per-session MCP configuration without changing sandbox permissions or putting worker credentials in arguments.
+
+The Menderly incident's localhost failure was reproduced inside the command sandbox while an approved request reached the healthy supervisor. The local patched runtime replaced its 0.3.0 supervisor through the normal runtime updater. Before/after comparison confirmed identical project and lead records, task IDs/statuses/revisions/run IDs, outcome revisions/statuses, and waits. Both existing native agent sessions and terminal IDs survived. A recovery checkpoint, pinned-session lead wait, and same-session worker reply were then recorded through Marionette. The continuation was delivered to the original lead, and the worker resumed at revision 3 with its original run ID. Existing workers require the normal exact-command CLI approval fallback; the scoped MCP configuration applies to newly launched Codex workers.
+
+The existing worker then executed the updated `worker-call` inspection through its normal approval path with exit code 0, confirmed revision 3, and continued inspecting its assigned source. This verifies recovery of the incident's actual worker transport as well as the lead continuation. It does not claim that Menderly's iii removal or publication completed, or that these changes have been published as a package release.
+
 ## Project lifecycle and prompt templates — 0.4.0 local acceptance
 
 Verified locally on macOS arm64 with Bun 1.3.14. The complete suite passed **189 tests across 20 files**. New coverage includes instance-wide runtime and MCP migration, rollback after failed startup, project removal and shared-resource preservation, native workspace trust restoration, missing-workspace recovery, terminal-lead reuse, and literal Mustache rendering for lead and worker instructions.

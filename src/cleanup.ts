@@ -27,7 +27,7 @@ import {
   type Run,
   type Task,
 } from './types.js';
-import { gitEffect, validateWorktreeEffect } from './worktrees.js';
+import { gitEffect, validateWorktreeEffect, withWorktreeLock } from './worktrees.js';
 export const cleanupPolicySchema = Schema.Struct({
   autoRelease: Schema.mutableKey(
     Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
@@ -230,6 +230,7 @@ export class Cleanup {
       if (o.status === 'completed') continue;
       for (const ref of [
         ...o.assessments.flatMap((a) => a.references),
+        ...this.s.swarm.references(o.id),
         ...(o.integrated?.evidence ?? []),
       ]) {
         if (tasks.some((t) => ref.path.startsWith(`task:${t.id}:`)))
@@ -727,6 +728,7 @@ export class Cleanup {
       for (const o of this.s.store.all<Outcome>('outcome')) {
         for (const ref of [
           ...o.assessments.flatMap((a) => a.references),
+          ...this.s.swarm.references(o.id),
           ...(o.integrated?.evidence ?? []),
         ]) {
           const match = yield* sync('Cleanup.createArchive', () =>
@@ -882,7 +884,8 @@ export class Cleanup {
         );
         if (common !== w.commonDir)
           return yield* sync('Cleanup.collect', () => refuse('Source repository identity changed'));
-        if (existsSync(w.path)) {
+        const removeExisting = existsSync(w.path);
+        if (removeExisting) {
           yield* this.checkDeliveryEffect(w, a.delivery);
           for (const f of a.files)
             if (digest(f.source) !== f.digest)
@@ -894,19 +897,59 @@ export class Cleanup {
             return yield* sync('Cleanup.collect', () =>
               refuse('Checkout consumers changed before collection'),
             );
-          yield* sync(
-            'Cleanup.collect',
-            () => (a = this.saveArchive(a, { phase: 'removing', error: undefined })),
-          );
-          // Git itself refuses dirty/locked/changed worktrees; never force or recursively delete.
-          yield* gitEffect(w.repositoryRoot, ['worktree', 'remove', '--', w.path]);
         }
-        const listing = yield* gitEffect(w.repositoryRoot, [
-          'worktree',
-          'list',
-          '--porcelain',
-          '-z',
-        ]);
+        const listing = yield* withWorktreeLock(
+          w.commonDir,
+          Effect.gen({ self: this }, function* () {
+            yield* sync('Cleanup.collect', () => guard());
+            const currentTask = yield* sync('Cleanup.collect', () => this.s.task(a.taskId));
+            if (this.groupReasons(currentTask).length)
+              return yield* sync('Cleanup.collect', () =>
+                refuse('Checkout consumers changed before collection'),
+              );
+            const lockedCommon = realpathSync(
+              yield* gitEffect(w.repositoryRoot, [
+                'rev-parse',
+                '--path-format=absolute',
+                '--git-common-dir',
+              ]),
+            );
+            if (lockedCommon !== w.commonDir)
+              return yield* sync('Cleanup.collect', () =>
+                refuse('Source repository identity changed'),
+              );
+            if (!removeExisting && existsSync(w.path))
+              return yield* sync('Cleanup.collect', () =>
+                refuse('Worktree appeared during collection; preserving it'),
+              );
+            if (removeExisting && existsSync(w.path)) {
+              const branch = yield* gitEffect(w.path, ['symbolic-ref', 'HEAD']);
+              const head = yield* gitEffect(w.path, ['rev-parse', 'HEAD']);
+              const status = yield* gitEffect(w.path, [
+                'status',
+                '--porcelain',
+                '--untracked-files=all',
+                '--ignored',
+              ]);
+              if (branch !== `refs/heads/${w.branch}` || head !== a.delivery.head || status)
+                return yield* sync('Cleanup.collect', () =>
+                  refuse('Worktree changed while waiting for collection; preserving it'),
+                );
+              yield* sync('Cleanup.collect', () => guard());
+              if (this.groupReasons(this.s.task(a.taskId)).length)
+                return yield* sync('Cleanup.collect', () =>
+                  refuse('Checkout consumers changed before collection'),
+                );
+              yield* sync(
+                'Cleanup.collect',
+                () => (a = this.saveArchive(a, { phase: 'removing', error: undefined })),
+              );
+              // Git itself refuses dirty/locked/changed worktrees; never force or recursively delete.
+              yield* gitEffect(w.repositoryRoot, ['worktree', 'remove', '--', w.path]);
+            }
+            return yield* gitEffect(w.repositoryRoot, ['worktree', 'list', '--porcelain', '-z']);
+          }),
+        );
         if (
           common !== w.commonDir ||
           listing.split('\0').includes(`worktree ${w.path}`) ||

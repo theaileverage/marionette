@@ -1,7 +1,8 @@
+import { agentAccessSchema, agentAccessArgs } from './agent-access.js';
 import { Effect, Schema } from 'effect';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { realpathSync, statSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import { Cleanup } from './cleanup.js';
 import { Continuation } from './continuation.js';
 import { BoundaryError, herdrCall, sync } from './effect-runtime.js';
@@ -9,6 +10,7 @@ import { hash, inside, safePath } from './files.js';
 import { Herdr } from './herdr.js';
 import { Orchestration } from './orchestration.js';
 import { Store } from './store.js';
+import { Swarm } from './swarm.js';
 import {
   AppError,
   assignmentSchema,
@@ -50,6 +52,7 @@ export class Service {
   orchestration = new Orchestration(this);
   continuation = new Continuation(this);
   cleanup = new Cleanup(this);
+  swarm = new Swarm(this);
   constructor(
     public store: Store,
     public port: (project: Project) => HerdrPort = (p) => new Herdr(p.socketPath),
@@ -109,6 +112,16 @@ export class Service {
     return {
       project,
       cleanupPolicy: this.cleanup.policy(projectId),
+      swarm: {
+        intents: this.orchestration.outcomes(projectId).map((o) => this.swarm.intent(o.id)),
+        openDecisions: this.orchestration
+          .outcomes(projectId)
+          .flatMap((o) => this.swarm.decisions(o.id).filter((d) => !d.resolution)),
+        pendingInstructions: this.tasks(projectId).flatMap((t) =>
+          this.swarm.messages(t.id).filter((m) => !m.acknowledgedAt),
+        ),
+        supervision: this.swarm.runtime.health(projectId),
+      },
       lead: this.publicLead(projectId),
       ...this.orchestration.board(projectId),
       tasks,
@@ -182,6 +195,7 @@ export class Service {
     Effect.fn('Service.invoke')(
       { self: this },
       function* (this: Service, action: string, raw: any = {}) {
+        if (action.startsWith('swarm.')) return yield* this.swarm.invokeEffect(action, raw);
         if (action.startsWith('cleanup.')) return yield* this.cleanup.invokeEffect(action, raw);
         if (/^(lead\.wait|checkpoint\.|usage\.|adapter\.)/.test(action))
           return yield* this.continuation.invokeEffect(action, raw);
@@ -215,6 +229,7 @@ export class Service {
                       ),
                     ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
                   ),
+                  agentAccess: Schema.optionalKey(agentAccessSchema),
                   trustWorkspaces: Schema.mutableKey(Schema.optional(Schema.Boolean)),
                   trustAgyWorkspaces: Schema.mutableKey(
                     Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
@@ -256,6 +271,8 @@ export class Service {
               id: randomUUID(),
               createdAt: now(),
             }));
+            for (const kind of ['codex', 'claude', 'agy'] as const)
+              agentAccessArgs(kind, p.agentAccess, p.agentArgs[kind]);
             const h = yield* sync('Service.invoke', () => this.port(p));
             yield* herdrCall(h, 'ping');
             yield* herdrCall(h, 'workspace.get', { workspace_id: p.workspaceId });
@@ -373,6 +390,7 @@ export class Service {
               Schema.decodeUnknownSync(
                 Schema.Struct({
                   lease: Schema.mutableKey(credentialsSchema),
+                  agentAccess: Schema.optionalKey(agentAccessSchema),
                   trustWorkspaces: Schema.mutableKey(Schema.optional(Schema.Boolean)),
                   trustAgyWorkspaces: Schema.mutableKey(Schema.optional(Schema.Boolean)),
                   agentArgs: Schema.mutableKey(
@@ -395,6 +413,9 @@ export class Service {
             if (i.trustAgyWorkspaces !== undefined)
               updated.trustAgyWorkspaces = i.trustAgyWorkspaces;
             if (i.agentArgs) updated.agentArgs = i.agentArgs;
+            if (i.agentAccess) updated.agentAccess = { ...p.agentAccess, ...i.agentAccess };
+            for (const kind of ['codex', 'claude', 'agy'] as const)
+              agentAccessArgs(kind, updated.agentAccess, updated.agentArgs[kind]);
             yield* sync('Service.invoke', () => this.store.put('project', p.id, updated));
             yield* sync('Service.invoke', () =>
               this.store.event(p.id, 'project.configured', 'Project runtime preferences updated'),
@@ -1052,6 +1073,13 @@ export class Service {
   }
   submitAssignment(rawAssignment: Schema.Codec.Encoded<typeof assignmentSchema>, c: Credentials) {
     const a = Schema.decodeSync(assignmentSchema)(rawAssignment);
+    if (a.readOnly ? a.ownership.length > 0 || a.canDelegate : a.ownership.length === 0)
+      throw new AppError({
+        code: 'ownership_required',
+        message:
+          'Writers must supply at least one ownership path. For a read-only reviewer, set readOnly: true, ownership: [], and canDelegate: false.',
+        status: 400,
+      });
     if (c.projectId !== a.projectId)
       throw new AppError({
         code: 'project_mismatch',
@@ -1083,7 +1111,7 @@ export class Service {
       if (/[?*[\]]/.test(path))
         throw new AppError({
           code: 'ownership_path',
-          message: 'Ownership must name files or directory prefixes, not globs',
+          message: `assignment.ownership contains ${JSON.stringify(path)}. Use files or directory prefixes, not globs (for example "src", not "src/**").`,
           status: 400,
         });
       safePath(cwd, path);
@@ -1113,7 +1141,7 @@ export class Service {
           status: 400,
         });
     }
-    return this.store.transaction(() =>
+    const submitted = this.store.transaction(() =>
       this.idempotent(a.projectId, 'submit:' + a.key, a, () => {
         const { key: _key, ...fields } = a;
         const task: Task = {
@@ -1134,6 +1162,12 @@ export class Service {
         return task;
       }),
     );
+    return {
+      ...submitted,
+      treeRevision: submitted.outcomeId
+        ? this.orchestration.outcome(submitted.outcomeId).revision
+        : undefined,
+    };
   }
   closeQuestions(taskId: string, answer: string) {
     for (const q of this.store
@@ -1141,7 +1175,7 @@ export class Service {
       .filter((q) => q.taskId === taskId && !q.answeredAt))
       this.store.put('question', q.id, { ...q, answer, answeredAt: now() });
   }
-  workerGuard(taskId: string, token: string, revision: number) {
+  workerGuard(taskId: string, token: string, revision: number, inspect = false) {
     const t = this.task(taskId),
       r = t.runId ? this.store.get<Run>('run', t.runId) : undefined;
     this.cleanup.assertMutable(t);
@@ -1151,7 +1185,10 @@ export class Service {
         message: 'Invalid or obsolete worker token',
         status: 401,
       });
-    if (terminalStates.has(t.status) || revision !== t.revision || r.phase === 'stopped')
+    if (
+      !inspect &&
+      (terminalStates.has(t.status) || revision !== t.revision || r.phase === 'stopped')
+    )
       throw new AppError({
         code: 'stale_report',
         message: 'Report belongs to an obsolete assignment revision',
@@ -1179,10 +1216,20 @@ export class Service {
         });
       for (const path of i.artifacts) {
         const resolved = safePath(t.cwd, path, true);
-        if (!t.ownership.some((owned) => inside(safePath(t.cwd, owned), resolved)))
+        const reportArtifact =
+          resolved.endsWith('.json') &&
+          inside(resolve(t.cwd, '.marionette-reports', t.id), resolved) &&
+          statSync(resolved).isFile();
+        if (
+          !reportArtifact &&
+          !(t.retainedOwnership ?? t.ownership).some((owned) =>
+            inside(safePath(t.cwd, owned), resolved),
+          )
+        )
           throw new AppError({
             code: 'artifact_ownership',
-            message: 'Reported artifacts must belong to this assignment',
+            message:
+              'Reported artifacts must belong to this assignment or be JSON files in its reserved .marionette-reports/<taskId>/ directory',
             status: 400,
           });
       }
@@ -1215,6 +1262,13 @@ export class Service {
           'Coordinator yielding ownership to children',
         );
       } else if (i.type === 'complete') {
+        const pending = this.swarm.unmetTask(t);
+        if (pending.length)
+          throw new AppError({
+            code: 'instructions_pending',
+            message: pending.join('; '),
+            status: 409,
+          });
         if (!i.artifacts.length && !i.evidence.length)
           throw new AppError({
             code: 'evidence_required',

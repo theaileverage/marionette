@@ -1,4 +1,8 @@
 Task {{{taskId}}}, current revision {{revision}}.
+Use marionette_worker MCP inspection/reporting when available. For a CLI
+transport failure, request normal permission for the exact command rather
+than retrying inside the same sandbox. In Codex use
+sandbox_permissions="require_escalated". Do not change sandbox settings.
 {{#children}}
 
 CHILD RESULTS

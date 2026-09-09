@@ -395,15 +395,17 @@ test('worktree requests still respect dependencies and the project concurrency l
     await f.close();
   }
 });
-test('whole-directory ownership schedules separate worktrees before their directories exist', async () => {
+test('concurrent whole-directory worktrees serialize Git metadata creation', async () => {
   const f = await fixture();
   try {
     initRepo(f.root);
     const a = await f.submit('root-a', { ...isolated, ownership: ['.'] });
     const b = await f.submit('root-b', { ...isolated, ownership: ['.'] });
-    await prepared(f, a.id, b.id);
+    const c = await f.submit('root-c', { ...isolated, ownership: ['.'] });
+    await prepared(f, a.id, b.id, c.id);
     assert.equal(f.service.task(a.id).status, 'running', f.service.task(a.id).error);
     assert.equal(f.service.task(b.id).status, 'running', f.service.task(b.id).error);
+    assert.equal(f.service.task(c.id).status, 'running', f.service.task(c.id).error);
     assert.throws(() => safePath(join(f.root, 'missing-root'), '.'), /ENOENT/);
   } finally {
     await f.close();
