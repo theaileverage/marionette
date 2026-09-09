@@ -505,3 +505,72 @@ test('changing a lead name replaces only that project MCP name and a failed runt
   assert.match(failed.error, /Previous runtime and configuration restored/);
   assert.equal(readFileSync(path, 'utf8'), before);
 });
+
+test('force removal discards unfinished coordination and closes only verified agents', () => {
+  const f = fixture();
+  const db = new Store(resolve(f.home, 'state.sqlite'));
+  db.put('task', 'active', { projectId: 'one', status: 'queued' });
+  db.put('lead-wait', 'waiting', { projectId: 'one', state: 'waiting' });
+  db.close();
+  const binding = resolve(f.projects[0].root, '.marionette/project.json');
+  privateJson(binding, { ...JSON.parse(readFileSync(binding, 'utf8')), ownsWorkspace: true });
+  privateJson(resolve(f.home, 'leads/one.terminal.json'), {
+    pane_id: 'w1:p2',
+    terminal_id: 'known',
+    name: 'lead-one',
+    agent: 'codex',
+  });
+  const result = f.run(`
+    const calls = [];
+    const panes = [
+      { pane_id: 'w1:p1', terminal_id: 'unknown', agent: 'codex' },
+      { pane_id: 'w1:p2', terminal_id: 'known', agent: 'codex' },
+    ];
+    const h = { async call(method, params) {
+      calls.push({ method, params });
+      if (method === 'pane.list') return { panes };
+      if (method === 'pane.get') return { pane: panes.find(p => p.pane_id === params.pane_id) };
+      if (method === 'agent.get') return { agent: {
+        name: params.target === 'w1:p2' ? 'lead-one' : 'someone-else', agent: 'codex',
+        terminal_id: params.target === 'w1:p2' ? 'known' : 'unknown',
+      } };
+      if (method === 'pane.close') return {};
+      throw new Error('Unexpected destructive call ' + method);
+    } };
+    const options = { all: false, stopAgents: false, keepHerdr: false, force: true };
+    const preview = await Effect.runPromise(inspectRemovalEffect(readInstanceState(home), ['one'], options, () => h));
+    const result = await Effect.runPromise(removeProjectsEffect(home, ['one'], options, () => h));
+    console.log(JSON.stringify({ result, preview, calls }));
+  `);
+  assert.deepEqual(result.preview.blockers, []);
+  assert.match(result.result.preserved.join('\n'), /Unverified agent/);
+  assert.deepEqual(
+    result.calls.filter((c: any) => c.method === 'pane.close'),
+    [{ method: 'pane.close', params: { pane_id: 'w1:p2' } }],
+  );
+  assert.equal(existsSync(binding), false);
+  assert.equal(existsSync(resolve(f.projects[0].root, 'source.txt')), true);
+  assert.equal(existsSync(resolve(f.projects[1].root, '.marionette/project.json')), true);
+  assert.equal(
+    readInstanceState(f.home).rows.some((r) => r.id === 'active' || r.id === 'waiting'),
+    false,
+  );
+});
+
+test('force retains operation and worktree blockers', () => {
+  const f = fixture();
+  const db = new Store(resolve(f.home, 'state.sqlite'));
+  db.put('task', 'active', {
+    projectId: 'one',
+    status: 'running',
+    worktree: { path: f.projects[0].root },
+  });
+  db.put('operation', 'uncertain', { projectId: 'one', phase: 'started' });
+  db.close();
+  const plan = f.run(
+    `console.log(JSON.stringify(await Effect.runPromise(inspectRemovalEffect(readInstanceState(home), ['one'], { all: false, stopAgents: false, keepHerdr: true, force: true }))));`,
+  );
+  assert.ok(plan.blockers.some((r: string) => r.includes('worktree')));
+  assert.ok(plan.blockers.some((r: string) => r.includes('Operation')));
+  assert.ok(!plan.blockers.some((r: string) => r.includes('finish or cancel')));
+});

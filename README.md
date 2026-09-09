@@ -51,6 +51,28 @@ bunx --bun @theaileverage/marionette doctor     # Diagnose connections
 
 For scripted setup, use `setup --yes --json`. Add `--install-tools` to explicitly allow installation of missing required tools; `--yes` alone only accepts configuration defaults. `--dry-run` prints the plan without installations or writes; `setup --help` and `setup --schema` describe the available options. Install globally with `bun add --global @theaileverage/marionette` for the shorter `marionette` command.
 
+If `lead` says the saved lead no longer controls the project, or setup says a lead already controls it, run this from the project directory:
+
+```sh
+marionette setup --takeover
+marionette lead
+```
+
+`marionette init --takeover` is equivalent. Setup retains saved lead preferences; pass `--lead codex --lead-name Mendy` to explicitly select them. Takeover invalidates the previous lead's credentials and saves a fresh lease. Interactive setup also offers takeover when the selected lead cannot reuse the saved lease. `--yes` alone never authorizes takeover.
+
+For a cooperative handover, the current lead must supply its valid lease. Replace the paths and chosen lead in this example:
+
+```sh
+marionette call lead.handover --home /path/to/state \
+  --lease /path/to/current-valid-lease.json \
+  --json '{"toOwner":"Mendy","agent":"codex","reason":"User requested handover"}' \
+  --save-lease /path/to/state/leads/PROJECT_ID.json
+marionette setup --lead codex --lead-name Mendy
+marionette lead
+```
+
+The saved lease destination must match the project's `leasePath` in `.marionette/project.json`. Run setup and lead from that project directory (or pass `--project DIR`). The current lead can also use the MCP `lead_handover` tool and save its returned lease there. If the current valid lease is unavailable, use takeover.
+
 If an older cached package fails on `node:sqlite`, run `bunx --bun @theaileverage/marionette@latest setup`. Marionette 0.3.0 and later use Bun’s SQLite runtime.
 
 Setup's `trustWorkspaces` option registers native workspace trust for Codex, Claude Code, and AGY as each lead or worker starts, including managed worktrees. Use `--no-trust-workspaces` to keep native trust prompts, or `--trust-workspaces` to enable it explicitly. Workspace trust is separate from the launch access setting below. Legacy AGY-only settings remain compatible and do not silently authorize trust for other agents.
@@ -100,6 +122,8 @@ Setup detects a different saved or running runtime and offers the same migration
 marionette remove --dry-run         # Preview removal of the current project
 marionette remove                   # Confirm removal interactively
 marionette remove --project /path/to/project --yes
+marionette remove --force --dry-run  # Preview discarding unfinished tasks/waits
+marionette remove --force           # Close verified agents; retain unverified panes
 marionette uninstall --dry-run --global
 marionette uninstall --global       # Remove this instance and detected Bun/npm global CLI installs
 ```
@@ -107,6 +131,8 @@ marionette uninstall --global       # Remove this instance and detected Bun/npm 
 Project removal deletes its binding, leases, stored project history, and archives, and restores workspace trust settings that Marionette added. Its MCP registrations are removed while other projects’ entries remain. Legacy shared MCP registrations remain until the final project is removed or all dependent projects have their own entries. Uninstallation deletes the selected instance's state, logs, runtimes, and recovery files. Project source files and Git branches are preserved; collect or relocate managed worktrees before removal. Shared instance logs and any failed-upgrade recovery files remain after individual project removal.
 
 Removal previews active tasks, pending operations, and terminal ownership before making changes. Exit lead/worker agents first, or explicitly use `--stop-agents` to close verified project agents. Use `--keep-herdr` to retain terminal resources, including offline sessions. Herdr itself and the coding-agent applications remain installed. Noninteractive removal requires `--yes`; `--json` provides structured output. `--project-id ID` can remove an orphaned project whose source directory no longer exists.
+
+`remove --force` (also supported by `uninstall`) discards unfinished task and lead-wait records and permits closing verified agents. It retains unverified agents, busy panes, shared workspaces, and offline sessions, and reports retained resources. Add `--keep-herdr` to retain all terminals. Force still requires confirmation or `--yes`; unresolved operations, managed worktrees, and changed MCP registrations remain blockers.
 
 ## How it runs
 

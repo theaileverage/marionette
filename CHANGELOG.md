@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1 — 2026-09-09
+
+- Launch terminal leads with a short prompt-file reference to avoid truncating long bootstrap commands in Herdr. Preserve configured harness access settings.
+- Show explicit takeover recovery commands, offer takeover during interactive setup, and reject unsupported lead flags with actionable guidance.
+- Add force removal for unfinished tasks and lead waits; close verified agents while retaining unverified panes, busy terminals, shared workspaces, and offline sessions. Keep unresolved-operation and managed-worktree safeguards.
+
 ## 0.5.0 — 2026-09-09
 
 - Add per-harness `agentAccess` configuration for Codex, Claude Code, and AGY. Setup and leased project configuration support native `inherit` or explicit `full-access` for new terminal leads and workers, with conflicting launch-argument validation.

@@ -1,5 +1,11 @@
 # Verification record
 
+## Lead recovery and force removal — 0.5.1
+
+Verified on macOS arm64 with Bun 1.3.14 against the 0.5.0 release baseline. All 231 tests across 24 files passed, along with type checking, lint, formatting, release metadata, quality-tooling probes, and runtime lifecycle checks.
+
+New regressions cover force removal with unfinished coordination and mixed verified/unverified agents, retention of operation and worktree blockers, takeover flags on both setup aliases, actionable stale-lease errors without acquiring control, unsupported lead flags, and short prompt-file launch arguments for Codex, Claude Code, and AGY. The launch keeps 0.5.0 harness-access settings. A local macOS PTY probe accepted a 200-byte command with its newline but did not deliver a complete 8,614-byte line. Live user panes were not controlled during this verification.
+
 ## Release 0.5.0 preparation (9 September 2026)
 
 The final `bun pm pack` gate passed all **225 tests across 24 files**, TypeScript checks, lint, the supervisor lifecycle check, and the production build. Formatting, release metadata validation, and the isolated tarball installation smoke check passed; the installed CLI reports `0.5.0`, and the standalone Herdr SDK and declarations work without development dependencies.

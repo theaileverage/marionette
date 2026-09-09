@@ -94,6 +94,14 @@ export const setupSchema = Schema.Struct({
 }).annotate({ parseOptions: { onExcessProperty: 'error' } });
 export type SetupOptions = Schema.Schema.Type<typeof setupSchema>;
 const quote = (s: string) => "'" + s.replace(/'/g, "'\\''") + "'";
+export function leadRecoveryInstructions(
+  root: string,
+  home: string,
+  lead: string,
+  leadName: string,
+) {
+  return `To take control, run:\nmarionette setup --project ${quote(root)} --home ${quote(home)} --lead ${quote(lead)} --lead-name ${quote(leadName)} --takeover\nThen run marionette lead --project ${quote(root)}. The takeover invalidates the previous lead's credentials.\nFor a cooperative handover, ask the current lead to call lead_handover with toOwner and agent, save the returned lease to this project's lease file, then rerun setup with the matching --lead and --lead-name. init accepts the same options as setup.`;
+}
 export function setupPlan<Input extends object>(input: Input) {
   const supplied = Schema.decodeUnknownSync(
     setupSchema
@@ -510,6 +518,7 @@ export const runSetupEffect = Effect.fn('runSetup')(function* (
     yield* callEffect(p.home, 'project.briefing', { projectId: project.id }),
   ).pipe(Effect.mapError(boundaryError('setup.decode')));
   const same = briefing.lead?.owner === p.leadName && briefing.lead?.agent === p.lead;
+  let takeover = p.takeover;
   if (
     briefing.lead &&
     !(
@@ -518,21 +527,36 @@ export const runSetupEffect = Effect.fn('runSetup')(function* (
       lease.epoch === briefing.lead.epoch &&
       lease.owner === briefing.lead.owner
     ) &&
-    !p.takeover
-  )
-    return yield* boundaryError('runSetup.runSetup')(
-      new Error(
-        `${briefing.lead.owner} already controls this project. Request handover, or explicitly pass --takeover to select a new lead.`,
-      ),
-    );
-  if (!briefing.lead || p.takeover) {
+    !takeover
+  ) {
+    if (interactive) {
+      progress?.stop('Existing lead requires a decision');
+      const currentOwner = briefing.lead.owner;
+      takeover = yield* promptEffect((signal) =>
+        prompts.confirm({
+          message: `${currentOwner} currently controls this project. Take over as ${p.leadName} (${p.lead}) and invalidate the previous lead's credentials?`,
+          initialValue: false,
+          signal,
+          output: process.stderr,
+        }),
+      );
+      progress?.start('Configuring the project lead');
+    }
+    if (!takeover)
+      return yield* boundaryError('runSetup.runSetup')(
+        new Error(
+          `${briefing.lead.owner} already controls this project.\n${leadRecoveryInstructions(p.root, p.home, p.lead, p.leadName)}`,
+        ),
+      );
+  }
+  if (!briefing.lead || takeover) {
     lease = (yield* Schema.decodeUnknownEffect(leaseResponseSchema)(
       yield* callEffect(p.home, 'lead.acquire', {
         projectId: project.id,
         owner: p.leadName,
         agent: p.lead,
         expectedEpoch: briefing.lead?.epoch ?? 0,
-        takeover: p.takeover,
+        takeover,
         reason: 'Selected during Marionette setup',
       }),
     ).pipe(Effect.mapError(boundaryError('setup.decode')))).lease;
@@ -658,7 +682,7 @@ export const launchLeadEffect = Effect.fn('launchLead')(function* (
   if (!brief.lead || brief.lead.owner !== lease.owner || brief.lead.epoch !== lease.epoch)
     return yield* boundaryError('launchLead.launchLead')(
       new Error(
-        'The saved lead no longer controls this project. Refresh setup with an explicit handover or takeover.',
+        `The saved lead no longer controls this project.\n${leadRecoveryInstructions(binding.root, binding.home, binding.lead, binding.leadName)}`,
       ),
     );
   const owner = brief.lead.owner;
@@ -741,6 +765,8 @@ export const launchLeadEffect = Effect.fn('launchLead')(function* (
         message: 'Lead ownership changed during launch. Refresh setup before retrying.',
         status: 409,
       });
+    const promptPath = resolve(binding.home, 'leads', binding.projectId + '.md');
+    yield* sync('Lead.promptFile', () => writeFileSync(promptPath, prompt + '\n', { mode: 0o600 }));
     const opened = yield* openLeadTerminalEffect(h, {
       projectId: binding.projectId,
       root: binding.root,
@@ -751,7 +777,7 @@ export const launchLeadEffect = Effect.fn('launchLead')(function* (
       args: terminalLeadArgs(
         binary,
         agentAccessArgs(binary, current.project.agentAccess, model),
-        prompt,
+        promptPath,
       ),
     });
     if (opened.status === 'inspect') {

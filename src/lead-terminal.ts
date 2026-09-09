@@ -14,12 +14,12 @@ interface TerminalLead {
   args: string[];
 }
 
-/** Herdr 0.9 rejects control characters in argv; the bootstrap contains prose paragraphs only. */
-export function terminalLeadArgs(kind: string, modelArgs: string[], prompt: string) {
+/** Keep the shell launch short: Herdr types argv into a PTY, not an exec call. */
+export function terminalLeadArgs(kind: string, modelArgs: string[], promptPath: string) {
   return [
     ...modelArgs,
     ...(kind === 'agy' ? ['--prompt-interactive'] : []),
-    prompt.replace(/\r\n|[\n\r\t]/g, ' '),
+    `Read the local file ${JSON.stringify(promptPath)} and follow its lead startup instructions.`,
   ];
 }
 
