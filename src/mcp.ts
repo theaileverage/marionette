@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { agentAccessSchema } from './mcp-schemas.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Effect } from 'effect';
 import { z } from 'zod';
@@ -22,6 +23,7 @@ import {
 import { leadContract } from './prompts.js';
 import { mcpResult } from './mcp-result.js';
 import { VERSION } from './version.js';
+import { swarmToolInputs } from './swarm-tools.js';
 const i = process.argv.indexOf('--home'),
   home = homePath(i >= 0 ? process.argv[i + 1] : undefined);
 const server = new McpServer(
@@ -66,11 +68,23 @@ tool(
     workspaceId: z.string(),
     maxConcurrency: z.number().optional(),
     agentArgs: z.record(kindSchema, z.array(z.string())).optional(),
+    agentAccess: agentAccessSchema.optional(),
     trustWorkspaces: z.boolean().optional(),
     trustAgyWorkspaces: z
       .boolean()
       .optional()
       .describe('Deprecated: AGY-only trust. Use trustWorkspaces for all agents.'),
+  },
+);
+tool(
+  'project_configure',
+  'project.configure',
+  'Persist user-selected launch access and workspace trust. agentAccess patches only named harnesses; inherit retains native settings, full-access requests no harness sandbox or approval prompts. Applies to new sessions, never overrides host-managed restrictions. Change access only when the user authorizes that policy.',
+  {
+    lease: credentialsSchema,
+    agentAccess: agentAccessSchema.optional(),
+    trustWorkspaces: z.boolean().optional(),
+    agentArgs: z.record(kindSchema, z.array(z.string())).optional(),
   },
 );
 tool(
@@ -216,13 +230,15 @@ tool(
 tool(
   'outcome_revise',
   'outcome.revise',
-  'Correct an existing outcome scope or revise criteria with a mandatory reason. Omitted criteria are preserved. Scope must keep all existing task ownership. Invalidates old evidence and records the original contract; do not create a duplicate outcome to repair a path mistake.',
+  'Correct an existing outcome scope, criteria or execution budget with a mandatory reason. Omitted criteria are preserved. Scope must keep all existing task ownership. Invalidates old evidence and records the original contract; do not create a duplicate outcome to repair a path mistake.',
   {
     lease: credentialsSchema,
     outcomeId: z.string(),
     expectedRevision: z.number().int(),
     criteria: z.array(criterionSchema).min(1).optional(),
     scope: outcomeSchema.shape.scope.optional(),
+    maxTurns: z.number().int().min(1).max(1000).optional(),
+    maxDepth: z.number().int().min(0).max(6).optional(),
     reason: z.string().min(1),
   },
 );
@@ -482,4 +498,12 @@ tool(
     deleteBranch: z.boolean().optional(),
   },
 );
+for (const entry of swarmToolInputs())
+  tool(
+    `swarm_${entry.action.replaceAll('.', '_')}`,
+    `swarm.${entry.action}`,
+    entry.description,
+    entry.input,
+    entry.readOnly === true,
+  );
 await Effect.runPromise(serveMcpEffect(server));

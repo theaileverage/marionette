@@ -7,12 +7,16 @@ const packages = new Set([
   'node_modules/scheduler',
   'node_modules/lucide-react',
 ]);
-for (const name of ['cli', 'mcp']) {
+for (const [name, entry] of [
+  ['cli', 'src/cli.ts'],
+  ['mcp', 'src/mcp.ts'],
+  ['evaluate-swarm', 'scripts/evaluate-swarm.mjs'],
+]) {
   const result = await build({
-    entryPoints: [`src/${name}.ts`],
+    entryPoints: [entry],
     outfile: `dist/${name}.js`,
     bundle: true,
-    loader: { '.mustache': 'text' },
+    loader: { '.mustache': 'text', '.md': 'text' },
     platform: 'node',
     format: 'esm',
     target: 'esnext',

@@ -1,3 +1,4 @@
+import { agentAccessArgs } from './agent-access.js';
 import { Effect, Result, Schedule, Semaphore } from 'effect';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
@@ -50,6 +51,7 @@ export class Supervisor {
     this.recover();
     this.service.continuation.recover();
     this.service.cleanup.recover();
+    this.service.swarm.runtime.recover();
     this.jobs.run('poll', this.pollEffect());
   }
   pollEffect = Effect.fn('Supervisor.poll')({ self: this }, function* (this: Supervisor) {
@@ -68,6 +70,7 @@ export class Supervisor {
     yield* this.jobs.close();
     yield* this.service.continuation.stopEffect();
     yield* this.service.cleanup.stopEffect();
+    yield* this.service.swarm.runtime.close();
   });
   recover() {
     for (const op of this.service.store.all<Operation>('operation'))
@@ -140,6 +143,7 @@ export class Supervisor {
   }
   tick() {
     if (this.stopped) return;
+    this.service.swarm.runtime.tick();
     this.service.orchestration.refreshEvidence();
     this.service.continuation.tick();
     this.service.cleanup.tick();
@@ -230,8 +234,8 @@ export class Supervisor {
         ? resolve(cwd, owned)
         : safePath(cwd, owned);
     };
-    return a.ownership.some((x) =>
-      b.ownership.some((y) => {
+    return (a.retainedOwnership ?? a.ownership).some((x) =>
+      (b.retainedOwnership ?? b.ownership).some((y) => {
         const p = path(a, x),
           q = path(b, y);
         return inside(p, q) || inside(q, p);
@@ -261,16 +265,16 @@ export class Supervisor {
         )
       : undefined;
     return renderWorkerPrompt({
-      task: t,
+      task: { ...t, ownership: t.retainedOwnership ?? t.ownership },
       workerMcp: t.kind === 'codex',
       strategy,
       workerCall: `${quote(process.execPath)} ${quote(this.cliPath)} worker-call --file /absolute/path/to/request.json`,
       reportCommand: `${quote(process.execPath)} ${quote(this.cliPath)} worker-report --file /absolute/path/to/report.json`,
-      extra,
+      extra: `${extra}\n\nCURRENT OBJECTIVE AND INSTRUCTIONS\n${JSON.stringify(this.service.swarm.context(t))}`,
     });
   }
   private modelArgs(t: Task, p: Project) {
-    const args = [...(p.agentArgs[t.kind] ?? [])];
+    const args = agentAccessArgs(t.kind, p.agentAccess, p.agentArgs[t.kind]);
     if (t.kind === 'codex') args.push(...workerMcpArgs(process.execPath, this.cliPath));
     if (
       t.kind === 'codex' &&
@@ -410,7 +414,11 @@ export class Supervisor {
               yield* this.promptEffect(
                 t,
                 run,
-                renderWorkerFollowup({ task: t, kind: 'children', children }),
+                renderWorkerFollowup({
+                  task: { ...t, ownership: t.retainedOwnership ?? t.ownership },
+                  kind: 'children',
+                  children,
+                }),
               );
               yield* sync('Supervisor.dispatch', () =>
                 s.updateTask(s.task(id), { resumePending: false, waitForChildren: undefined }),
@@ -838,6 +846,13 @@ export class Supervisor {
         );
         if (Result.isFailure(attempt6)) {
           const e = attempt6.failure;
+          yield* sync('Swarm.unavailable', () =>
+            s.swarm.runtime.unavailable(
+              t,
+              r,
+              e instanceof AppError ? e.code : 'connection-unavailable',
+            ),
+          );
           if (
             e instanceof AppError &&
             ['identity_changed', 'agent_not_found', 'pane_not_found'].includes(e.code)
@@ -909,6 +924,8 @@ export class Supervisor {
       if (t.status === 'queued' || (t.resumePending && t.status === 'preparing')) return;
       const nativeInput = yield* sync('Supervisor.monitor', () => inputScreen(t.output));
       if (nativeInput) a = { ...a, agent_status: 'blocked' };
+      const observedAgent = a;
+      yield* sync('Swarm.observe', () => s.swarm.runtime.observe(t, r, observedAgent));
       r.lastStatus = a.agent_status;
       if (a.agent_status === 'working' || (a.state_change_seq ?? 0) > (r.baselineSeq ?? 0))
         r.seenWork = true;
@@ -992,6 +1009,13 @@ export class Supervisor {
         return;
       }
       if (t.status === 'waiting' || t.status === 'paused' || t.status === 'blocked') return;
+      if (
+        !t.receipt &&
+        (s.swarm.runtime.declaredWait(t) ||
+          s.swarm.runtime.reportedBusy(t) ||
+          s.swarm.runtime.notificationRecent(t))
+      )
+        return;
       if (
         t.receipt &&
         settled(a.agent_status) &&
@@ -1152,7 +1176,7 @@ export class Supervisor {
           r.phase === 'starting'
             ? this.instructions(t)
             : renderWorkerFollowup({
-                task: t,
+                task: { ...t, ownership: t.retainedOwnership ?? t.ownership },
                 kind: op.type === 'reply' ? 'reply' : 'redirect',
                 text: op.text ?? '',
               }),

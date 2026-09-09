@@ -1,3 +1,4 @@
+import { agentAccessSchema } from './agent-access.js';
 import { Effect, Schema } from 'effect';
 import { profileSchema } from './orchestration-types.js';
 import { credentialsSchema, kindSchema, leadAgentSchema } from './types.js';
@@ -15,6 +16,7 @@ export const projectSchema = Schema.Struct({
     Schema.optionalKey(Schema.mutable(Schema.Array(Schema.String))),
   ),
   trustWorkspaces: Schema.optional(Schema.Boolean),
+  agentAccess: Schema.optionalKey(agentAccessSchema),
   trustAgyWorkspaces: Schema.optional(Schema.Boolean),
   createdAt: Schema.String,
 });

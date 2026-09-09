@@ -40,7 +40,7 @@ const mainEffect = Effect.fn('main')(function* () {
     if (args.includes('--help')) {
       yield* sync('main.main', () =>
         console.log(
-          'Usage: marionette setup [--yes] [--json] [--config FILE] [--dry-run]\n  --project DIR --home DIR --name TEXT --session NAME --socket PATH --workspace ID\n  --lead codex-desktop|codex|claude|agy --lead-name TEXT --lead-profile PROFILE_ID --port NUMBER\n  --no-trust-workspaces --mcp install|print|skip --takeover --install-tools --upgrade\n  --schema prints the accepted JSON configuration. --yes accepts defaults without prompts.',
+          'Usage: marionette setup [--yes] [--json] [--config FILE] [--dry-run]\n  --project DIR --home DIR --name TEXT --session NAME --socket PATH --workspace ID\n  --lead codex-desktop|codex|claude|agy --lead-name TEXT --lead-profile PROFILE_ID --port NUMBER\n  --agent-access inherit|full-access (all harnesses; use config for per-harness settings)\n  --no-trust-workspaces --mcp install|print|skip --takeover --install-tools --upgrade\n  --schema prints the accepted JSON configuration. --yes accepts defaults without prompts.',
         ),
       );
       return;
@@ -59,6 +59,11 @@ const mainEffect = Effect.fn('main')(function* () {
           leadName: 'custom name (1–100 characters)',
           leadProfile: 'validated exact model profile ID (optional)',
           trustWorkspaces: true,
+          agentAccess: {
+            codex: 'inherit|full-access',
+            claude: 'inherit|full-access',
+            agy: 'inherit|full-access',
+          },
           mcp: ['install', 'print', 'skip'],
           takeover: false,
           installTools: false,
@@ -84,6 +89,7 @@ const mainEffect = Effect.fn('main')(function* () {
           '--lead',
           '--lead-name',
           '--lead-profile',
+          '--agent-access',
           '--port',
           '--no-trust-agy',
           '--no-trust-workspaces',
@@ -133,6 +139,12 @@ const mainEffect = Effect.fn('main')(function* () {
     if (flag('lead-name')) yield* sync('main.main', () => (input.leadName = flag('lead-name')));
     if (flag('lead-profile'))
       yield* sync('main.main', () => (input.leadProfile = flag('lead-profile')));
+    if (flag('agent-access'))
+      input.agentAccess = {
+        codex: flag('agent-access'),
+        claude: flag('agent-access'),
+        agy: flag('agent-access'),
+      };
     if (flag('port')) yield* sync('main.main', () => (input.port = Number(flag('port'))));
     if (args.includes('--no-trust-agy') || args.includes('--no-trust-workspaces'))
       input.trustWorkspaces = false;

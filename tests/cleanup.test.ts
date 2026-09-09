@@ -909,3 +909,43 @@ test('lost pane-close acknowledgement remains uncertain and reconciles with sibl
     await f.close();
   }
 });
+
+test('collection retains current swarm context evidence while superseded context remains historical', async () => {
+  const f = fixture();
+  try {
+    writeFileSync(join(f.repo, 'comparison.md'), 'Independent comparison evidence\n');
+    f.g(['add', 'comparison.md']);
+    f.g(['commit', '-m', 'comparison']);
+    const cwd = await f.worktree();
+    const refs = [{ path: 'task:task:comparison.md', digest: digest(join(cwd, 'comparison.md'))! }];
+    f.store.put('swarm-message', 'context', {
+      id: 'context',
+      projectId: f.t.projectId,
+      outcomeId: f.o.id,
+      taskId: f.t.id,
+      references: refs,
+      acknowledgedAt: now(),
+    });
+    f.store.put('swarm-message', 'historical', {
+      id: 'historical',
+      projectId: f.t.projectId,
+      outcomeId: f.o.id,
+      taskId: f.t.id,
+      references: [{ path: 'task:task:comparison.md', digest: 'superseded-hash' }],
+      acknowledgedAt: now(),
+    });
+    await f.invoke('cleanup.release');
+    await f.invoke('cleanup.deliver', { disposition: 'merged', targetRef: 'refs/heads/main' });
+    const archive = await f.invoke('cleanup.archive');
+    await f.invoke('cleanup.collect', { archiveId: archive.id, deleteBranch: true });
+    assert.equal(existsSync(cwd), false);
+    assert.equal(f.s.orchestration.evidenceCurrent(refs, f.t.projectId), true);
+    assert.equal(
+      readFileSync(f.s.orchestration.evidencePath(f.t.projectId, refs[0].path), 'utf8'),
+      'Independent comparison evidence\n',
+    );
+    assert.ok(f.store.get('swarm-message', 'historical'));
+  } finally {
+    await f.close();
+  }
+});

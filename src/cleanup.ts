@@ -230,6 +230,7 @@ export class Cleanup {
       if (o.status === 'completed') continue;
       for (const ref of [
         ...o.assessments.flatMap((a) => a.references),
+        ...this.s.swarm.references(o.id),
         ...(o.integrated?.evidence ?? []),
       ]) {
         if (tasks.some((t) => ref.path.startsWith(`task:${t.id}:`)))
@@ -727,6 +728,7 @@ export class Cleanup {
       for (const o of this.s.store.all<Outcome>('outcome')) {
         for (const ref of [
           ...o.assessments.flatMap((a) => a.references),
+          ...this.s.swarm.references(o.id),
           ...(o.integrated?.evidence ?? []),
         ]) {
           const match = yield* sync('Cleanup.createArchive', () =>

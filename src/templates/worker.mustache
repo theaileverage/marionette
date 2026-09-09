@@ -101,4 +101,22 @@ that the command needs the local Marionette endpoint. Do not disable the
 sandbox or change project settings. If permission is denied, keep the local
 report and tell the lead. After an uncertain report, inspect the current
 receipt before resending; mutations may already have succeeded.
-Finish your turn after sending a report.
+After a progress report, continue the assignment. End the turn only after
+completion, failure, a genuine block, or an authorized yield.
+
+INSTRUCTIONS AND DECISIONS
+Read worker_inspect at natural checkpoints and before completing. It returns
+the full current objective, attributed amendments, implementation guidance,
+your current writablePaths, and ordered pending instructions. Read each
+instruction, then use worker_call with {"action":"message.ack","revision":CURRENT_REVISION,"messageId":"ID"}
+to acknowledge acceptance. Acknowledgement is not evidence that its work is
+complete. Never repeat an acknowledged instruction merely because its
+notification repeats; inspect the current artifacts and task revision.
+Use {"action":"decision.open","revision":CURRENT_REVISION,"key":"stable-key","text":"Decision needed","options":["Option A","Option B"]}
+for a durable decision. Only the lead can resolve it. Ordinary progress or
+completion does not answer a decision.
+For a long tool call, report worker_call activity with state "busy" and detail;
+refresh at natural checkpoints. For a known external delay use state
+"external-wait", detail and optional until (Unix milliseconds). Clear it with
+state "busy" or "idle" when the wait ends. These are attributed observations,
+not proof of runtime liveness. Never stop to send routine progress.

@@ -8,7 +8,11 @@ Coordinate Codex, Claude Code, and AGY workers through one lead conversation. Wo
 - **Delegate work:** assign owned paths, dependencies, and acceptance checks; use a shared directory or isolated Git worktrees.
 - **Verify outcomes:** require current evidence and independent checks before marking work complete.
 - **Keep context:** preserve decisions, worker state, and an inbox across lead handovers and supervisor restarts.
-- **Stay in control:** agents retain their normal permission policies; ambiguous deliveries require reconciliation before retrying.
+- **Stay in control:** choose native permissions or full access per harness; ambiguous deliveries require reconciliation before retrying.
+
+## General swarm coordination
+
+Manage several objectives with durable intent amendments, acknowledged worker instructions and explicit decisions. Submit task graphs atomically, transfer part of a coordinator's ownership, opt into adaptive capacity, register external conditions, and compare isolated experiments against common checks. Optional recipes guide diagnosis, investigation, review, delivery and recovery. Use MCP or CLI; see the [runtime guide](documentation/swarm-runtime.md) and [evaluation suite](evaluations/README.md).
 
 ## Quick start
 
@@ -49,7 +53,33 @@ For scripted setup, use `setup --yes --json`. Add `--install-tools` to explicitl
 
 If an older cached package fails on `node:sqlite`, run `bunx --bun @theaileverage/marionette@latest setup`. Marionette 0.3.0 and later use Bun’s SQLite runtime.
 
-Setup's `trustWorkspaces` option registers native workspace trust for Codex, Claude Code, and AGY as each lead or worker starts, including managed worktrees. Use `--no-trust-workspaces` to keep native trust prompts, or `--trust-workspaces` to enable it explicitly. Tool approvals and sandbox settings remain controlled by each agent. Legacy AGY-only settings remain compatible and do not silently authorize trust for other agents.
+Setup's `trustWorkspaces` option registers native workspace trust for Codex, Claude Code, and AGY as each lead or worker starts, including managed worktrees. Use `--no-trust-workspaces` to keep native trust prompts, or `--trust-workspaces` to enable it explicitly. Workspace trust is separate from the launch access setting below. Legacy AGY-only settings remain compatible and do not silently authorize trust for other agents.
+
+### Harness access
+
+Interactive setup asks which access policy to use for each harness. The default, `inherit`, keeps the harness's native approval and sandbox configuration. Choose `full-access` to disable the harness sandbox and tool approval prompts for new terminal leads and workers:
+
+```sh
+marionette setup --agent-access full-access --yes
+```
+
+For different policies per harness, save a setup JSON file and pass it with `marionette setup --config setup.json --yes`:
+
+```json
+{
+  "agentAccess": {
+    "codex": "full-access",
+    "claude": "full-access",
+    "agy": "full-access"
+  }
+}
+```
+
+Set a harness to `inherit` to restore its native policy for future launches. Setup saves these choices with the project. A lead can also apply a user-authorized change through `project_configure` with `agentAccess`; this patches only the named harnesses. Conflicting permission flags in legacy `agentArgs` must be removed, or managed through `inherit`.
+
+Full access uses Codex's `--dangerously-bypass-approvals-and-sandbox`, Claude Code's `--dangerously-skip-permissions` with `sandbox.enabled: false`, and AGY's `--dangerously-skip-permissions --sandbox=false`. These launch arguments leave global CLI settings intact. They allow the agent to act with the launching user's permissions; task ownership remains a coordination contract, not filesystem isolation.
+
+Changes apply when a session starts. Existing leads and workers keep their launch settings; repeating `lead` reuses the current lead. A Codex desktop conversation uses the app's own permissions, since Marionette does not launch it. Project configuration cannot override organization policies or restrictions imposed by the host, operating system, or an enclosing container.
 
 ## Update and removal
 

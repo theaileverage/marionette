@@ -1,5 +1,23 @@
 # Verification record
 
+## User-configured harness access — local implementation (9 September 2026)
+
+The full suite passed **225 tests across 24 files**. TypeScript checks, lint, formatting, production build, and the standalone supervisor lifecycle check passed. Both HTTP/STDIO integration tests also passed against the production CLI and MCP bundles, including the 68-tool catalog and persistence through `project_configure`.
+
+New coverage verifies inherited defaults, the native full-access argument mappings for Codex/Claude Code/AGY, setup preference round-tripping, per-harness patches, rejected conflicting arguments without a state write, and worker launches retaining scoped MCP configuration. Policy changes preserve existing run IDs. A production CLI setup dry-run selected full access for all three harnesses without changing project state.
+
+Native flags were checked against installed CLI help; Claude Code's separate sandbox setting was checked against its official sandboxing documentation. No live unrestricted model session was launched, and no existing host, global CLI configuration, or running agent policy was changed. Host-enforced restrictions and Codex desktop permissions remain outside this launcher configuration.
+
+## General swarm coordination — local implementation (9 September 2026)
+
+The full suite passed **220 tests across 23 files** after the runtime changes. The evaluator comparison test was then added; all **8 evaluator tests** passed, giving 221 distinct passing tests across the final source set. TypeScript checks, lint, formatting and the production build passed. Effect diagnostics reported zero errors and zero warnings (six existing informational suggestions). The quality-tooling sentinel passed, and regenerating the Herdr SDK produced no protocol diff.
+
+Coverage includes atomic batch rollback and idempotency, scoped amendments and acknowledgements across reopened state, durable explicit decisions, partial parent/child execution, adaptive host/provider admission, late watch and decision registration, cross-outcome continuation isolation, command timeout/cancellation, bounded notification turns, pinned common-base experiment worktrees, current selection evidence, credential-free trajectories, and retained context evidence after worktree collection. The original request and source remain distinct from the lead objective, and outcome turn allowances can be revised without replacing an objective.
+
+The standalone supervisor lifecycle check passed. The full suite required local socket/process-group permissions; sandboxed listener failures were environmental and were rerun successfully. The actual packed CLI and MCP passed both HTTP/STDIO integration tests, including the 67-tool catalog, scoped instruction acknowledgement, and embedded recipe loading. The packed evaluator listed all six scenarios and completed a fixture trial plus comparison from an isolated extraction with no development dependencies.
+
+The evaluator checks all six initial fixtures fail and reference solutions pass, injects steering after a progress marker, and preserves unavailable cost/intervention measurements as null. These are runtime and evaluation-harness results, **not real-model performance measurements**. No paid model trials, live user Herdr sessions, dashboard changes, commit, push or publication were performed. Research quality, recovery-procedure fidelity and strategy/model comparisons require independently reviewed adapter trials under comparable resource allowances.
+
 ## Dispatch and reporting recovery — local 0.4.0 patch (9 September 2026)
 
 The full suite passed 198 tests across 21 files. An additional focused transport-recovery regression subsequently passed, bringing the tested set to 199 tests. TypeScript and lint checks, formatting, runtime lifecycle checks, and the production build passed. The HTTP/STDIO integration tests also passed against the production CLI and MCP bundles.

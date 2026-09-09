@@ -63,6 +63,7 @@ export class Orchestration {
           assessments: [],
         };
         this.s.store.put('outcome', o.id, o);
+        this.s.swarm.captureIntent(o);
         this.s.store.put('task', t.id, { ...t, outcomeId: o.id });
         this.revision(
           o,
@@ -152,10 +153,18 @@ export class Orchestration {
         );
     }
   }
+  taskCurrent(t: Task) {
+    return (
+      t.status === 'completed' &&
+      this.taskEvidenceCurrent(t) &&
+      this.s.swarm.unmetTask(t).length === 0
+    );
+  }
   unmetTask(t: Task) {
     return this.descendants(t.id)
-      .filter((d) => this.required(d) && (d.status !== 'completed' || !this.taskEvidenceCurrent(d)))
-      .map((d) => `${d.title}: ${d.status}`);
+      .filter((d) => this.required(d) && !this.taskCurrent(d))
+      .map((d) => `${d.title}: ${d.status}`)
+      .concat(this.s.swarm.unmetTask(t));
   }
   evidencePath(projectId: string, reference: string) {
     const taskReference = /^task:([^:]+):(.+)$/.exec(reference);
@@ -200,15 +209,24 @@ export class Orchestration {
   unmet(o: Outcome) {
     const items = this.s
       .tasks(o.projectId)
-      .filter(
-        (t) =>
-          t.outcomeId === o.id &&
-          this.required(t) &&
-          (t.status !== 'completed' || !this.taskEvidenceCurrent(t)),
-      )
+      .filter((t) => t.outcomeId === o.id && this.required(t) && !this.taskCurrent(t))
       .map(
         (t) => `${t.title}: ${t.status === 'completed' ? 'stale completion evidence' : t.status}`,
       );
+    items.push(...this.s.swarm.unmet(o.id));
+    for (const experiment of this.s.store
+      .all<import('./swarm-types.js').Experiment>('swarm-experiment')
+      .filter((e) => e.outcomeId === o.id)) {
+      if (
+        experiment.taskIds.some(
+          (id) => !['completed', 'failed', 'cancelled'].includes(this.s.task(id).status),
+        )
+      )
+        items.push(`Experiment ${experiment.id} has unsettled candidates`);
+      if (!experiment.selection) items.push(`Experiment ${experiment.id} has no selected result`);
+      else if (!this.s.swarm.compare(experiment.id).selectionCurrent)
+        items.push(`Experiment ${experiment.id} selection is stale`);
+    }
     for (const c of o.criteria) {
       const a = o.assessments.find((a) => a.criterionId === c.id && a.revision === o.revision);
       if (!a || !this.evidenceCurrent(a.references, o.projectId))
@@ -269,6 +287,7 @@ export class Orchestration {
     evidence: string[] = [],
   ) {
     const o = this.outcome(outcomeId);
+    this.s.swarm.captureIntent(o);
     const updated = {
       ...o,
       status: 'open' as const,
@@ -511,6 +530,7 @@ export class Orchestration {
         assessments: [],
       };
       this.s.store.put('outcome', o.id, o);
+      this.s.swarm.captureIntent(o);
       task.outcomeId = o.id;
     }
     task.resolvedProfile = this.resolveProfile(assignment);
@@ -548,34 +568,42 @@ export class Orchestration {
       .filter((t) => t.id !== task.id && t.status !== 'queued' && holds(t));
     const limits = this.limits(task.projectId);
     const leads = this.s.continuation.reservations();
-    if (all.length + leads.length >= limits.global) return 'Global execution capacity reached';
-    if (
-      all.filter((t) => t.projectId === task.projectId).length +
-        leads.filter((w) => w.projectId === task.projectId).length >=
-      limits.project
-    )
-      return 'Waiting for an available project execution slot';
-    if (
-      all.filter((t) => t.kind === task.kind).length +
-        leads.filter((w) => w.kind === task.kind).length >=
-      (limits.providers[task.kind] ?? limits.global)
-    )
-      return `${task.kind} provider capacity reached`;
-    if (
-      task.model &&
-      all.filter((t) => t.model === task.model).length +
-        leads.filter((w) => w.model === task.model).length >=
-        (limits.models[task.model] ?? limits.global)
-    )
-      return `${task.model} model capacity reached`;
-    if (
-      task.resolvedProfile &&
-      all.filter((t) => t.projectId === task.projectId && t.profileId === task.profileId).length +
-        leads.filter((w) => w.projectId === task.projectId && w.profileId === task.profileId)
-          .length >=
-        task.resolvedProfile.maxConcurrency
-    )
-      return 'Profile capacity reached';
+    if (this.s.swarm.runtime.adaptive()) {
+      const blocked = this.s.swarm.runtime.capacityBlock(task.projectId, task.kind, task.model, [
+        ...all,
+        ...leads,
+      ]);
+      if (blocked) return blocked;
+    } else {
+      if (all.length + leads.length >= limits.global) return 'Global execution capacity reached';
+      if (
+        all.filter((t) => t.projectId === task.projectId).length +
+          leads.filter((w) => w.projectId === task.projectId).length >=
+        limits.project
+      )
+        return 'Waiting for an available project execution slot';
+      if (
+        all.filter((t) => t.kind === task.kind).length +
+          leads.filter((w) => w.kind === task.kind).length >=
+        (limits.providers[task.kind] ?? limits.global)
+      )
+        return `${task.kind} provider capacity reached`;
+      if (
+        task.model &&
+        all.filter((t) => t.model === task.model).length +
+          leads.filter((w) => w.model === task.model).length >=
+          (limits.models[task.model] ?? limits.global)
+      )
+        return `${task.model} model capacity reached`;
+      if (
+        task.resolvedProfile &&
+        all.filter((t) => t.projectId === task.projectId && t.profileId === task.profileId).length +
+          leads.filter((w) => w.projectId === task.projectId && w.profileId === task.profileId)
+            .length >=
+          task.resolvedProfile.maxConcurrency
+      )
+        return 'Profile capacity reached';
+    }
     if (
       task.outcomeId &&
       this.outcome(task.outcomeId).turnsUsed +
@@ -585,7 +613,10 @@ export class Orchestration {
       return 'Shared outcome execution budget exhausted';
     if (task.parentId) {
       const parent = this.s.task(task.parentId);
-      if (!['waiting', 'completed'].includes(parent.status))
+      if (
+        !['waiting', 'completed'].includes(parent.status) &&
+        !parent.concurrentChildren?.includes(task.id)
+      )
         return 'Parent must yield ownership before children execute';
     }
     return undefined;
@@ -742,7 +773,8 @@ export class Orchestration {
           t.outcomeId ? this.outcome(t.outcomeId) : undefined,
         );
         return yield* sync('Orchestration.workerAction', () => ({
-          task: { ...t, output: '', prompt: t.prompt.slice(0, 800) },
+          task: { ...t, output: '', prompt: t.prompt },
+          ...this.s.swarm.context(t),
           children: descendants.map((child) => ({
             ...child,
             output: '',
@@ -765,6 +797,10 @@ export class Orchestration {
             : null,
         }));
       }
+      if (['message.send', 'message.ack', 'activity', 'decision.open'].includes(raw.action))
+        return yield* sync('Swarm.worker', () =>
+          this.s.store.transaction(() => this.s.swarm.worker(t, raw)),
+        );
       if (raw.action === 'finding') {
         const finding = yield* sync('Orchestration.workerAction', () => ({
           id: randomUUID(),
@@ -967,6 +1003,7 @@ export class Orchestration {
                   updatedAt: now(),
                 };
                 this.s.store.put('outcome', o.id, o);
+                this.s.swarm.captureIntent(o);
                 this.revision(o, 'Established observable completion criteria', c.owner, null, o);
                 return o;
               });
@@ -1066,11 +1103,20 @@ export class Orchestration {
                 ...o,
                 criteria,
                 scope,
+                maxTurns:
+                  raw.maxTurns === undefined
+                    ? o.maxTurns
+                    : Schema.decodeUnknownSync(outcomeSchema.fields.maxTurns)(raw.maxTurns),
+                maxDepth:
+                  raw.maxDepth === undefined
+                    ? o.maxDepth
+                    : Schema.decodeUnknownSync(outcomeSchema.fields.maxDepth)(raw.maxDepth),
                 revision: o.revision + 1,
                 status: 'open',
                 integrated: undefined,
                 updatedAt: now(),
               };
+              this.s.swarm.captureIntent(o);
               this.s.store.put('outcome', o.id, updated);
               this.revision(updated, reason, c.owner, o, updated);
               return updated;
@@ -1089,6 +1135,7 @@ export class Orchestration {
               };
               o.assessments = [...o.assessments.filter((a) => a.criterionId !== criterionId), a];
               this.s.store.put('outcome', o.id, o);
+              this.s.swarm.captureIntent(o);
               this.s.store.event(o.projectId, 'outcome.assessed', a.rationale);
               return a;
             }
@@ -1101,6 +1148,7 @@ export class Orchestration {
                 createdAt: now(),
               };
               this.s.store.put('outcome', o.id, o);
+              this.s.swarm.captureIntent(o);
               return o.integrated;
             }
             if (action === 'outcome.complete') {
@@ -1109,6 +1157,7 @@ export class Orchestration {
               o.status = 'completed';
               o.updatedAt = now();
               this.s.store.put('outcome', o.id, o);
+              this.s.swarm.captureIntent(o);
               this.s.store.event(o.projectId, 'outcome.completed', o.objective, undefined, {
                 outcomeId: o.id,
                 revision: o.revision,

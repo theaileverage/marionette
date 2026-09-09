@@ -57,11 +57,20 @@ export function workerMcpServer() {
     'worker_call',
     {
       description:
-        'Submit a finding or an explicitly authorized delegate/revise/control request. The supervisor enforces task scope, revisions and delegation authority. Use worker_inspect for reads.',
+        'Use current revision from worker_inspect. message.ack needs messageId; message.send needs key, taskId, text and optional references (parent or authorized descendants only); activity needs state (busy, idle, external-wait), detail and optional until (Unix ms); decision.open needs key, text, options and optional blocking. finding needs summary and evidence. delegate/revise/control require explicit delegation authority.',
       inputSchema: {
         request: z
           .object({
-            action: z.enum(['finding', 'delegate', 'revise', 'control']),
+            action: z.enum([
+              'finding',
+              'delegate',
+              'revise',
+              'control',
+              'message.send',
+              'message.ack',
+              'activity',
+              'decision.open',
+            ]),
             revision: z.number().int().min(1),
           })
           .catchall(z.any()),

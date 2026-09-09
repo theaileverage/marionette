@@ -129,6 +129,18 @@ export const outcomeSchema = z.object({
   projectId: z.string(),
   key: z.string().min(1),
   objective: z.string().min(1).max(20000),
+  originalRequest: z
+    .string()
+    .min(1)
+    .max(20000)
+    .optional()
+    .describe('Original user wording, kept separate from the lead objective and task prompts.'),
+  requestSource: z
+    .string()
+    .min(1)
+    .max(20000)
+    .optional()
+    .describe('Source of the original request, such as a user message reference.'),
   scope: z
     .array(pathSchema)
     .min(1)
@@ -196,6 +208,8 @@ export const waitSchema = z
         quorum: z.number().int().min(1).optional(),
         strategyId: z.string().optional(),
         questionIds: z.array(z.string()).default([]),
+        watchIds: z.array(z.string()).optional(),
+        decisionIds: z.array(z.string()).optional(),
         intervention: z.boolean().default(true),
       })
       .strict(),
@@ -239,5 +253,13 @@ export const cleanupPolicySchema = z
     autoRelease: z.boolean().default(true),
     collectAfterHours: z.number().min(0).max(87600).nullable().default(null),
     deleteMergedBranches: z.boolean().default(false),
+  })
+  .strict();
+
+export const agentAccessSchema = z
+  .object({
+    codex: z.enum(['inherit', 'full-access']).optional(),
+    claude: z.enum(['inherit', 'full-access']).optional(),
+    agy: z.enum(['inherit', 'full-access']).optional(),
   })
   .strict();

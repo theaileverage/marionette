@@ -1,3 +1,4 @@
+import type { AgentAccess } from './agent-access.js';
 import { Effect, Schema } from 'effect';
 export const leadAgentSchema = Schema.Literals(['codex-desktop', 'codex', 'claude', 'agy']);
 export type LeadAgent = Schema.Schema.Type<typeof leadAgentSchema>;
@@ -127,6 +128,7 @@ export interface Project {
   workspaceId: string;
   maxConcurrency: number;
   agentArgs: Partial<Record<Kind, string[]>>;
+  agentAccess?: AgentAccess;
   trustWorkspaces?: boolean;
   /** Legacy AGY-only opt-in; retained when reading older state. */
   trustAgyWorkspaces?: boolean;
@@ -142,6 +144,9 @@ export interface Lead {
   reason: string;
 }
 export interface Task extends Omit<Assignment, 'key'> {
+  /** Explicit retained paths after a settled partial transfer. Original ownership remains the delegation envelope. */
+  retainedOwnership?: string[];
+  concurrentChildren?: string[];
   archiveId?: string;
   id: string;
   cwd: string;

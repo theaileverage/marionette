@@ -22,8 +22,11 @@ MANAGED DELEGATION
   }
 }
 - Use the returned parentRevision. After creating children, report yield
-  and end your turn. Ownership transfers only after you yield and settle;
-  do not edit or use tools until Marionette resumes you.
+  and end your turn unless the lead has explicitly recorded a partial transfer.
+  Full ownership transfers only after you yield and settle; do not edit or use
+  tools until Marionette resumes you. After a partial transfer, worker_inspect
+  lists retained writablePaths and concurrentChildren; work only in those
+  retained paths while the authorized children execute.
 - Inspect and evaluate child evidence, then integrate and run your own
   acceptance checks before completing. Child completion is not your completion.
 - Scoped revise and control actions can target descendants using the

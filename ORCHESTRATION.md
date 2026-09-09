@@ -1,5 +1,7 @@
 # Outcome orchestration
 
+The [general swarm runtime guide](documentation/swarm-runtime.md) documents intent amendments, worker acknowledgements, explicit decisions, atomic batch dispatch, partial ownership, adaptive admission, watches, experiments, delivery expectations and trajectories. Existing orchestration operations below remain available.
+
 A lead defines observable criteria, dispatches bounded work, waits for meaningful events, and evaluates the integrated result. Marionette persists and enforces that contract across the full delegation tree. The same authenticated service implements CLI, MCP, and dashboard actions.
 
 For a single bounded task, `task.submit` can create the outcome atomically from the assignment prompt, ownership, and checks. Omit `outcomeId` in that case. Its response includes `outcomeId` and `treeRevision`; retain both. Do not create an outcome merely to receive the user's request.

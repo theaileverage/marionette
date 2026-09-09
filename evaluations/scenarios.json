@@ -1,0 +1,154 @@
+[
+  {
+    "id": "simple",
+    "objective": "Fix total.mjs so total(items) sums price times quantity and rounds the final total to two decimal places. Keep its named export.",
+    "files": {
+      "total.mjs": "export const total = items => items.reduce((n, i) => n + i.price, 0);\n"
+    },
+    "checks": [
+      {
+        "module": "total.mjs",
+        "export": "total",
+        "cases": [
+          {
+            "args": [
+              [
+                { "price": 2.5, "quantity": 3 },
+                { "price": 1.25, "quantity": 2 }
+              ]
+            ],
+            "expected": 10
+          },
+          { "args": [[]], "expected": 0 },
+          { "args": [[{ "price": 0.333, "quantity": 3 }]], "expected": 1 }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "multiple-objectives",
+    "objective": "Implement navigation.mjs navigation() returning ['Home','Work','Account'] and invoice.mjs invoice(net) returning net including 10% tax, rounded to two decimal places. Once initial work is established, write .evaluation/progress.json with {\"phase\":\"initial\"}; wait for and incorporate .evaluation/steering.json before finishing. These are independent objectives.",
+    "files": {
+      "navigation.mjs": "export const navigation = () => [];\n",
+      "invoice.mjs": "export const invoice = net => net;\n"
+    },
+    "steering": {
+      "objective": "navigation",
+      "text": "Keep the original navigation labels Home, Projects, Settings. Leave the invoice objective and its tax unchanged."
+    },
+    "checks": [
+      {
+        "module": "navigation.mjs",
+        "export": "navigation",
+        "cases": [{ "args": [], "expected": ["Home", "Projects", "Settings"] }]
+      },
+      {
+        "module": "invoice.mjs",
+        "export": "invoice",
+        "cases": [
+          { "args": [100], "expected": 110 },
+          { "args": [1.25], "expected": 1.38 }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "competing-explanations",
+    "objective": "Fix events.mjs latest(events) to choose the latest absolute timestamp, including offsets and unsorted input, returning null for empty input. Investigate sorting and timezone explanations; save diagnosis.md with reproduction, rejected explanation and counterfactual evidence.",
+    "files": {
+      "events.mjs": "export const latest = events => [...events].sort((a,b) => a.at.localeCompare(b.at)).at(-1) ?? null;\n"
+    },
+    "artifacts": ["diagnosis.md"],
+    "checks": [
+      {
+        "module": "events.mjs",
+        "export": "latest",
+        "cases": [
+          {
+            "args": [
+              [
+                { "id": "later", "at": "2026-01-01T01:00:00-05:00" },
+                { "id": "earlier", "at": "2026-01-01T05:00:00Z" }
+              ]
+            ],
+            "expected": { "id": "later", "at": "2026-01-01T01:00:00-05:00" }
+          },
+          { "args": [[]], "expected": null }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "parallel-integration",
+    "objective": "Implement normalize.mjs normalize(name), which trims and lowercases; slug.mjs slug(name), which uses normalize and converts runs of whitespace to a hyphen; and search.mjs matches(names,query), which uses normalize for case-insensitive substring matching and returns original names. Preserve all named exports and add integration evidence to integration.md.",
+    "files": {
+      "normalize.mjs": "export const normalize = name => name;\n",
+      "slug.mjs": "export const slug = name => name;\n",
+      "search.mjs": "export const matches = (names, query) => [];\n"
+    },
+    "artifacts": ["integration.md"],
+    "checks": [
+      {
+        "module": "normalize.mjs",
+        "export": "normalize",
+        "cases": [{ "args": ["  Hello  "], "expected": "hello" }]
+      },
+      {
+        "module": "slug.mjs",
+        "export": "slug",
+        "cases": [{ "args": ["  Hello   WORLD "], "expected": "hello-world" }]
+      },
+      {
+        "module": "search.mjs",
+        "export": "matches",
+        "cases": [
+          {
+            "args": [[" Alpha ", "Beta", "ALPHABET"], " ALP "],
+            "expected": [" Alpha ", "ALPHABET"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "failure-restart",
+    "objective": "Implement counter.mjs apply(count,event), adding event.delta while clamping to zero. Write recovery.md describing retained task identity and evidence. After durable initial progress write .evaluation/progress.json with {\"phase\":\"initial\"}; incorporate the injected recovery instruction before completing. The adapter must execute and record the applicable interruption/restart procedure; a single-agent strategy resumes that agent, while runtime strategies restart the supervisor and reconcile a failed worker.",
+    "files": { "counter.mjs": "export const apply = (count, event) => count;\n" },
+    "steering": {
+      "objective": "recovery",
+      "text": "Inject the strategy's documented interruption now. Preserve files and task identity, resume through its recovery procedure, and record commands and observed identities in recovery.md. Do not replay an ambiguous side effect."
+    },
+    "artifacts": ["recovery.md"],
+    "checks": [
+      {
+        "module": "counter.mjs",
+        "export": "apply",
+        "cases": [
+          { "args": [2, { "delta": 3 }], "expected": 5 },
+          { "args": [2, { "delta": -7 }], "expected": 0 },
+          { "args": [8, { "delta": 0 }], "expected": 8 }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "conflicting-research",
+    "objective": "Use only supplied sources to determine the service retention policy on 2026-08-15. Save answer.json with retentionDays and sources (filenames); write findings.md distinguishing current evidence, superseded evidence and remaining uncertainty.",
+    "files": {
+      "sources/policy.txt": "Policy effective 2026-08-01: standard service logs are retained for 14 days. This supersedes the 30-day rule.\n",
+      "sources/old-faq.txt": "FAQ updated 2026-05-01: logs are kept for 30 days.\n",
+      "sources/release.txt": "Release 2026-08-01: standard log retention has moved to 14 days. Dedicated enterprise overrides are separate and not specified here.\n",
+      "answer.json": "{}\n"
+    },
+    "artifacts": ["findings.md"],
+    "jsonChecks": [
+      {
+        "file": "answer.json",
+        "expected": {
+          "retentionDays": 14,
+          "sources": ["sources/policy.txt", "sources/release.txt"]
+        }
+      }
+    ]
+  }
+]

@@ -78,8 +78,9 @@ test('real HTTP and STDIO MCP enforce instance auth and expose the same durable 
       }),
     );
     const tools = await client.listTools();
-    assert.equal(tools.tools.length, 47);
+    assert.equal(tools.tools.length, 68);
     for (const name of [
+      'project_configure',
       'outcome_create',
       'outcome_complete',
       'plan_revise',
@@ -93,6 +94,11 @@ test('real HTTP and STDIO MCP enforce instance auth and expose the same durable 
       'cleanup_collect',
       'cleanup_configure',
       'profile_validate',
+      'swarm_intent_amend',
+      'swarm_dispatch',
+      'swarm_experiment_create',
+      'swarm_watch_create',
+      'swarm_trajectory',
     ])
       assert.ok(tools.tools.some((t) => t.name === name));
     const projects = await client.callTool({ name: 'project_list', arguments: {} });
@@ -144,6 +150,15 @@ test('real HTTP and STDIO MCP enforce instance auth and expose the same durable 
       owner: 'integration',
       expectedEpoch: 0,
       reason: 'Verify all transports',
+    });
+    const configured = await client.callTool({
+      name: 'project_configure',
+      arguments: { lease, agentAccess: { codex: 'full-access', claude: 'inherit' } },
+    });
+    assert.equal(configured.isError, undefined);
+    assert.deepEqual(runtime.service.project('parity').agentAccess, {
+      codex: 'full-access',
+      claude: 'inherit',
     });
     const created = await client.callTool({
       name: 'outcome_create',
@@ -263,6 +278,33 @@ test('real HTTP and STDIO MCP enforce instance auth and expose the same durable 
       );
       assert.equal(JSON.stringify(inspected).includes(workerToken), false);
       assert.equal(JSON.stringify(inspected).includes(config.token), false);
+      const notification = await client.callTool({
+        name: 'swarm_message_send',
+        arguments: {
+          lease,
+          outcomeId: outcome.id,
+          key: 'transport-steering',
+          taskIds: [task.id],
+          text: 'Preserve the current result contract',
+        },
+      });
+      assert.equal(notification.isError, undefined);
+      const inbox = runtime.service.swarm.messages(task.id);
+      assert.equal(inbox.length, 1);
+      const ack = await worker.callTool({
+        name: 'worker_call',
+        arguments: {
+          request: { action: 'message.ack', revision: task.revision, messageId: inbox[0].id },
+        },
+      });
+      assert.equal(ack.isError, undefined);
+      assert.equal(runtime.service.swarm.unmetTask(runtime.service.task(task.id)).length, 0);
+      const recipe = await client.callTool({
+        name: 'swarm_recipe_get',
+        arguments: { name: 'recover' },
+      });
+      assert.equal(recipe.isError, undefined);
+      assert.match(JSON.stringify(recipe.content), /Version: 1/);
       const outside = await worker.callTool({
         name: 'worker_inspect',
         arguments: { taskId: 'another-task' },

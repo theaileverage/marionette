@@ -1,5 +1,7 @@
 # Marionette design
 
+General coordination extends the existing outcome identity and synchronous record transactions. The lead chooses strategy; optional recipes provide methods. `Swarm` owns durable intent, addressed messages, decisions, experiments and attributed evaluations; `SwarmRuntime` owns bounded observation, condition probes, notification retries and adaptive admission. It shares worker/lead capacity and the supervisor's scoped shutdown. Partial ownership preserves the original delegation envelope while narrowing active writes. See [contracts and boundaries](documentation/swarm-runtime.md).
+
 ## Process boundaries
 
 ```text

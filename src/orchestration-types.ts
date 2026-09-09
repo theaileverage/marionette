@@ -15,6 +15,12 @@ export const outcomeSchema = Schema.Struct({
   objective: Schema.mutableKey(
     Schema.String.check(Schema.isMinLength(1)).check(Schema.isMaxLength(20000)),
   ),
+  originalRequest: Schema.optionalKey(
+    Schema.String.check(Schema.isMinLength(1)).check(Schema.isMaxLength(20000)),
+  ),
+  requestSource: Schema.optionalKey(
+    Schema.String.check(Schema.isMinLength(1)).check(Schema.isMaxLength(20000)),
+  ),
   scope: Schema.mutableKey(
     Schema.mutable(Schema.Array(Schema.String.check(Schema.isMinLength(1)))).check(
       Schema.isMinLength(1),

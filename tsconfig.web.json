@@ -10,5 +10,5 @@
     "types": ["node", "vite/client", "bun"],
     "lib": ["ES2022", "DOM"]
   },
-  "include": ["web/**/*.tsx"]
+  "include": ["web/**/*.tsx", "src/templates.d.ts"]
 }

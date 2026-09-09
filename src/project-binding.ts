@@ -1,3 +1,4 @@
+import { agentAccessSchema } from './agent-access.js';
 import { Schema } from 'effect';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
@@ -20,6 +21,7 @@ export const bindingSchema = Schema.Struct({
   runtime: Schema.String,
   runtimeExecutable: Schema.optional(Schema.String),
   trustWorkspaces: Schema.optional(Schema.Boolean),
+  agentAccess: Schema.optionalKey(agentAccessSchema),
   trustAgy: Schema.optional(Schema.Boolean),
   mcp: Schema.Literals(['install', 'print', 'skip']),
   ownsWorkspace: Schema.optional(Schema.Boolean),
