@@ -2,6 +2,7 @@
 import { Effect, Option, Schema } from 'effect';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { parseArgs } from 'node:util';
 import { callEffect, homePath, loadConfig } from './config.js';
 import { boundaryError, sync } from './effect-runtime.js';
 import { healthEffect as readHealthEffect } from './http-client.js';
@@ -40,7 +41,7 @@ const mainEffect = Effect.fn('main')(function* () {
     if (args.includes('--help')) {
       yield* sync('main.main', () =>
         console.log(
-          'Usage: marionette setup [--yes] [--json] [--config FILE] [--dry-run]\n  --project DIR --home DIR --name TEXT --session NAME --socket PATH --workspace ID\n  --lead codex-desktop|codex|claude|agy --lead-name TEXT --lead-profile PROFILE_ID --port NUMBER\n  --agent-access inherit|full-access (all harnesses; use config for per-harness settings)\n  --no-trust-workspaces --mcp install|print|skip --takeover --install-tools --upgrade\n  --schema prints the accepted JSON configuration. --yes accepts defaults without prompts.',
+          'Usage: marionette setup [--yes] [--json] [--config FILE] [--dry-run]\n  --project DIR --home DIR --name TEXT --session NAME --socket PATH --workspace ID\n  --lead codex-desktop|codex|claude|agy --lead-name TEXT --lead-profile PROFILE_ID --port NUMBER\n  --agent-access inherit|full-access (all harnesses; use config for per-harness settings)\n  --no-trust-workspaces --mcp install|print|skip --takeover --install-tools --upgrade\n  --takeover replaces the current lead and invalidates its credentials; init accepts the same flags.\n  --schema prints the accepted JSON configuration. --yes accepts defaults without prompts.',
         ),
       );
       return;
@@ -192,10 +193,40 @@ const mainEffect = Effect.fn('main')(function* () {
     return;
   }
   if (cmd === 'lead') {
+    const values = yield* sync(
+      'Lead.arguments',
+      () =>
+        parseArgs({
+          args: args.slice(1),
+          strict: true,
+          allowPositionals: false,
+          options: {
+            project: { type: 'string' },
+            home: { type: 'string' },
+            profile: { type: 'string' },
+            print: { type: 'boolean' },
+            help: { type: 'boolean' },
+            handover: { type: 'boolean' },
+            takeover: { type: 'boolean' },
+          },
+        }).values,
+    );
+    if (values.help) {
+      console.log(
+        'Usage: marionette lead [--project DIR] [--profile ID] [--print]\nTo replace a stale lead, run marionette setup --takeover from the project directory, then marionette lead.\nFor cooperative handover, the current lead must call lead_handover using its valid lease and save the returned lease.',
+      );
+      return;
+    }
+    if (values.handover || values.takeover)
+      return yield* boundaryError('Lead.arguments')(
+        new Error(
+          `marionette lead does not support --${values.handover ? 'handover' : 'takeover'}. To recover a stale lead, run marionette setup --takeover from the project directory, then marionette lead. This invalidates the previous lead's credentials.\nFor cooperative handover, the current lead must call lead_handover using its valid lease, save the returned lease to the project's leasePath, then rerun setup with the new --lead and --lead-name.`,
+        ),
+      );
     yield* launchLeadEffect(
-      resolve(flag('project') ?? process.cwd()),
-      args.includes('--print'),
-      flag('profile'),
+      resolve(values.project ?? process.cwd()),
+      values.print === true,
+      values.profile,
     );
     return;
   }

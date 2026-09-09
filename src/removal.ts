@@ -76,6 +76,7 @@ export interface RemovalOptions {
   all: boolean;
   stopAgents: boolean;
   keepHerdr: boolean;
+  force?: boolean;
 }
 
 export const inspectRemovalEffect = Effect.fn('Removal.inspect')(function* (
@@ -84,7 +85,10 @@ export const inspectRemovalEffect = Effect.fn('Removal.inspect')(function* (
   options: RemovalOptions,
   port: (socket: string) => HerdrPort = (socket) => new Herdr(socket),
 ) {
-  const blockers = yield* sync('Removal.preflight', () => assertRemovalReady(state, projectIds));
+  const blockers = yield* sync('Removal.preflight', () =>
+    assertRemovalReady(state, projectIds, options.force),
+  );
+  const preserved: string[] = [];
   const workspaces: WorkspaceRemoval[] = [];
   const records = new Set(
     projectRecordKeys(state, projectIds).map((row) => row.kind + ':' + row.id),
@@ -114,6 +118,12 @@ export const inspectRemovalEffect = Effect.fn('Removal.inspect')(function* (
           p.workspaceId === project.workspaceId,
       )
     ) {
+      if (options.force) {
+        target.ownsWorkspace = false;
+        target.ownsSession = false;
+        preserved.push(`Shared workspace ${project.workspaceId} retained.`);
+        continue;
+      }
       blockers.push(
         `Workspace ${project.workspaceId} is shared with another project; use --keep-herdr.`,
       );
@@ -126,6 +136,10 @@ export const inspectRemovalEffect = Effect.fn('Removal.inspect')(function* (
     if (Result.isFailure(inspection)) {
       if (!existsSync(project.socketPath)) {
         target.offline = true;
+        if (options.force) {
+          preserved.push(`Offline session ${project.session} retained.`);
+          continue;
+        }
         blockers.push(
           `Session ${project.session} is offline; start it for inspection or use --keep-herdr to retain its resources.`,
         );
@@ -157,12 +171,17 @@ export const inspectRemovalEffect = Effect.fn('Removal.inspect')(function* (
           agent.terminal_id !== pane.terminal_id ||
           (expectedSession && agent.agent_session?.value !== expectedSession)
         ) {
+          if (options.force) {
+            target.ownsWorkspace = false;
+            preserved.push(`Unverified agent in pane ${pane.pane_id} retained.`);
+            continue;
+          }
           blockers.push(
             `Pane ${pane.pane_id} contains an unverified agent; preserve it or use --keep-herdr.`,
           );
           continue;
         }
-        if (!options.stopAgents)
+        if (!options.stopAgents && !options.force)
           blockers.push(
             `Agent ${expectedName} is still open; exit it or explicitly use --stop-agents.`,
           );
@@ -183,6 +202,11 @@ export const inspectRemovalEffect = Effect.fn('Removal.inspect')(function* (
           !info.foreground_processes?.length ||
           info.foreground_processes.some((p) => p.pid !== info.shell_pid)
         ) {
+          if (options.force) {
+            target.ownsWorkspace = false;
+            preserved.push(`Busy pane ${pane.pane_id} retained.`);
+            continue;
+          }
           blockers.push(
             `Pane ${pane.pane_id} is not an idle shell; stop its command before removal.`,
           );
@@ -241,6 +265,8 @@ export const inspectRemovalEffect = Effect.fn('Removal.inspect')(function* (
     clients,
     blockers,
     keepHerdr: options.keepHerdr,
+    force: options.force === true,
+    preserved,
     records: projectRecordKeys(state, projectIds).length,
     preserveSourceFiles: true,
   };
@@ -450,6 +476,7 @@ export const removeProjectsEffect = Effect.fn('Removal.execute')(function* (
         removedProjects: plan.projects,
         clients: plan.clients,
         herdrPreserved: options.keepHerdr,
+        preserved: plan.preserved,
         sourceFilesPreserved: true,
       };
     }).pipe(Effect.scoped),

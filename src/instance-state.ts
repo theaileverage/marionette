@@ -93,7 +93,7 @@ export function projectRecordKeys(state: InstanceState, projectIds: string[]) {
     })
     .map(({ kind, id }) => ({ kind, id }));
 }
-export function assertRemovalReady(state: InstanceState, projectIds: string[]) {
+export function assertRemovalReady(state: InstanceState, projectIds: string[], force = false) {
   const keys = new Set(projectRecordKeys(state, projectIds).map((key) => key.kind + ':' + key.id));
   const blockers: string[] = [];
   for (const row of state.rows) {
@@ -105,7 +105,7 @@ export function assertRemovalReady(state: InstanceState, projectIds: string[]) {
           worktree: Schema.optional(Schema.Struct({ path: Schema.String })),
         }),
       )(JSON.parse(row.data));
-      if (!['completed', 'failed', 'cancelled'].includes(task.status))
+      if (!force && !['completed', 'failed', 'cancelled'].includes(task.status))
         blockers.push(`Task ${row.id} is ${task.status}; finish or cancel it first.`);
       if (task.worktree && existsSync(task.worktree.path))
         blockers.push(
@@ -123,7 +123,7 @@ export function assertRemovalReady(state: InstanceState, projectIds: string[]) {
       const wait = Schema.decodeUnknownSync(Schema.Struct({ state: Schema.String }))(
         JSON.parse(row.data),
       );
-      if (!['acknowledged', 'invalidated'].includes(wait.state))
+      if (!force && !['acknowledged', 'invalidated'].includes(wait.state))
         blockers.push(`Lead wait ${row.id} is ${wait.state}; acknowledge or reconcile it first.`);
     }
   }

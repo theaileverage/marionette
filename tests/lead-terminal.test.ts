@@ -182,18 +182,21 @@ for (const state of [
 }
 
 for (const kind of ['codex', 'claude', 'agy']) {
-  test(`${kind} starts with the full lead bootstrap as one argument without control characters`, async () => {
+  test(`${kind} launches with a short file reference instead of typing the full bootstrap`, async () => {
     const f = fixture();
     const prompt = leadPrompt(f.lead.projectId, "Ada O'Neil", '/state with spaces/lease.json');
     assert.ok(prompt.includes('\n'));
     const model = ['--model', 'chosen-model'];
-    const args = terminalLeadArgs(kind, model, prompt);
+    const promptPath = "/state with spaces/Ada O'Neil/leads/project-1.md";
+    const args = terminalLeadArgs(kind, model, promptPath);
     assert.deepEqual(args.slice(0, 2), model);
     if (kind === 'agy') assert.equal(args[2], '--prompt-interactive');
     assert.equal(args.length, kind === 'agy' ? 4 : 3);
-    assert.equal(args.at(-1), prompt.replace(/\r\n|[\n\r\t]/g, ' '));
-    assert.ok(args.at(-1)?.includes("Ada O'Neil"));
-    assert.ok(args.at(-1)?.includes('/state with spaces/lease.json'));
+    assert.ok(prompt.length > 1024);
+    assert.ok(Buffer.byteLength(args.join(' ')) < 512);
+    assert.ok(args.at(-1)?.includes(JSON.stringify(promptPath)));
+    assert.ok(!args.at(-1)?.includes(prompt));
+    assert.ok(args.every((arg) => !/\p{Cc}/u.test(arg)));
     const result = await Effect.runPromise(openLeadTerminalEffect(f.h, { ...f.lead, kind, args }));
     assert.equal(result.status, 'ready');
     assert.deepEqual(f.calls.find((c) => c.method === 'agent.start')?.params.args, args);

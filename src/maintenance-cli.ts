@@ -43,6 +43,7 @@ export const maintenanceCommandEffect = Effect.fn('CLI.maintenance')(function* (
           check: { type: 'boolean' },
           'stop-agents': { type: 'boolean' },
           'keep-herdr': { type: 'boolean' },
+          force: { type: 'boolean' },
           help: { type: 'boolean' },
         },
       }).values,
@@ -51,12 +52,12 @@ export const maintenanceCommandEffect = Effect.fn('CLI.maintenance')(function* (
     console.log(
       update
         ? 'Usage: marionette update|upgrade [--home DIR] [--project DIR] [--check|--dry-run] [--json]\n  --from DIR upgrades from a local built package.\n  --runtime-only leaves any global CLI package unchanged.\nUpdates all projects sharing this instance; preserves workers and rolls back a failed restart.'
-        : `Usage: marionette ${command} [--home DIR] [--yes] [--dry-run] [--json]\n${command === 'remove' ? '  --project DIR or --project-id ID selects one project.\n' : '  --global also uninstalls detected Bun/npm global CLI packages.\n'}  --stop-agents permits closing verified lead and worker panes.\n  --keep-herdr retains Herdr resources.\nActive tasks, unresolved operations and existing managed worktrees must be resolved first. Source files are preserved.`,
+        : `Usage: marionette ${command} [--home DIR] [--yes] [--dry-run] [--json]\n${command === 'remove' ? '  --project DIR or --project-id ID selects one project.\n' : '  --global also uninstalls detected Bun/npm global CLI packages.\n'}  --stop-agents permits closing verified lead and worker panes.\n  --keep-herdr retains Herdr resources.\n--force discards unfinished tasks/waits, closes verified agents and retains unverified/busy panes.\nUnresolved operations and existing managed worktrees must be resolved first, even with --force. Source files are preserved.`,
     );
     return;
   }
   const invalid = update
-    ? ['project-id', 'stop-agents', 'keep-herdr']
+    ? ['project-id', 'stop-agents', 'keep-herdr', 'force']
     : [
         'from',
         'runtime-only',
@@ -218,6 +219,7 @@ export const maintenanceCommandEffect = Effect.fn('CLI.maintenance')(function* (
     all,
     stopAgents: values['stop-agents'] === true,
     keepHerdr: values['keep-herdr'] === true,
+    force: values.force === true,
   };
   const plan = { ...(yield* inspectRemovalEffect(state, ids, options)), globalPackages: globals };
   if (values['dry-run']) {
@@ -227,9 +229,22 @@ export const maintenanceCommandEffect = Effect.fn('CLI.maintenance')(function* (
   if (plan.blockers.length)
     return yield* new AppError({
       code: 'removal_blocked',
-      message: plan.blockers.join('\n'),
+      message:
+        plan.blockers.join('\n') +
+        (options.force
+          ? ''
+          : '\nUse --force to discard unfinished tasks/waits and close verified agents while preserving unverified panes. Review with --force --dry-run first.'),
       status: 409,
     });
+  if (interactive && options.force)
+    prompts.log.warn(
+      options.keepHerdr
+        ? 'Force removal discards unfinished task/wait records. All Herdr terminals are retained.'
+        : 'Force removal discards unfinished task/wait records and closes verified agents. Unverified or busy panes are retained. Use --keep-herdr to retain all terminals.',
+      { output: process.stderr },
+    );
+  if (interactive && plan.preserved.length)
+    prompts.note(plan.preserved.join('\n'), 'Retained resources', { output: process.stderr });
   if (interactive)
     prompts.note(
       `${plan.projects.map((p) => p.name + ' — ' + p.root).join('\n')}\n${plan.records} stored records will be deleted.\n${all ? 'The instance state, logs, saved runtimes, archives and recovery backups will be deleted.' : 'Shared state and MCP registrations remain while other projects use them.'}\n${globals.length} global CLI package(s) will be removed.\nProject source files are preserved.`,
@@ -247,7 +262,7 @@ export const maintenanceCommandEffect = Effect.fn('CLI.maintenance')(function* (
   if (json) print({ ok: true, ...result, globalPackages: removed });
   else
     console.log(
-      `${all ? 'Marionette instance uninstalled' : 'Project removed from Marionette'}. Source files preserved.${globals.length ? ' Global CLI packages removed.' : ''}`,
+      `${all ? 'Marionette instance uninstalled' : 'Project removed from Marionette'}. Source files preserved.${globals.length ? ' Global CLI packages removed.' : ''}${result.preserved.length ? '\n' + result.preserved.join('\n') : ''}`,
     );
 }, Effect.scoped);
 const confirmRemovalEffect = Effect.fn('Removal.confirm')(function* (

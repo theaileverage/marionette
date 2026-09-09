@@ -212,3 +212,132 @@ test('MCP names use readable project and lead slugs with bounded safe characters
   assert.match(mcpServerName('项目', '✨'), /^[a-z0-9-]+$/);
   assert.ok(mcpServerName('project'.repeat(30), 'lead'.repeat(30)).length <= 60);
 });
+
+test('setup and init both accept explicit takeover and preserve the chosen lead', () => {
+  const root = fixture();
+  for (const command of ['setup', 'init']) {
+    const output = execFileSync(
+      process.execPath,
+      [
+        'src/cli.ts',
+        command,
+        '--project',
+        root,
+        '--lead',
+        'codex',
+        '--lead-name',
+        'Mendy',
+        '--takeover',
+        '--dry-run',
+      ],
+      { encoding: 'utf8' },
+    );
+    const plan = JSON.parse(output);
+    assert.equal(plan.takeover, true);
+    assert.equal(plan.lead, 'codex');
+    assert.equal(plan.leadName, 'Mendy');
+    assert.equal(existsSync(resolve(root, '.marionette')), false);
+  }
+});
+
+test('lead recovery provides a shell-safe command with the selected project and lead', async () => {
+  const { leadRecoveryInstructions } = await import('../src/setup.js');
+  const root = fixture();
+  const recovery = leadRecoveryInstructions(root, resolve(root, 'state'), 'codex', "Mendy's lead");
+  const command = recovery.split('\n')[1].replace('marionette setup', 'setup');
+  const result = execFileSync(
+    '/bin/sh',
+    ['-c', 'exec "$1" src/cli.ts ' + command + ' --dry-run', 'test', process.execPath],
+    { encoding: 'utf8' },
+  );
+  const plan = JSON.parse(result);
+  assert.equal(plan.takeover, true);
+  assert.equal(plan.leadName, "Mendy's lead");
+  assert.equal(plan.root, root);
+  assert.match(recovery, /lead_handover/);
+  assert.match(recovery, /invalidates/);
+});
+
+test('a stale saved lead reports the exact recovery command without acquiring control', async () => {
+  const { Effect } = await import('effect');
+  const { initConfig } = await import('../src/config.js');
+  const { launchLeadEffect } = await import('../src/setup.js');
+  const root = fixture();
+  const home = resolve(root, 'state');
+  mkdirSync(home);
+  const store = new Store(resolve(home, 'state.sqlite'));
+  onTestFinished(() => store.close());
+  const service = new Service(store, () => ({ call: async () => ({}) }));
+  const project = await service.invoke('project.register', {
+    name: 'Test',
+    root,
+    session: 'test',
+    socketPath: '/tmp/test.sock',
+    workspaceId: 'w1',
+  });
+  const old = await service.invoke('lead.acquire', {
+    projectId: project.id,
+    owner: 'Mendy',
+    agent: 'codex',
+    expectedEpoch: 0,
+    reason: 'setup',
+  });
+  await service.invoke('lead.acquire', {
+    projectId: project.id,
+    owner: 'Mendy',
+    agent: 'codex',
+    expectedEpoch: 1,
+    takeover: true,
+    reason: 'another session',
+  });
+  const calls: string[] = [];
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    async fetch(request) {
+      const body = await request.json();
+      calls.push(body.action);
+      return Response.json({ result: await service.invoke(body.action, body.input) });
+    },
+  });
+  onTestFinished(() => server.stop(true));
+  initConfig(home, server.port!);
+  const leasePath = resolve(home, 'leads', project.id + '.json');
+  privateJson(leasePath, old.lease);
+  privateJson(resolve(root, '.marionette/project.json'), {
+    root,
+    home,
+    projectId: project.id,
+    leasePath,
+    lead: 'codex',
+    leadName: 'Mendy',
+  });
+  await assert.rejects(Effect.runPromise(launchLeadEffect(root, true)), (error: Error) => {
+    assert.match(error.message, /saved lead no longer controls/);
+    assert.match(error.message, /marionette setup --project/);
+    assert.match(error.message, /--takeover/);
+    return true;
+  });
+  assert.deepEqual(calls, ['project.briefing']);
+  assert.deepEqual(JSON.parse(readFileSync(leasePath, 'utf8')), old.lease);
+});
+
+test('lead rejects recovery flags and unknown options before loading project state', () => {
+  for (const option of ['--handover', '--takeover', '--typo', '--project']) {
+    const result = Bun.spawnSync([process.execPath, 'src/cli.ts', 'lead', option], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    assert.notEqual(result.exitCode, 0);
+    const output = result.stderr.toString();
+    if (option === '--handover' || option === '--takeover') {
+      assert.match(output, /marionette setup --takeover/);
+      assert.match(output, /current lead must call lead_handover/);
+    } else assert.match(output, /Unknown option|argument missing/);
+    assert.doesNotMatch(output, /saved lead no longer controls/);
+  }
+  const help = execFileSync(process.execPath, ['src/cli.ts', 'lead', '--help'], {
+    encoding: 'utf8',
+  });
+  assert.match(help, /Usage: marionette lead/);
+});
