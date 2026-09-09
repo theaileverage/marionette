@@ -1,5 +1,11 @@
 # Verification record
 
+## Release 0.5.0 preparation (9 September 2026)
+
+The final `bun pm pack` gate passed all **225 tests across 24 files**, TypeScript checks, lint, the supervisor lifecycle check, and the production build. Formatting, release metadata validation, and the isolated tarball installation smoke check passed; the installed CLI reports `0.5.0`, and the standalone Herdr SDK and declarations work without development dependencies.
+
+Release validation exposed an intermittent concurrent Git worktree creation failure involving a sibling's incomplete `commondir` metadata. Creation, validation, and cleanup removal now share a per-repository Effect semaphore without retrying mutations. Cleanup rechecks authority, consumers, repository identity, branch, HEAD, and dirtiness after waiting; it writes the durable removal phase immediately before the attempt. The strengthened three-worktree regression passed six consecutive runs, core tests passed 38/38, targeted cleanup tests passed 4/4, and independent review found no remaining blocker in the final fix.
+
 ## User-configured harness access — local implementation (9 September 2026)
 
 The full suite passed **225 tests across 24 files**. TypeScript checks, lint, formatting, production build, and the standalone supervisor lifecycle check passed. Both HTTP/STDIO integration tests also passed against the production CLI and MCP bundles, including the 68-tool catalog and persistence through `project_configure`.

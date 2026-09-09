@@ -1,13 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — 2026-09-09
 
 - Add per-harness `agentAccess` configuration for Codex, Claude Code, and AGY. Setup and leased project configuration support native `inherit` or explicit `full-access` for new terminal leads and workers, with conflicting launch-argument validation.
+- Serialize managed worktree creation and validation within each Git repository so concurrent workers cannot observe partially written Git metadata.
 - Add original intent capture, attributed amendments, durable worker instructions with scoped acknowledgement, and explicitly resolved decisions across multiple objectives.
 - Add atomic graph dispatch, partial coordinator ownership, optional adaptive host/provider capacity and selected-context messaging.
 - Add fresh supervision observations, durable external conditions, isolated experiments with common checks and evidence-backed selection, and separate delivery expectations.
 - Add attributed trajectories, an adapter-driven six-scenario evaluation suite, and seven versioned optional workflow recipes. Dashboard UI is unchanged.
-
 - Give Codex workers a required, task-scoped STDIO MCP connection for inspection and reporting, with startup connectivity validation and explicit CLI permission recovery. Keep attempt authentication and sandbox settings intact.
 - Preserve continuation when Herdr omits a launch name but the pinned native session still matches. Return machine-readable MCP failure status and require confirmation of wait registration.
 - Validate dispatch path/revision/timeout requirements early, return fresh tree revisions, support explicit read-only reviewers without write ownership, and repair outcome scope without duplicate outcomes.

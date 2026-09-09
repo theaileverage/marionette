@@ -1,10 +1,26 @@
-import { Effect } from 'effect';
+import { Effect, Semaphore } from 'effect';
 import { existsSync, mkdirSync, realpathSync, statSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { sync } from './effect-runtime.js';
 import { inside, safePath } from './files.js';
 import { execEffect } from './process.js';
 import { AppError, type ManagedWorktree, type Task } from './types.js';
+
+const worktreeLocks = new Map<string, Semaphore.Semaphore>();
+
+/** Git exposes partially written worktree metadata, so serialize readers with mutations per repository. */
+export const withWorktreeLock = <A, E, R>(
+  commonDir: string,
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> =>
+  Effect.suspend(() => {
+    let lock = worktreeLocks.get(commonDir);
+    if (!lock) {
+      lock = Semaphore.makeUnsafe(1);
+      worktreeLocks.set(commonDir, lock);
+    }
+    return lock.withPermits(1)(effect);
+  });
 
 export const gitEffect = Effect.fn('Worktree.git')(
   function* (cwd: string, args: string[]) {
@@ -68,7 +84,7 @@ export const planWorktreeEffect = Effect.fn('Worktree.plan')(function* (
 });
 
 /** Validate Git's registration as well as the checkout; never adopt an arbitrary directory. */
-export const validateWorktreeEffect = Effect.fn('Worktree.validate')(function* (
+const validateWorktreeUnlockedEffect = Effect.fn('Worktree.validateUnlocked')(function* (
   w: ManagedWorktree,
   requireClean = false,
 ) {
@@ -120,20 +136,32 @@ export const validateWorktreeEffect = Effect.fn('Worktree.validate')(function* (
   return cwd;
 });
 
+export const validateWorktreeEffect = Effect.fn('Worktree.validate')(
+  (w: ManagedWorktree, requireClean = false) =>
+    withWorktreeLock(w.commonDir, validateWorktreeUnlockedEffect(w, requireClean)),
+);
+
 /** Called only after state=creating is durable. Never force, reset, prune, or delete work. */
-export const createWorktreeEffect = Effect.fn('Worktree.create')(function* (w: ManagedWorktree) {
-  yield* sync('Worktree.mkdir', () => mkdirSync(dirname(w.path), { recursive: true, mode: 0o700 }));
-  yield* gitEffect(w.repositoryRoot, [
-    'worktree',
-    'add',
-    '-b',
-    w.branch,
-    '--',
-    w.path,
-    w.baseCommit,
-  ]);
-  return yield* validateWorktreeEffect(w, true);
-});
+export const createWorktreeEffect = Effect.fn('Worktree.create')((w: ManagedWorktree) =>
+  withWorktreeLock(
+    w.commonDir,
+    Effect.gen(function* () {
+      yield* sync('Worktree.mkdir', () =>
+        mkdirSync(dirname(w.path), { recursive: true, mode: 0o700 }),
+      );
+      yield* gitEffect(w.repositoryRoot, [
+        'worktree',
+        'add',
+        '-b',
+        w.branch,
+        '--',
+        w.path,
+        w.baseCommit,
+      ]);
+      return yield* validateWorktreeUnlockedEffect(w, true);
+    }),
+  ),
+);
 
 export const planWorktree = (task: Task, stateRoot: string) =>
   Effect.runPromise(planWorktreeEffect(task, stateRoot));

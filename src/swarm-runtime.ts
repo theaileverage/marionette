@@ -58,7 +58,7 @@ export class SwarmRuntime {
   recover() {
     for (const w of this.s.store.all<Watch>('swarm-watch'))
       if (w.state === 'checking') {
-        // Conditions are explicitly registered read-only probes; no actions are replayed.
+        // Authors must supply repeatable queries; restart re-runs an interrupted probe.
         this.s.store.put<Watch>('swarm-watch', w.id, {
           ...w,
           state: 'waiting',
