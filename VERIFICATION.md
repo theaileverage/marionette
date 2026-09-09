@@ -1,5 +1,15 @@
 # Verification record
 
+## Dispatch and reporting recovery — local 0.4.0 patch (9 September 2026)
+
+The full suite passed 198 tests across 21 files. An additional focused transport-recovery regression subsequently passed, bringing the tested set to 199 tests. TypeScript and lint checks, formatting, runtime lifecycle checks, and the production build passed. The HTTP/STDIO integration tests also passed against the production CLI and MCP bundles.
+
+New coverage verifies task-scoped worker MCP startup and authorization, report receipts after completion, no automatic mutation replay on transport failure, actionable schema/revision errors, read-only assignments, contained JSON report artifacts, in-place outcome scope repair, and continuation identity when Herdr omits a launch name. Missing names still require the pinned native session plus matching pane, terminal, workspace and agent kind. The installed Codex CLI accepted the generated per-session MCP configuration without changing sandbox permissions or putting worker credentials in arguments.
+
+The Menderly incident's localhost failure was reproduced inside the command sandbox while an approved request reached the healthy supervisor. The local patched runtime replaced its 0.3.0 supervisor through the normal runtime updater. Before/after comparison confirmed identical project and lead records, task IDs/statuses/revisions/run IDs, outcome revisions/statuses, and waits. Both existing native agent sessions and terminal IDs survived. A recovery checkpoint, pinned-session lead wait, and same-session worker reply were then recorded through Marionette. The continuation was delivered to the original lead, and the worker resumed at revision 3 with its original run ID. Existing workers require the normal exact-command CLI approval fallback; the scoped MCP configuration applies to newly launched Codex workers.
+
+The existing worker then executed the updated `worker-call` inspection through its normal approval path with exit code 0, confirmed revision 3, and continued inspecting its assigned source. This verifies recovery of the incident's actual worker transport as well as the lead continuation. It does not claim that Menderly's iii removal or publication completed, or that these changes have been published as a package release.
+
 ## Project lifecycle and prompt templates — 0.4.0 local acceptance
 
 Verified locally on macOS arm64 with Bun 1.3.14. The complete suite passed **189 tests across 20 files**. New coverage includes instance-wide runtime and MCP migration, rollback after failed startup, project removal and shared-resource preservation, native workspace trust restoration, missing-workspace recovery, terminal-lead reuse, and literal Mustache rendering for lead and worker instructions.

@@ -28,6 +28,14 @@ const fail = (code: string, message: string): never => {
 const text = Schema.Trim.check(Schema.isMinLength(1));
 export class Orchestration {
   constructor(public s: Service) {}
+  scopePath(projectId: string, path: string) {
+    if (/[?*[\]\r\n]/.test(path))
+      fail(
+        'outcome_scope',
+        `Invalid outcome.scope path ${JSON.stringify(path)}. Use file paths or directory prefixes ("src", not "src/**"), never prose.`,
+      );
+    return safePath(this.s.project(projectId).root, path);
+  }
   probeProfile = probeProfileEffect;
   discoverModels = discoverModelsEffect;
   migrateLegacyTasks() {
@@ -151,7 +159,15 @@ export class Orchestration {
   }
   evidencePath(projectId: string, reference: string) {
     const taskReference = /^task:([^:]+):(.+)$/.exec(reference);
-    if (!taskReference) return safePath(this.s.project(projectId).root, reference, true);
+    if (!taskReference) {
+      const path = safePath(this.s.project(projectId).root, reference);
+      if (!digest(path))
+        fail(
+          'evidence_file',
+          `Evidence reference ${JSON.stringify(reference)} must be an existing regular file inside the project. Conversation labels and user-message IDs are not files; cite a saved artifact or record concrete evidence first.`,
+        );
+      return path;
+    }
     const t = this.s.task(taskReference[1]);
     if (t.projectId !== projectId)
       fail('evidence_scope', 'Evidence task belongs to another project');
@@ -333,8 +349,16 @@ export class Orchestration {
     return updated;
   }
   checkRevision(o: Outcome, expected: number | undefined) {
-    if (Schema.decodeUnknownSync(Schema.Finite.check(Schema.isInt()))(expected) !== o.revision)
-      fail('tree_revision', 'The task tree changed. Refresh and evaluate the current revision.');
+    if (expected === undefined)
+      fail(
+        'tree_revision_required',
+        `expectedTreeRevision (or expectedRevision for outcome actions) is required for outcome ${o.id}. Read outcome_get: the current revision is ${o.revision}.`,
+      );
+    if (expected !== o.revision)
+      fail(
+        'tree_revision',
+        `The task tree changed. Outcome ${o.id} is at revision ${o.revision}, received ${expected}. Refresh outcome_get and evaluate the current revision before retrying.`,
+      );
   }
   references(projectId: string, paths: string[]) {
     return Schema.decodeSync(Schema.mutable(Schema.Array(text)).check(Schema.isMinLength(1)))(
@@ -453,7 +477,10 @@ export class Orchestration {
             ),
           )
         )
-          fail('outcome_scope', 'Task ownership exceeds the outcome scope');
+          fail(
+            'outcome_scope',
+            `Task ownership ${JSON.stringify(owned)} exceeds outcome ${o.id} scope ${JSON.stringify(o.scope)}. Scope must contain file paths or directory prefixes, not prose. Use outcome_revise with scope and a reason to correct the existing outcome; preserve its criteria.`,
+          );
       this.changed(
         o.id,
         assignment.planReason ?? `Added required work: ${task.title}`,
@@ -466,7 +493,7 @@ export class Orchestration {
         id: randomUUID(),
         projectId: task.projectId,
         objective: task.prompt,
-        scope: task.ownership.map((p) => safePath(task.cwd, p)),
+        scope: task.readOnly ? [task.cwd] : task.ownership.map((p) => safePath(task.cwd, p)),
         category: 'software',
         criteria: task.checks.map((c, i) => ({
           id: `check-${i + 1}`,
@@ -491,7 +518,7 @@ export class Orchestration {
       task.profileId = task.resolvedProfile.id;
       task.model = task.resolvedProfile.model;
       task.reasoning = task.resolvedProfile.reasoning;
-      task.canDelegate ??= task.resolvedProfile.canDelegate;
+      task.canDelegate ??= task.readOnly ? false : task.resolvedProfile.canDelegate;
     }
     if (task.model && !task.resolvedProfile)
       fail(
@@ -697,6 +724,7 @@ export class Orchestration {
           raw.action === 'inspect'
             ? task.revision
             : Schema.decodeUnknownSync(Schema.Finite.check(Schema.isInt()))(raw.revision),
+          raw.action === 'inspect',
         ),
       );
       const descendants = yield* sync('Orchestration.workerAction', () => this.descendants(t.id));
@@ -924,7 +952,7 @@ export class Orchestration {
               if (i.projectId !== c.projectId) fail('project_mismatch', 'Outcome and lead differ');
               if (new Set(i.criteria.map((c) => c.id)).size !== i.criteria.length)
                 fail('criteria_ids', 'Criterion IDs must be unique');
-              for (const p of i.scope) safePath(this.s.project(c.projectId).root, p);
+              for (const p of i.scope) this.scopePath(c.projectId, p);
               return this.s.idempotent(c.projectId, 'outcome:' + i.key, i, () => {
                 const { key: _key, ...fields } = i;
                 const o: Outcome = {
@@ -1006,15 +1034,38 @@ export class Orchestration {
             if (o.projectId !== c.projectId) fail('project_mismatch', 'Outcome and lead differ');
             this.checkRevision(o, raw.expectedRevision);
             if (action === 'outcome.revise') {
-              const criteria = Schema.decodeUnknownSync(
-                  Schema.mutable(Schema.Array(criterionSchema)).check(Schema.isMinLength(1)),
-                )(raw.criteria),
+              const criteria =
+                  raw.criteria === undefined
+                    ? o.criteria
+                    : Schema.decodeUnknownSync(
+                        Schema.mutable(Schema.Array(criterionSchema)).check(Schema.isMinLength(1)),
+                      )(raw.criteria),
                 reason = Schema.decodeUnknownSync(text)(raw.reason);
+              const scope =
+                raw.scope === undefined
+                  ? o.scope
+                  : Schema.decodeUnknownSync(outcomeSchema.fields.scope)(raw.scope);
+              for (const path of scope) this.scopePath(c.projectId, path);
+              for (const task of this.s.tasks(c.projectId).filter((t) => t.outcomeId === o.id))
+                for (const owned of task.ownership)
+                  if (
+                    !scope.some((path) =>
+                      inside(
+                        this.scopePath(c.projectId, path),
+                        safePath(task.worktree?.sourceCwd ?? task.cwd, owned),
+                      ),
+                    )
+                  )
+                    fail(
+                      'outcome_scope',
+                      `Revised scope would exclude task ${task.id} ownership ${JSON.stringify(owned)}. Preserve existing task boundaries.`,
+                    );
               if (new Set(criteria.map((c) => c.id)).size !== criteria.length)
                 fail('criteria_ids', 'Criterion IDs must be unique');
               const updated: Outcome = {
                 ...o,
                 criteria,
+                scope,
                 revision: o.revision + 1,
                 status: 'open',
                 integrated: undefined,

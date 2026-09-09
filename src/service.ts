@@ -1,7 +1,7 @@
 import { Effect, Schema } from 'effect';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { realpathSync, statSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import { Cleanup } from './cleanup.js';
 import { Continuation } from './continuation.js';
 import { BoundaryError, herdrCall, sync } from './effect-runtime.js';
@@ -1052,6 +1052,13 @@ export class Service {
   }
   submitAssignment(rawAssignment: Schema.Codec.Encoded<typeof assignmentSchema>, c: Credentials) {
     const a = Schema.decodeSync(assignmentSchema)(rawAssignment);
+    if (a.readOnly ? a.ownership.length > 0 || a.canDelegate : a.ownership.length === 0)
+      throw new AppError({
+        code: 'ownership_required',
+        message:
+          'Writers must supply at least one ownership path. For a read-only reviewer, set readOnly: true, ownership: [], and canDelegate: false.',
+        status: 400,
+      });
     if (c.projectId !== a.projectId)
       throw new AppError({
         code: 'project_mismatch',
@@ -1083,7 +1090,7 @@ export class Service {
       if (/[?*[\]]/.test(path))
         throw new AppError({
           code: 'ownership_path',
-          message: 'Ownership must name files or directory prefixes, not globs',
+          message: `assignment.ownership contains ${JSON.stringify(path)}. Use files or directory prefixes, not globs (for example "src", not "src/**").`,
           status: 400,
         });
       safePath(cwd, path);
@@ -1113,7 +1120,7 @@ export class Service {
           status: 400,
         });
     }
-    return this.store.transaction(() =>
+    const submitted = this.store.transaction(() =>
       this.idempotent(a.projectId, 'submit:' + a.key, a, () => {
         const { key: _key, ...fields } = a;
         const task: Task = {
@@ -1134,6 +1141,12 @@ export class Service {
         return task;
       }),
     );
+    return {
+      ...submitted,
+      treeRevision: submitted.outcomeId
+        ? this.orchestration.outcome(submitted.outcomeId).revision
+        : undefined,
+    };
   }
   closeQuestions(taskId: string, answer: string) {
     for (const q of this.store
@@ -1141,7 +1154,7 @@ export class Service {
       .filter((q) => q.taskId === taskId && !q.answeredAt))
       this.store.put('question', q.id, { ...q, answer, answeredAt: now() });
   }
-  workerGuard(taskId: string, token: string, revision: number) {
+  workerGuard(taskId: string, token: string, revision: number, inspect = false) {
     const t = this.task(taskId),
       r = t.runId ? this.store.get<Run>('run', t.runId) : undefined;
     this.cleanup.assertMutable(t);
@@ -1151,7 +1164,10 @@ export class Service {
         message: 'Invalid or obsolete worker token',
         status: 401,
       });
-    if (terminalStates.has(t.status) || revision !== t.revision || r.phase === 'stopped')
+    if (
+      !inspect &&
+      (terminalStates.has(t.status) || revision !== t.revision || r.phase === 'stopped')
+    )
       throw new AppError({
         code: 'stale_report',
         message: 'Report belongs to an obsolete assignment revision',
@@ -1179,10 +1195,18 @@ export class Service {
         });
       for (const path of i.artifacts) {
         const resolved = safePath(t.cwd, path, true);
-        if (!t.ownership.some((owned) => inside(safePath(t.cwd, owned), resolved)))
+        const reportArtifact =
+          resolved.endsWith('.json') &&
+          inside(resolve(t.cwd, '.marionette-reports', t.id), resolved) &&
+          statSync(resolved).isFile();
+        if (
+          !reportArtifact &&
+          !t.ownership.some((owned) => inside(safePath(t.cwd, owned), resolved))
+        )
           throw new AppError({
             code: 'artifact_ownership',
-            message: 'Reported artifacts must belong to this assignment',
+            message:
+              'Reported artifacts must belong to this assignment or be JSON files in its reserved .marionette-reports/<taskId>/ directory',
             status: 400,
           });
       }

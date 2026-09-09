@@ -1,10 +1,9 @@
 #!/usr/bin/env bun
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { Effect, Latch } from 'effect';
+import { Effect } from 'effect';
 import { z } from 'zod';
 import { callEffect, homePath } from './config.js';
-import { sdk } from './effect-runtime.js';
+import { serveMcpEffect } from './mcp-transport.js';
 import {
   assignmentSchema,
   checkSchema,
@@ -21,6 +20,7 @@ import {
   waitSchema,
 } from './mcp-schemas.js';
 import { leadContract } from './prompts.js';
+import { mcpResult } from './mcp-result.js';
 import { VERSION } from './version.js';
 const i = process.argv.indexOf('--home'),
   home = homePath(i >= 0 ? process.argv[i + 1] : undefined);
@@ -44,22 +44,7 @@ function tool(
       inputSchema,
       annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly, openWorldHint: false },
     },
-    (input: any) =>
-      Effect.runPromise(
-        callEffect(home, action, input).pipe(
-          Effect.match({
-            onSuccess: (result) =>
-              ({
-                content: [{ type: 'text', text: JSON.stringify(result) }],
-              }) satisfies import('@modelcontextprotocol/sdk/types.js').CallToolResult,
-            onFailure: (error) =>
-              ({
-                isError: true,
-                content: [{ type: 'text', text: String(error) }],
-              }) satisfies import('@modelcontextprotocol/sdk/types.js').CallToolResult,
-          }),
-        ),
-      ),
+    (input: any) => mcpResult(callEffect(home, action, input)),
   );
 }
 tool(
@@ -129,7 +114,7 @@ tool(
 tool(
   'task_submit',
   'task.submit',
-  'Persist and queue a bounded assignment. Choose execution: {mode: "worktree", baseRef?: "main"} for potential concurrent file conflicts; Marionette creates an isolated branch and checkout from committed Git history before launch. Omit execution or use {mode: "shared"} to use cwd/project root with ownership serialization. Reuse the same key only for identical retries. Returns immediately, independently of preparation and execution.',
+  'Persist and queue a bounded assignment. For a simple root task, omit outcomeId: an outcome is created atomically from prompt, ownership and checks. With an existing outcomeId/parentId, supply its current expectedTreeRevision. Returns task.outcomeId and the updated treeRevision. Ownership uses files/prefixes, never globs; a read-only reviewer uses readOnly: true and ownership: []. Check timeouts are at most 120000 ms. Choose shared/worktree execution with the user when required by the conflict policy. Reuse a key only for identical retries. Returns before preparation and execution.',
   { lease: credentialsSchema, assignment: assignmentSchema },
 );
 tool(
@@ -231,12 +216,13 @@ tool(
 tool(
   'outcome_revise',
   'outcome.revise',
-  'Revise completion criteria with a mandatory reason. Invalidates old acceptance evidence and records the original contract.',
+  'Correct an existing outcome scope or revise criteria with a mandatory reason. Omitted criteria are preserved. Scope must keep all existing task ownership. Invalidates old evidence and records the original contract; do not create a duplicate outcome to repair a path mistake.',
   {
     lease: credentialsSchema,
     outcomeId: z.string(),
     expectedRevision: z.number().int(),
-    criteria: z.array(criterionSchema).min(1),
+    criteria: z.array(criterionSchema).min(1).optional(),
+    scope: outcomeSchema.shape.scope.optional(),
     reason: z.string().min(1),
   },
 );
@@ -496,30 +482,4 @@ tool(
     deleteBranch: z.boolean().optional(),
   },
 );
-const main = Effect.fn('Mcp.serve')(function* () {
-  const closed = yield* Latch.make();
-  server.server.onclose = () => {
-    closed.openUnsafe();
-  };
-  yield* Effect.acquireRelease(
-    sdk('Mcp.connect', () => server.connect(new StdioServerTransport())),
-    () => sdk('Mcp.close', () => server.close()).pipe(Effect.orDie),
-  );
-  yield* Effect.acquireRelease(
-    Effect.sync(() => {
-      const stop = () => {
-        closed.openUnsafe();
-      };
-      process.once('SIGINT', stop);
-      process.once('SIGTERM', stop);
-      return stop;
-    }),
-    (stop) =>
-      Effect.sync(() => {
-        process.off('SIGINT', stop);
-        process.off('SIGTERM', stop);
-      }),
-  );
-  yield* closed.await;
-}, Effect.scoped);
-await Effect.runPromise(main());
+await Effect.runPromise(serveMcpEffect(server));

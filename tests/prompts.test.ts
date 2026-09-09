@@ -83,6 +83,21 @@ function workerContext(): WorkerPromptContext {
   };
 }
 
+test('Codex workers prefer scoped MCP and retain an explicit approved CLI recovery path', () => {
+  const context = workerContext();
+  context.workerMcp = true;
+  context.task.readOnly = true;
+  context.task.ownership = [];
+  const prompt = renderWorkerPrompt(context);
+  assert.ok(prompt.includes('worker_inspect with {}'));
+  assert.ok(prompt.includes('Prefer worker_report through MCP'));
+  assert.ok(prompt.includes('sandbox_permissions="require_escalated"'));
+  assert.ok(prompt.includes('You own no source paths'));
+  assert.equal(prompt.includes('Own only these paths'), false);
+  assert.ok(leadContract.includes('Never use Boolean(response) as success'));
+  assert.ok(leadContract.includes('Do not create, assess, or integrate an intake outcome'));
+});
+
 test('worker template preserves literal assignment data and only grants configured capabilities', () => {
   const context = workerContext();
   const prompt = renderWorkerPrompt(context);

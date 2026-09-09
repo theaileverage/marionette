@@ -86,6 +86,8 @@ State defaults to `~/.local/share/marionette` (or `$XDG_DATA_HOME/marionette`), 
 
 Herdr leads can resume from meaningful worker events. **Idle Codex desktop conversations resume on your next message**; the dashboard and durable inbox retain updates meanwhile.
 
+Codex workers receive a task-scoped STDIO MCP server at launch for inspection and reporting. It uses the existing worker credential and checks connectivity before startup succeeds, without granting network access to sandboxed shell commands. Older sessions and other runtimes retain the worker CLI; transport failures explain the normal permission path.
+
 ## Agent skill and SDK
 
 Copy [skills/marionette](skills/marionette/SKILL.md) into your agent's skill directory for coordination and recovery guidance.

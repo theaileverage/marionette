@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Give Codex workers a required, task-scoped STDIO MCP connection for inspection and reporting, with startup connectivity validation and explicit CLI permission recovery. Keep attempt authentication and sandbox settings intact.
+- Preserve continuation when Herdr omits a launch name but the pinned native session still matches. Return machine-readable MCP failure status and require confirmation of wait registration.
+- Validate dispatch path/revision/timeout requirements early, return fresh tree revisions, support explicit read-only reviewers without write ownership, and repair outcome scope without duplicate outcomes.
+- Simplify the single-task lead workflow and remove intake-outcome bookkeeping. Allow worker JSON reports in their already-reserved reporting directory, and retain inspection access after completion for uncertain-delivery recovery.
+
 ## 0.4.0 — 2026-09-08
 
 - Add interactive setup with editable defaults, required-tool preflight, explicit installation options, and recovery for missing Herdr workspaces without losing project identity or history.

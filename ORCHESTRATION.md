@@ -1,8 +1,12 @@
-# Outcome orchestration in 0.2
+# Outcome orchestration
 
 A lead defines observable criteria, dispatches bounded work, waits for meaningful events, and evaluates the integrated result. Marionette persists and enforces that contract across the full delegation tree. The same authenticated service implements CLI, MCP, and dashboard actions.
 
+For a single bounded task, `task.submit` can create the outcome atomically from the assignment prompt, ownership, and checks. Omit `outcomeId` in that case. Its response includes `outcomeId` and `treeRevision`; retain both. Do not create an outcome merely to receive the user's request.
+
 ## Establish the outcome
+
+Scope entries are repository-relative file paths or directory prefixes, not prose or globs. A mistaken scope can be corrected through `outcome.revise` with a current revision, replacement `scope`, and a reason; omitted criteria are preserved. The replacement must still contain existing task ownership.
 
 Save an input file containing:
 
@@ -64,9 +68,11 @@ Outcome `maxTurns` is 1–1000 (default 60), shared by all worker dispatches, pa
 
 ## Wait without model polling
 
+MCP errors set `isError: true` and return JSON with `ok: false` and an error code/message. Successful results retain their existing text shape and also expose `structuredContent: {ok: true, result: ...}`. Check the error flag and confirm the returned wait ID/state before yielding; a truthy response object is not proof of success.
+
 `lead.wait` persists a unique `key`, `outcomeId`, a condition, and an adapter. Conditions support task `all`/`any`/`quorum`, strategy quorum, answered questions, and intervention events. Failed/cancelled results can trigger a continuation; they never count as successful outcome completion. Routine events are grouped, while blocking questions and findings can trigger prompt intervention.
 
-A Herdr adapter pins `paneId`, `terminalId`, `name`, `kind`, and the observed `nativeSession`. Only use identifiers obtained from the explicitly selected session. The supervisor verifies the original identity and current lead ownership, waits for readiness and capacity, then appends one compact delivery with a durable ID. Busy or blocked leads retain their queued delivery. Restart during ambiguous delivery produces `uncertain`, requiring inspection and `lead.reconcile`; it does not replay automatically. Handover fences the old lead and requires a fresh wait for the receiving session.
+A Herdr adapter pins `paneId`, `terminalId`, `kind`, and the observed `nativeSession`. `name` is optional when the native conversation is pinned: Herdr can discard a launch name after startup. Without a native session, the exact launch name remains required. Only use identifiers obtained from the explicitly selected session. The supervisor verifies the original identity and current lead ownership, waits for readiness and capacity, then appends one compact delivery with a durable ID. Busy or blocked leads retain their queued delivery. Restart during ambiguous delivery produces `uncertain`, requiring inspection and `lead.reconcile`; it does not replay automatically. Handover fences the old lead and requires a fresh wait for the receiving session.
 
 For Codex desktop or another client without a supported injection API, use `{ "type": "next-message" }`. `lead.pending` retrieves the durable message on the user's next turn; `lead.ack` acknowledges it. MCP alone cannot wake an idle desktop conversation. `adapter.capabilities` states the supported boundary.
 

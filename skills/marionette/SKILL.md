@@ -9,7 +9,7 @@ Marionette is a persistent supervisor for agent CLIs in Herdr. Leads use a fence
 
 ## Connect and establish context
 
-Prefer connected Marionette MCP tools. MCP names use underscores (`project_briefing`); CLI action names use dots (`project.briefing`). Read the tool's input schema before constructing a call.
+Prefer connected Marionette MCP tools. MCP names use underscores (`project_briefing`); CLI action names use dots (`project.briefing`). Read the tool's input schema before constructing a call. Check `isError` before consuming every response; an error response is still a truthy object. `structuredContent.ok` also states success. Never use `Boolean(response)` to infer success.
 
 For CLI access, use the installed `marionette`, or `bun /absolute/package/dist/cli.js` for a source build. Commands discover the project binding from the working directory; pass `--home /absolute/state/directory` for a selected instance. Start with:
 
@@ -31,8 +31,12 @@ For user-requested removal, inspect `remove --dry-run` or `uninstall --dry-run -
 
 Read a supplied bootstrap prompt and private lease file locally. Keep the token out of prose, artifacts, and logs. A CLI mutation accepts `--lease /private/path/lead.json`; an MCP mutation accepts the equivalent `lease` object. Acquire control only for initial establishment or an authorized takeover. `lead_handover` / `lead.handover` transfers the lease and invalidates the old one. Do not take over merely because another lead is quiet.
 
+If the user already supplied the objective, start it; do not create an intake outcome merely to receive a message. For a simple task, `task_submit` without `outcomeId` atomically creates an outcome from its prompt, ownership and checks. Use a separate outcome or strategy only when the work needs one.
+
 Submit an assignment with a stable idempotency `key`, an objective, `kind` (`codex`, `claude`, or `agy`), bounded `ownership`, and meaningful `checks`. See [assignment and outcome examples](references/coordination.md) when constructing inputs.
 
+- `outcome.scope` is also a filesystem boundary, never prose. Repair a mistaken scope with `outcome_revise`, `scope`, and a reason; omitted criteria remain intact. Do not create duplicate outcomes to fix scope.
+- With `outcomeId` or `parentId`, supply `expectedTreeRevision` from the current outcome. Submissions return the new `treeRevision`; the first revision is 1. Check timeouts are 100–120000 ms. Read-only reviewers use `readOnly: true`, `ownership: []`, and `canDelegate: false`.
 - Ownership paths are literal files or directory prefixes relative to the task's working directory, not globs. Workers share files unless explicitly placed in a worktree. Preserve concurrent edits.
 - Assess file conflicts before choosing execution. Use shared mode for disjoint work or deliberate access to uncommitted changes. Recommend worktree mode for overlapping work and obtain a choice when the workflow has not already been authorized. Worktrees start from committed HEAD or `baseRef`; source edits and dependency branches are not automatically copied or merged.
 - Submission returns before startup. A queued assignment may be waiting for dependencies, ownership, provider/model limits, or project capacity. Read its wait reason before retrying.
@@ -41,13 +45,15 @@ Submit an assignment with a stable idempotency `key`, an objective, `kind` (`cod
 
 For durable multi-step outcomes, create criteria with `outcome_create`, attach assignments to the outcome and current tree revision, and use `plan_revise` with current revisions and reasons for changes. Review evidence independently. Finish with criterion assessments, integrated review, and `outcome_complete`; worker prose and terminal idle status are insufficient. Required failed, cancelled, stale, or unverified work prevents completion.
 
-When no independent work remains, register `lead_wait` with an observable condition and yield. A Herdr adapter must pin the actual lead pane, terminal, agent name/kind, and native session obtained through `project_inspect`. Desktop leads use the `next-message` adapter: MCP alone does not wake an idle conversation. Read and acknowledge inbox events on later turns; do not hold a model turn open polling. Save checkpoints before handover or consequential context changes.
+When no independent work remains, register `lead_wait` with an observable condition and yield. A Herdr adapter must pin the actual lead pane, terminal, kind, and native session obtained through `project_inspect`. The launch name may be omitted when the native session is pinned. After `lead_wait`, verify a returned wait ID and state; a failed wait registers no continuation. Desktop leads use the `next-message` adapter: MCP alone does not wake an idle conversation. Read and acknowledge inbox events on later turns; do not hold a model turn open polling. Save checkpoints before handover or consequential context changes.
 
 Completion retains Git worktrees and branches. Follow existing authorization for review, merging, publishing, and cleanup; task completion itself does not authorize publication. Use `cleanup_preview` before explicit release/delivery/archive/collection. Pane-aware workers can share a tab, so never close a worker's entire tab manually to release one worker.
 
 ## Worker workflow
 
-Your launch prompt is the task contract: preserve its ID, current revision, working directory, owned paths, and checks. Use its exact durable worker CLI path. Credentials are already in `MARIONETTE_WORKER_TOKEN`, `MARIONETTE_TASK_ID`, and `MARIONETTE_URL`; do not print them or acquire a lead lease.
+Your launch prompt is the task contract: preserve its ID, current revision, working directory, owned paths, and checks. Prefer the `marionette_worker` MCP tools (`worker_inspect`, `worker_report`, `worker_call`) when present. Codex workers receive this scoped STDIO server at launch; it forwards only the attempt credential and leaves sandbox settings unchanged. The server validates its inspection connection at startup. The CLI remains available for other agents and older sessions; use the exact durable worker CLI path. Credentials are already in `MARIONETTE_WORKER_TOKEN`, `MARIONETTE_TASK_ID`, and `MARIONETTE_URL`; do not print them or acquire a lead lease.
+
+If a CLI transport fails, use scoped MCP or request normal network permission for the exact command (`sandbox_permissions="require_escalated"` in Codex). Do not repeat the same sandboxed call or assume the supervisor is down. Inspect the current task/receipt after an uncertain report before resending it.
 
 Write request/report JSON under `.marionette-reports/TASK_ID/` in the task working directory. Run the supplied `worker-report --file /absolute/report.json` command with, for example:
 

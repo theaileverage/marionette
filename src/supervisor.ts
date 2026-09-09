@@ -7,6 +7,7 @@ import { BoundaryError, boundaryError, herdrCall, sync } from './effect-runtime.
 import { commandEffect, digest, hash, inside, safePath } from './files.js';
 import { renderWorkerFollowup, renderWorkerPrompt } from './prompts.js';
 import { ScopedTasks } from './scoped-tasks.js';
+import { workerMcpArgs } from './worker-mcp.js';
 import { Service, terminalStates } from './service.js';
 import {
   AppError,
@@ -261,6 +262,7 @@ export class Supervisor {
       : undefined;
     return renderWorkerPrompt({
       task: t,
+      workerMcp: t.kind === 'codex',
       strategy,
       workerCall: `${quote(process.execPath)} ${quote(this.cliPath)} worker-call --file /absolute/path/to/request.json`,
       reportCommand: `${quote(process.execPath)} ${quote(this.cliPath)} worker-report --file /absolute/path/to/report.json`,
@@ -269,6 +271,7 @@ export class Supervisor {
   }
   private modelArgs(t: Task, p: Project) {
     const args = [...(p.agentArgs[t.kind] ?? [])];
+    if (t.kind === 'codex') args.push(...workerMcpArgs(process.execPath, this.cliPath));
     if (
       t.kind === 'codex' &&
       args.includes('--approve-for-me') &&
@@ -702,9 +705,10 @@ export class Supervisor {
       const a: AgentInfo = result.agent;
       if (
         !a ||
+        a.pane_id !== r.paneId ||
         a.workspace_id !== p.workspaceId ||
         a.terminal_id !== r.terminalId ||
-        a.name !== r.agentName ||
+        (a.name !== r.agentName && !(!a.name && r.nativeSession)) ||
         (a.agent !== r.kind && !(r.phase === 'starting' && !a.agent)) ||
         (r.nativeSession && a.agent_session?.value !== r.nativeSession)
       )
@@ -1029,7 +1033,11 @@ export class Supervisor {
         yield* sync('Supervisor.monitor', () =>
           s.ask(
             t,
-            'The agent stopped without a completion report. Inspect its output, then reply with instructions to submit its report.',
+            /(?:Transport error|worker_transport|Cannot reach the Marionette worker endpoint|fetch failed)/i.test(
+              t.output,
+            )
+              ? 'The agent stopped without a completion report and its output mentions a transport failure. Inspect the reporting connection before resuming. Prefer the scoped marionette_worker MCP tools; for an older worker without them, request normal network permission for the exact worker-call/worker-report command. Do not repeat the same sandboxed call or infer that the supervisor is down from a transport error.'
+              : 'The agent stopped without a completion report. Inspect its output, then reply with instructions to submit its report.',
           ),
         );
       }

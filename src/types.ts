@@ -77,10 +77,9 @@ export const assignmentSchema = Schema.Struct({
     ),
   ),
   ownership: Schema.mutableKey(
-    Schema.mutable(Schema.Array(Schema.String.check(Schema.isMinLength(1)))).check(
-      Schema.isMinLength(1),
-    ),
+    Schema.mutable(Schema.Array(Schema.String.check(Schema.isMinLength(1)))),
   ),
+  readOnly: Schema.mutableKey(Schema.optional(Schema.Boolean)),
   dependencies: Schema.mutableKey(
     Schema.mutable(Schema.Array(Schema.String)).pipe(
       Schema.withDecodingDefault(Effect.succeed([])),

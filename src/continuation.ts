@@ -56,7 +56,7 @@ export const waitSchema = Schema.Struct({
         type: Schema.mutableKey(Schema.Literal('herdr')),
         paneId: Schema.mutableKey(Schema.String),
         terminalId: Schema.mutableKey(Schema.String),
-        name: Schema.mutableKey(Schema.String),
+        name: Schema.mutableKey(Schema.optional(Schema.String.check(Schema.isMinLength(1)))),
         kind: Schema.mutableKey(Schema.Literals(['codex', 'claude', 'agy'])),
         nativeSession: Schema.mutableKey(Schema.optional(Schema.String)),
       }).annotate({ parseOptions: { onExcessProperty: 'error' } }),
@@ -335,7 +335,11 @@ export class Continuation {
       a.pane_id === adapter.paneId &&
       a.terminal_id === adapter.terminalId &&
       a.workspace_id === this.s.project(w.projectId).workspaceId &&
-      a.name === adapter.name &&
+      // Herdr may discard a launch name after startup. A pinned native session
+      // still identifies the occupant; without it, require the exact launch name.
+      (adapter.nativeSession
+        ? !a.name || !adapter.name || a.name === adapter.name
+        : !!adapter.name && a.name === adapter.name) &&
       a.agent === adapter.kind &&
       (!adapter.nativeSession || a.agent_session?.value === adapter.nativeSession)
     );
@@ -702,7 +706,10 @@ export class Continuation {
           if (!this.identity(candidate, a))
             return yield* new AppError({
               code: 'lead_identity',
-              message: 'Could not establish the exact lead session',
+              message:
+                'Could not establish the exact lead session. Refresh project_inspect and use its paneId, ' +
+                'terminalId, kind and nativeSession; name is optional when nativeSession matches. ' +
+                'No wait was registered. Check isError and verify the returned wait id/state before ending the turn.',
               status: 400,
             });
           candidate.adapter = {

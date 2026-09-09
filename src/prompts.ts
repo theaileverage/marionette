@@ -31,6 +31,7 @@ export interface WorkerPromptContext {
     | 'workstream'
     | 'cwd'
     | 'ownership'
+    | 'readOnly'
     | 'canDelegate'
     | 'prompt'
     | 'checks'
@@ -40,6 +41,7 @@ export interface WorkerPromptContext {
   strategy?: Pick<Strategy, 'kind' | 'criteria' | 'stopCondition' | 'maxRounds'>;
   workerCall: string;
   reportCommand: string;
+  workerMcp?: boolean;
   extra?: string;
 }
 
@@ -48,6 +50,7 @@ export function renderWorkerPrompt({
   strategy,
   workerCall,
   reportCommand,
+  workerMcp = false,
   extra,
 }: WorkerPromptContext) {
   return Mustache.render(
@@ -59,6 +62,7 @@ export function renderWorkerPrompt({
       workstream: task.workstream,
       cwd: task.cwd,
       ownership: task.ownership.join(', '),
+      readOnly: task.readOnly ?? false,
       canDelegate: task.canDelegate,
       taskPrompt: task.prompt,
       checksJson: JSON.stringify(task.checks, null, 2),
@@ -80,6 +84,7 @@ export function renderWorkerPrompt({
         : undefined,
       workerCall,
       reportCommand,
+      workerMcp,
       extra,
     },
     { delegation: delegationTemplate, strategy: strategyTemplate },

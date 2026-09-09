@@ -12,6 +12,7 @@ import { serveEffect } from './server.js';
 import { maintenanceCommandEffect } from './maintenance-cli.js';
 import { prompts } from './cli-prompts.js';
 import { launchLeadEffect, runSetupEffect, setupPlan, wizardEffect } from './setup.js';
+import { workerMcpEffect } from './worker-mcp.js';
 const args = process.argv.slice(2);
 function flag(name: string) {
   const i = args.indexOf('--' + name);
@@ -21,6 +22,10 @@ const home = homePath(flag('home'));
 const print = <T>(v: T) => console.log(JSON.stringify(v, null, 2));
 const mainEffect = Effect.fn('main')(function* () {
   const cmd = args[0] ?? 'help';
+  if (cmd === 'worker-mcp') {
+    yield* workerMcpEffect();
+    return;
+  }
   if (cmd === '--version' || cmd === 'version') {
     yield* sync('main.main', () =>
       console.log(JSON.parse(readFileSync(resolve(packageRoot, 'package.json'), 'utf8')).version),
