@@ -1,3 +1,6 @@
+import { taskAuthority } from './authority.js';
+import { prepareGuardLaunchEffect } from './harness-guard.js';
+import { validateTerminalArguments } from './terminal-arguments.js';
 import { agentAccessArgs } from './agent-access.js';
 import { Effect, Result, Schedule, Semaphore } from 'effect';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -6,7 +9,7 @@ import { dirname, resolve } from 'node:path';
 import { trustWorkspace, workspaceTrustEnabled } from './workspace-trust.js';
 import { BoundaryError, boundaryError, herdrCall, sync } from './effect-runtime.js';
 import { commandEffect, digest, hash, inside, safePath } from './files.js';
-import { renderWorkerFollowup, renderWorkerPrompt } from './prompts.js';
+import { renderWorkerFollowup, renderWorkerPrompt, renderWorkerGuardPrompt } from './prompts.js';
 import { ScopedTasks } from './scoped-tasks.js';
 import { workerMcpArgs } from './worker-mcp.js';
 import { Service, terminalStates } from './service.js';
@@ -266,7 +269,7 @@ export class Supervisor {
       : undefined;
     return renderWorkerPrompt({
       task: { ...t, ownership: t.retainedOwnership ?? t.ownership },
-      workerMcp: t.kind === 'codex',
+      workerMcp: t.kind === 'codex' || this.service.project(t.projectId).coordinatorOnly === true,
       strategy,
       workerCall: `${quote(process.execPath)} ${quote(this.cliPath)} worker-call --file /absolute/path/to/request.json`,
       reportCommand: `${quote(process.execPath)} ${quote(this.cliPath)} worker-report --file /absolute/path/to/report.json`,
@@ -274,8 +277,24 @@ export class Supervisor {
     });
   }
   private modelArgs(t: Task, p: Project) {
-    const args = agentAccessArgs(t.kind, p.agentAccess, p.agentArgs[t.kind]);
-    if (t.kind === 'codex') args.push(...workerMcpArgs(process.execPath, this.cliPath));
+    const restricted =
+      p.coordinatorOnly && (t.readOnly || t.resolvedRole?.activity === 'documentation');
+    if (p.coordinatorOnly && p.agentArgs[t.kind]?.length)
+      throw new AppError({
+        code: 'guard_arguments',
+        message:
+          'Guarded workers use verified profile and role settings; move custom harness arguments out of project agentArgs before dispatch.',
+        status: 400,
+      });
+    const args = agentAccessArgs(
+      t.kind,
+      restricted ? undefined : p.agentAccess,
+      p.agentArgs[t.kind],
+    );
+    // Guarded launches install the scoped MCP server through their private
+    // launcher. Adding the legacy inline configuration as well can overflow PTY input.
+    if (t.kind === 'codex' && !p.coordinatorOnly)
+      args.push(...workerMcpArgs(process.execPath, this.cliPath));
     if (
       t.kind === 'codex' &&
       args.includes('--approve-for-me') &&
@@ -291,8 +310,10 @@ export class Supervisor {
     if (
       args.some(
         (arg) =>
-          ['--model', '-m', '--effort', '--fallback-model'].includes(arg) ||
-          /^(--model=|--effort=|--fallback-model=|model=|model_reasoning_effort=)/.test(arg),
+          ['--model', '-m', '--effort', '--thinking', '--fallback-model'].includes(arg) ||
+          /^(--model=|--effort=|--thinking=|--fallback-model=|model=|model_reasoning_effort=)/.test(
+            arg,
+          ),
       )
     )
       throw new AppError({
@@ -305,6 +326,7 @@ export class Supervisor {
       if (t.kind === 'codex')
         args.push('-c', `model_reasoning_effort=${JSON.stringify(t.reasoning)}`);
       else if (t.kind === 'claude') args.push('--effort', t.reasoning);
+      else if (t.kind === 'omp') args.push('--thinking', t.reasoning);
     }
     return args;
   }
@@ -313,6 +335,19 @@ export class Supervisor {
     function* (this: Supervisor, id: string) {
       const s = this.service;
       let t = yield* sync('Supervisor.dispatch', () => s.task(id));
+      const authority = yield* Effect.result(
+        sync('Supervisor.authority', () => taskAuthority(s, t)),
+      );
+      if (Result.isFailure(authority)) {
+        yield* sync('Supervisor.authorityBlocked', () =>
+          s.updateTask(
+            t,
+            { status: 'blocked', error: String(authority.failure) },
+            'User authority no longer permits this assignment; no worker started',
+          ),
+        );
+        return;
+      }
       const p = yield* sync('Supervisor.dispatch', () => s.project(t.projectId)),
         h = yield* sync('Supervisor.dispatch', () => s.port(p));
       {
@@ -452,6 +487,37 @@ export class Supervisor {
         const attempt4 = yield* Effect.result(
           Effect.gen({ self: this }, function* () {
             yield* sync('Supervisor.dispatch', () => (resolvedArgs = this.modelArgs(t, p)));
+            if (p.coordinatorOnly) {
+              const guard = yield* prepareGuardLaunchEffect({
+                kind: t.kind,
+                directory: resolve(
+                  dirname(s.store.path),
+                  'guards',
+                  p.id,
+                  `${t.id}-${t.revision}-${t.attempt + 1}`,
+                ),
+                executable: process.execPath,
+                cliPath: this.cliPath,
+                policy: {
+                  version: 1,
+                  root: t.cwd,
+                  taskId: t.id,
+                  role: t.readOnly
+                    ? 'inspect'
+                    : t.resolvedRole?.activity === 'documentation'
+                      ? 'documentation'
+                      : 'implementation',
+                  instructions: renderWorkerGuardPrompt(t.id),
+                  mcpName: 'marionette_worker',
+                  ownership: t.retainedOwnership ?? t.ownership,
+                },
+                server: { command: process.execPath, args: [this.cliPath, 'worker-mcp'] },
+              });
+              resolvedArgs.push(...guard);
+            }
+            yield* sync('Supervisor.validateArguments', () =>
+              validateTerminalArguments(t.kind, resolvedArgs),
+            );
           }),
         );
         if (Result.isFailure(attempt4)) {
@@ -1073,6 +1139,10 @@ export class Supervisor {
       const s = this.service,
         h = yield* sync('Supervisor.operation', () => s.port(s.project(t.projectId)));
       return yield* Effect.gen({ self: this }, function* () {
+        if (op.type !== 'pause' && op.type !== 'cancel')
+          yield* sync('Supervisor.controlAuthority', () =>
+            taskAuthority(s, { ...s.task(t.id), checks: op.checks ?? s.task(t.id).checks }),
+          );
         if (op.type === 'keys') {
           op.phase = 'sending';
           yield* sync('Supervisor.operation', () => s.store.put('operation', op.id, op));
@@ -1219,6 +1289,7 @@ export class Supervisor {
     { self: this },
     function* (this: Supervisor, t: Task, r: Run) {
       const s = this.service;
+      yield* sync('Supervisor.verifyAuthority', () => taskAuthority(s, t));
       const revision = t.revision;
       yield* sync('Supervisor.verify', () =>
         s.updateTask(t, { status: 'verifying' }, `Checking completion evidence for ${t.title}`),

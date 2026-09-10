@@ -1,6 +1,7 @@
 import { Effect, Schedule } from 'effect';
 import { createHash } from 'node:crypto';
-import { herdrCall } from './effect-runtime.js';
+import { herdrCall, sync } from './effect-runtime.js';
+import { validateTerminalArguments } from './terminal-arguments.js';
 import { AppError, type HerdrPort } from './types.js';
 import type { ResponseTypes } from './herdr-protocol.js';
 
@@ -12,14 +13,25 @@ interface TerminalLead {
   kind: string;
   owner: string;
   args: string[];
+  guard?: {
+    launchHash: string;
+    receipt?: { launchHash: string; pane_id: string; terminal_id: string };
+  };
 }
 
 /** Keep the shell launch short: Herdr types argv into a PTY, not an exec call. */
-export function terminalLeadArgs(kind: string, modelArgs: string[], promptPath: string) {
+export function terminalLeadArgs(
+  kind: string,
+  modelArgs: string[],
+  promptPath: string,
+  guarded = false,
+) {
   return [
     ...modelArgs,
     ...(kind === 'agy' ? ['--prompt-interactive'] : []),
-    `Read the local file ${JSON.stringify(promptPath)} and follow its lead startup instructions.`,
+    guarded
+      ? 'The session guard supplied your full Marionette lead prompt. Read project_briefing and inbox_read.'
+      : `Read the local file ${JSON.stringify(promptPath)} and follow its lead startup instructions.`,
   ];
 }
 
@@ -28,13 +40,7 @@ export const openLeadTerminalEffect = Effect.fn('Lead.openTerminal')(function* (
   h: HerdrPort,
   lead: TerminalLead,
 ) {
-  if (lead.args.some((arg) => /\p{Cc}/u.test(arg)))
-    return yield* new AppError({
-      code: 'lead_arguments',
-      message:
-        'Lead launch arguments contain control characters unsupported by Herdr. Check the selected model profile and project settings.',
-      status: 400,
-    });
+  yield* sync('Lead.validateArguments', () => validateTerminalArguments(lead.kind, lead.args));
   const name = `lead-${createHash('sha256').update(lead.projectId).digest('hex').slice(0, 12)}-${lead.epoch}`;
   const label = `${lead.owner} [${name}]`;
   const { agents }: { agents: ResponseTypes.AgentInfo[] } = yield* herdrCall(h, 'agent.list');
@@ -43,11 +49,15 @@ export const openLeadTerminalEffect = Effect.fn('Lead.openTerminal')(function* (
     if (
       existing.workspace_id !== lead.workspace ||
       existing.agent !== lead.kind ||
-      existing.cwd !== lead.root
+      existing.cwd !== lead.root ||
+      (lead.guard !== undefined &&
+        (lead.guard.receipt?.launchHash !== lead.guard.launchHash ||
+          lead.guard.receipt?.pane_id !== existing.pane_id ||
+          lead.guard.receipt?.terminal_id !== existing.terminal_id))
     )
       return yield* new AppError({
         code: 'lead_identity',
-        message: `Herdr agent ${name} does not match this project’s lead. Inspect it before retrying.`,
+        message: `Herdr agent ${name} does not match this project’s lead. Inspect it before retrying. If its launch configuration changed, exit the existing lead and relaunch it.`,
         status: 409,
       });
     yield* herdrCall(h, 'tab.focus', { tab_id: existing.tab_id });

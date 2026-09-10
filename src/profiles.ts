@@ -5,6 +5,7 @@ import { catalogSnapshot } from './model-catalog-snapshot.js';
 import { catalogProfiles, parseCatalog } from './model-catalog.js';
 import { profileSchema, type Profile } from './orchestration-types.js';
 import { AppError } from './types.js';
+import { probeOmpProfileEffect } from './omp-profile.js';
 export const builtinProfiles: Profile[] = [
   Schema.decodeSync(profileSchema)({
     id: 'claude-fable-orchestration',
@@ -40,6 +41,7 @@ export function profileArgs(p: Pick<Profile, 'kind' | 'model' | 'reasoning'>) {
     if (p.kind === 'codex')
       args.push('-c', `model_reasoning_effort=${JSON.stringify(p.reasoning)}`);
     else if (p.kind === 'claude') args.push('--effort', p.reasoning);
+    else if (p.kind === 'omp') args.push('--thinking', p.reasoning);
   }
   return args;
 }
@@ -48,6 +50,7 @@ export const probeProfileEffect = Effect.fn('probeProfile')(function* (
   profile: Profile,
   cwd: string,
 ) {
+  if (profile.kind === 'omp') return yield* probeOmpProfileEffect(profile, cwd);
   if (/^(default|fable|opus|sonnet|haiku|auto|latest)$/i.test(profile.model))
     return yield* new AppError({
       code: 'model_alias',

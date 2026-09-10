@@ -1,3 +1,4 @@
+import { roleSchema } from './roles.js';
 import { agentAccessSchema } from './agent-access.js';
 import { Effect, Schema } from 'effect';
 import { profileSchema } from './orchestration-types.js';
@@ -15,6 +16,7 @@ export const projectSchema = Schema.Struct({
     kindSchema,
     Schema.optionalKey(Schema.mutable(Schema.Array(Schema.String))),
   ),
+  coordinatorOnly: Schema.optional(Schema.Boolean),
   trustWorkspaces: Schema.optional(Schema.Boolean),
   agentAccess: Schema.optionalKey(agentAccessSchema),
   trustAgyWorkspaces: Schema.optional(Schema.Boolean),
@@ -32,6 +34,7 @@ export const briefingSchema = Schema.Struct({
   profiles: Schema.mutable(Schema.Array(profileSchema)).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  roles: Schema.optional(Schema.Array(roleSchema)),
   profileDefaults: Schema.optional(Schema.Record(Schema.String, Schema.String)),
 });
 export const leaseResponseSchema = Schema.Struct({ lease: credentialsSchema });

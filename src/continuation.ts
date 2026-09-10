@@ -61,7 +61,7 @@ export const waitSchema = Schema.Struct({
         paneId: Schema.mutableKey(Schema.String),
         terminalId: Schema.mutableKey(Schema.String),
         name: Schema.mutableKey(Schema.optional(Schema.String.check(Schema.isMinLength(1)))),
-        kind: Schema.mutableKey(Schema.Literals(['codex', 'claude', 'agy'])),
+        kind: Schema.mutableKey(Schema.Literals(['codex', 'claude', 'agy', 'omp'])),
         nativeSession: Schema.mutableKey(Schema.optional(Schema.String)),
       }).annotate({ parseOptions: { onExcessProperty: 'error' } }),
     ]),
@@ -151,6 +151,13 @@ export interface Usage extends Schema.Schema.Type<typeof usageFields> {
   model?: string;
 }
 export const adapterCapabilities = {
+  'herdr-omp': {
+    continuation: 'automatic-same-session',
+    cacheRetention: 'not-exposed',
+    usage: 'not-exposed',
+    evidence:
+      'Herdr supports omp identity and same-session agent.prompt. Exact profiles use provider/model selectors and --thinking. Cache and price metrics are not inferred.',
+  },
   'codex-desktop': {
     continuation: 'next-message',
     cacheRetention: 'not-exposed',
@@ -574,6 +581,15 @@ export class Continuation {
               message: 'Wait changed before delivery',
               status: 400,
             });
+          // Different outcomes can become ready concurrently for the same lead.
+          // Reserve its turn atomically, after the asynchronous identity check.
+          const capacity = this.capacity(w);
+          if (capacity)
+            throw new AppError({
+              code: 'wait_capacity',
+              message: `${capacity}; lead continuation queued.`,
+              status: 409,
+            });
           const current = this.s.orchestration.outcome(w.outcomeId);
           this.s.store.put('outcome', current.id, { ...current, turnsUsed: current.turnsUsed + 1 });
           w = this.save(w, {
@@ -802,13 +818,14 @@ export class Continuation {
                 this.waits(c.projectId).some(
                   (w) =>
                     w.epoch === c.epoch &&
+                    w.outcomeId === outcome.id &&
                     ['waiting', 'ready', 'sending', 'uncertain'].includes(w.state),
                 )
               )
                 throw new AppError({
                   code: 'wait_pending',
                   message:
-                    'One coordination wait may be active per lead; acknowledge or reconcile it first',
+                    'One coordination wait may be active per outcome; acknowledge or reconcile it first',
                   status: 400,
                 });
               if (!candidate.checkpointId) {

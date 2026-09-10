@@ -6,8 +6,8 @@ const pathSchema = z
   .regex(/^[^?*[\]\r\n]+$/, 'Use file paths or directory prefixes, not globs or prose.');
 
 // MCP SDK transport schemas. Application validation uses Effect Schema.
-export const leadAgentSchema = z.enum(['codex-desktop', 'codex', 'claude', 'agy']);
-export const kindSchema = z.enum(['codex', 'claude', 'agy']);
+export const leadAgentSchema = z.enum(['codex-desktop', 'codex', 'claude', 'agy', 'omp']);
+export const kindSchema = z.enum(['codex', 'claude', 'agy', 'omp']);
 export const checkSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('file'),
@@ -50,6 +50,7 @@ export const assignmentSchema = z
     parentId: z.string().optional(),
     required: z.boolean().optional(),
     profileId: z.string().optional(),
+    role: z.string().optional(),
     category: z.string().optional(),
     model: z.string().optional(),
     reasoning: z.string().optional(),
@@ -227,7 +228,7 @@ export const waitSchema = z
             .describe(
               'Launch name from project_inspect, when present. May be omitted when nativeSession pins the exact conversation.',
             ),
-          kind: z.enum(['codex', 'claude', 'agy']),
+          kind: z.enum(['codex', 'claude', 'agy', 'omp']),
           nativeSession: z
             .string()
             .min(1)
@@ -261,5 +262,6 @@ export const agentAccessSchema = z
     codex: z.enum(['inherit', 'full-access']).optional(),
     claude: z.enum(['inherit', 'full-access']).optional(),
     agy: z.enum(['inherit', 'full-access']).optional(),
+    omp: z.enum(['inherit', 'full-access']).optional(),
   })
   .strict();

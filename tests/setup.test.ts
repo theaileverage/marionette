@@ -93,6 +93,7 @@ test('durable runtime survives deletion of the Bun package cache and reuses iden
   mkdirSync(resolve(source, 'public'), { recursive: true });
   writeFileSync(resolve(source, 'package.json'), '{"version":"1.2.3"}');
   writeFileSync(resolve(source, 'dist/cli.js'), 'cli');
+  writeFileSync(resolve(source, 'dist/harness-guard.js'), 'guard');
   writeFileSync(resolve(source, 'dist/mcp.js'), 'mcp');
   writeFileSync(resolve(source, 'public/index.html'), 'dashboard');
   const runtime = installRuntime(home, source);

@@ -3,7 +3,7 @@
 [![CI](https://github.com/theaileverage/marionette/actions/workflows/ci.yml/badge.svg)](https://github.com/theaileverage/marionette/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@theaileverage/marionette)](https://www.npmjs.com/package/@theaileverage/marionette)
 
-Coordinate Codex, Claude Code, and AGY workers through one lead conversation. Workers run in Herdr; a persistent local supervisor shares task state across MCP, CLI, and a dashboard.
+Coordinate Codex, Claude Code, AGY, and oh-my-pi workers through one lead conversation. Workers run in Herdr; a persistent local supervisor shares task state across MCP, CLI, and a dashboard.
 
 - **Delegate work:** assign owned paths, dependencies, and acceptance checks; use a shared directory or isolated Git worktrees.
 - **Verify outcomes:** require current evidence and independent checks before marking work complete.
@@ -26,9 +26,9 @@ bunx --bun @theaileverage/marionette setup
 
 You can also use `npx @theaileverage/marionette setup`. Bun must still be installed and on PATH; `npx` downloads the package but does not install Bun.
 
-The interactive setup uses editable defaults and arrow-key choices. It offers to install missing required tools, then starts the supervisor, connects a named Herdr session and project workspace, and configures MCP for Codex desktop, Codex CLI, Claude Code, or AGY.
+The interactive setup uses editable defaults and arrow-key choices. It offers to install missing required tools, then starts the supervisor, connects a named Herdr session and project workspace, and configures a guarded lead with Codex CLI (the default), Claude Code, or oh-my-pi. Codex desktop and AGY integrations require the explicit legacy configuration described in the [coordinator guide](documentation/coordinator.md).
 
-Setup installs Herdr through Homebrew when available, or its [official installer](https://herdr.dev/docs/install/); Git through existing Homebrew; Codex through npm when available; and Claude Code through its official installer. AGY and Git without Homebrew require manual installation. Agent sign-in remains a separate step. Setup does not install every optional worker or change existing agent integrations.
+Setup installs Herdr through Homebrew when available, or its [official installer](https://herdr.dev/docs/install/); Git through existing Homebrew; Codex through npm when available; Claude Code through its official installer; and oh-my-pi through Bun. AGY and Git without Homebrew require manual installation. Agent sign-in remains a separate step. Setup does not install every optional worker or change existing agent integrations.
 
 The project defaults to your current directory. To select Menderly from another directory, for example, pass `setup --project /path/to/menderly`.
 
@@ -42,7 +42,7 @@ The terminal lead opens in a dedicated tab in the project’s Herdr session. Rep
 
 Setup names each project’s MCP entry `mnett-<project>-<lead>`, such as `mnett-menderly-mendy`. Names use lowercase words and hyphens, with a numeric suffix when needed to avoid collisions. `--mcp install` installs the entry and migrates owned older names; `--mcp print` prints a command with shell quoting only where needed.
 
-For Codex desktop, refresh MCP in Settings and give your conversation the prompt file printed by setup.
+For an explicitly prompt-only Codex desktop setup, set `coordinatorOnly: false` in the setup configuration, refresh MCP in Settings, and give your conversation the prompt file printed by setup.
 
 ```sh
 bunx --bun @theaileverage/marionette dashboard  # Print the private dashboard URL
@@ -99,7 +99,7 @@ For different policies per harness, save a setup JSON file and pass it with `mar
 
 Set a harness to `inherit` to restore its native policy for future launches. Setup saves these choices with the project. A lead can also apply a user-authorized change through `project_configure` with `agentAccess`; this patches only the named harnesses. Conflicting permission flags in legacy `agentArgs` must be removed, or managed through `inherit`.
 
-Full access uses Codex's `--dangerously-bypass-approvals-and-sandbox`, Claude Code's `--dangerously-skip-permissions` with `sandbox.enabled: false`, and AGY's `--dangerously-skip-permissions --sandbox=false`. These launch arguments leave global CLI settings intact. They allow the agent to act with the launching user's permissions; task ownership remains a coordination contract, not filesystem isolation.
+Full access uses Codex's `--dangerously-bypass-approvals-and-sandbox`, Claude Code's `--dangerously-skip-permissions` with `sandbox.enabled: false`, AGY's `--dangerously-skip-permissions --sandbox=false`, and OMP's `--approval-mode yolo`. Coordinator, inspection, and documentation restrictions take precedence over full-access worker preferences. These launch arguments leave global CLI settings intact. They allow the agent to act with the launching user's permissions; task ownership remains a coordination contract, not filesystem isolation.
 
 Changes apply when a session starts. Existing leads and workers keep their launch settings; repeating `lead` reuses the current lead. A Codex desktop conversation uses the app's own permissions, since Marionette does not launch it. Project configuration cannot override organization policies or restrictions imposed by the host, operating system, or an enclosing container.
 
@@ -177,3 +177,7 @@ The source uses Effect v4, TypeScript diagnostics from `@effect/tsgo`, and anti-
 - [Design](DESIGN.md) — persistence and trust boundaries
 - [Verification](VERIFICATION.md) — tested behavior and operating limits
 - [Changelog](CHANGELOG.md) · [Releases](RELEASING.md) · [MIT license](LICENSE)
+
+## Coordinator-only leads and oh-my-pi
+
+New setups use a coordinator-only lead with session guards, scoped MCP, explicit outcome authority, and role-to-model profiles. oh-my-pi is available as `--lead omp` and worker kind `omp`. Configure role defaults and project overrides through `marionette roles`; record authorized writes through `marionette authorize`. See [coordinator setup, authority, and harness limits](documentation/coordinator.md). The dashboard has not changed.

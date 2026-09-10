@@ -14,6 +14,8 @@ import { maintenanceCommandEffect } from './maintenance-cli.js';
 import { prompts } from './cli-prompts.js';
 import { launchLeadEffect, runSetupEffect, setupPlan, wizardEffect } from './setup.js';
 import { workerMcpEffect } from './worker-mcp.js';
+import { guardHookEffect, readGuardPolicy } from './harness-guard.js';
+import { findBinding } from './project-binding.js';
 const args = process.argv.slice(2);
 function flag(name: string) {
   const i = args.indexOf('--' + name);
@@ -23,6 +25,84 @@ const home = homePath(flag('home'));
 const print = <T>(v: T) => console.log(JSON.stringify(v, null, 2));
 const mainEffect = Effect.fn('main')(function* () {
   const cmd = args[0] ?? 'help';
+  if (cmd === 'guard-hook') {
+    yield* sync('Guard.readHook', () => ({
+      policy: readGuardPolicy(flag('policy') ?? ''),
+      input: JSON.parse(readFileSync(0, 'utf8')),
+    })).pipe(
+      Effect.flatMap(({ policy, input }) => guardHookEffect(policy, input)),
+      Effect.match({
+        onSuccess: print,
+        onFailure: () => {
+          console.error(
+            'Marionette guard failed to validate this session or tool. Relaunch the configured agent.',
+          );
+          process.exitCode = 2;
+        },
+      }),
+    );
+    return;
+  }
+  if (cmd === 'authorize') {
+    if (args.includes('--help')) {
+      console.log(
+        'Usage: marionette authorize --outcome ID --allow documentation,implementation,execute --scope PATH [--scope PATH] --source "User request" [--project DIR]\nReplaces the outcome grant. Use --allow none to revoke writes and execution after settling workers. This user command is unavailable to lead and worker MCP.',
+      );
+      return;
+    }
+    const values = parseArgs({
+      args: args.slice(1),
+      options: {
+        outcome: { type: 'string' },
+        allow: { type: 'string' },
+        scope: { type: 'string', multiple: true },
+        source: { type: 'string' },
+        project: { type: 'string' },
+        home: { type: 'string' },
+      },
+    }).values;
+    const { binding } = findBinding(values.project ?? process.cwd());
+    print(
+      yield* callEffect(binding.home, 'authority.grant', {
+        projectId: binding.projectId,
+        outcomeId: values.outcome ?? '',
+        activities: values.allow === 'none' ? [] : (values.allow ?? '').split(',').filter(Boolean),
+        scope: values.scope ?? [],
+        source: values.source ?? '',
+      }),
+    );
+    return;
+  }
+  if (cmd === 'roles') {
+    if (args.includes('--help')) {
+      console.log(
+        'Usage: marionette roles [--project DIR] [--file roles.json] [--global]\nList role profiles, or replace them from a JSON array. Use marionette call profile.discover/profile.configure/profile.validate to prepare exact model profiles first.',
+      );
+      return;
+    }
+    const values = parseArgs({
+      args: args.slice(1),
+      options: {
+        project: { type: 'string' },
+        file: { type: 'string' },
+        global: { type: 'boolean' },
+        home: { type: 'string' },
+      },
+    }).values;
+    const { binding } = findBinding(values.project ?? process.cwd());
+    if (values.file) {
+      const roles = JSON.parse(readFileSync(values.file, 'utf8'));
+      const lease = JSON.parse(readFileSync(binding.leasePath, 'utf8'));
+      print(
+        yield* callEffect(binding.home, 'role.configure', {
+          lease,
+          roles,
+          scope: values.global ? 'instance' : 'project',
+        }),
+      );
+    } else print(yield* callEffect(binding.home, 'role.list', { projectId: binding.projectId }));
+    return;
+  }
   if (cmd === 'worker-mcp') {
     yield* workerMcpEffect();
     return;
@@ -41,7 +121,7 @@ const mainEffect = Effect.fn('main')(function* () {
     if (args.includes('--help')) {
       yield* sync('main.main', () =>
         console.log(
-          'Usage: marionette setup [--yes] [--json] [--config FILE] [--dry-run]\n  --project DIR --home DIR --name TEXT --session NAME --socket PATH --workspace ID\n  --lead codex-desktop|codex|claude|agy --lead-name TEXT --lead-profile PROFILE_ID --port NUMBER\n  --agent-access inherit|full-access (all harnesses; use config for per-harness settings)\n  --no-trust-workspaces --mcp install|print|skip --takeover --install-tools --upgrade\n  --takeover replaces the current lead and invalidates its credentials; init accepts the same flags.\n  --schema prints the accepted JSON configuration. --yes accepts defaults without prompts.',
+          'Usage: marionette setup [--yes] [--json] [--config FILE] [--dry-run]\n  --project DIR --home DIR --name TEXT --session NAME --socket PATH --workspace ID\n  --lead codex-desktop|codex|claude|agy|omp --lead-name TEXT --lead-profile PROFILE_ID --port NUMBER\n  --agent-access inherit|full-access (all harnesses; use config for per-harness settings)\n  --no-trust-workspaces --mcp install|print|skip --takeover --install-tools --upgrade\n  --takeover replaces the current lead and invalidates its credentials; init accepts the same flags.\n  --schema prints the accepted JSON configuration. --yes accepts defaults without prompts.',
         ),
       );
       return;
@@ -56,14 +136,16 @@ const mainEffect = Effect.fn('main')(function* () {
           socket: 'Herdr socket (optional)',
           workspace: 'workspace ID (optional)',
           port: 'integer 1024–65535 (optional)',
-          lead: ['codex-desktop', 'codex', 'claude', 'agy'],
+          lead: ['codex-desktop', 'codex', 'claude', 'agy', 'omp'],
           leadName: 'custom name (1–100 characters)',
           leadProfile: 'validated exact model profile ID (optional)',
+          coordinatorOnly: true,
           trustWorkspaces: true,
           agentAccess: {
             codex: 'inherit|full-access',
             claude: 'inherit|full-access',
             agy: 'inherit|full-access',
+            omp: 'inherit|full-access',
           },
           mcp: ['install', 'print', 'skip'],
           takeover: false,
@@ -145,6 +227,7 @@ const mainEffect = Effect.fn('main')(function* () {
         codex: flag('agent-access'),
         claude: flag('agent-access'),
         agy: flag('agent-access'),
+        omp: flag('agent-access'),
       };
     if (flag('port')) yield* sync('main.main', () => (input.port = Number(flag('port'))));
     if (args.includes('--no-trust-agy') || args.includes('--no-trust-workspaces'))
@@ -334,7 +417,7 @@ const mainEffect = Effect.fn('main')(function* () {
   }
   yield* sync('main.main', () =>
     console.log(
-      `Marionette — one project, many workers\n\nUsage: marionette <command> [--home /absolute/state/directory]\n\n  setup | init            Guided setup (setup --help for automation flags)\n  lead [--print]          Open the selected lead or print its bootstrap prompt\n  update | upgrade       Update runtimes, shared supervisor and MCP clients\n  remove                  Remove this project from Marionette\n  uninstall               Remove the instance; --global also removes the CLI\n  start | serve | stop    Manage the persistent supervisor (workers survive stop)\n  dashboard               Print the private dashboard access link\n  mcp-config              Print the desktop/terminal MCP configuration\n  projects                List explicitly connected projects\n  briefing PROJECT        Current assignments, lead, decisions and questions\n  inbox PROJECT           Read durable notifications [--consumer NAME]\n  doctor                  Inspect configured connections\n  call ACTION --file JSON [--lease FILE] [--save-lease FILE]\n  worker-report --file JSON  Submit a scoped report from a worker pane\n  worker-call --file JSON    Inspect, delegate, revise or control within worker scope\n\nActions: project.register, project.inspect, project.briefing, lead.acquire,\nlead.handover, task.submit, task.get, task.control, task.retry, task.reconcile,\ndecision.record, inbox.read, inbox.ack. See README.md for examples.\n`,
+      `Marionette — one project, many workers\n\nUsage: marionette <command> [--home /absolute/state/directory]\n\n  setup | init            Guided setup (setup --help for automation flags)\n  lead [--print]          Open the selected lead or print its bootstrap prompt\n  update | upgrade       Update runtimes, shared supervisor and MCP clients\n  remove                  Remove this project from Marionette\n  uninstall               Remove the instance; --global also removes the CLI\n  start | serve | stop    Manage the persistent supervisor (workers survive stop)\n  dashboard               Print the private dashboard access link\n  mcp-config              Print the desktop/terminal MCP configuration\n  projects                List explicitly connected projects\n  briefing PROJECT        Current assignments, lead, decisions and questions\n  inbox PROJECT           Read durable notifications [--consumer NAME]\n  doctor                  Inspect configured connections\n  roles [--file JSON]     Configure project role profiles [--global for instance defaults]\n  authorize               Record scoped user authority (authorize --help)\n  call ACTION --file JSON [--lease FILE] [--save-lease FILE]\n  worker-report --file JSON  Submit a scoped report from a worker pane\n  worker-call --file JSON    Inspect, delegate, revise or control within worker scope\n\nActions: project.register, project.inspect, project.briefing, lead.acquire,\nlead.handover, task.submit, task.get, task.control, task.retry, task.reconcile,\ndecision.record, inbox.read, inbox.ack. See README.md for examples.\n`,
     ),
   );
 });

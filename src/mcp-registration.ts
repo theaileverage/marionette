@@ -1,5 +1,13 @@
 import { Effect, Schema } from 'effect';
-import { existsSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readdirSync,
+  unlinkSync,
+} from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { sync } from './effect-runtime.js';
 import { inside } from './files.js';
@@ -34,6 +42,7 @@ export function mcpServerName(project: string, lead: string) {
   return `mnett-${slug(project, 'project', 28)}-${slug(lead, 'lead', 20)}`;
 }
 export function mcpAddArgs(binary: string, name: string, server: McpServer) {
+  if (binary === 'omp') return []; // OMP has no shell `mcp add` command; see writeOmpMcp.
   const prefix =
     binary === 'codex'
       ? ['mcp', 'add', name, '--']
@@ -52,10 +61,53 @@ export function mcpCommand(agent: LeadAgent, name: string, runtime: string, home
     args: [resolve(runtime, 'dist/mcp.js'), '--home', home],
   };
   const args = mcpAddArgs(binary, name, server);
-  return { binary, name, args, server, shell: [binary, ...args].map(quote).join(' ') };
+  return {
+    binary,
+    name,
+    args,
+    server,
+    shell:
+      binary === 'omp'
+        ? `Merge into ${trustSettingsPath('omp')}:\n${JSON.stringify({ mcpServers: { [name]: server } }, null, 2)}`
+        : [binary, ...args].map(quote).join(' '),
+  };
 }
-function mcpEntries(binary: Kind): Schema.Schema.Type<typeof object> {
-  const path = trustSettingsPath(binary);
+
+/** Preserve unrelated settings and refuse concurrent read/modify/write through this adapter. */
+export function writeOmpMcp(name: string, server?: McpServer, path = trustSettingsPath('omp')) {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const lock = path + '.marionette.lock';
+  const fd = openSync(lock, 'wx', 0o600);
+  try {
+    const settings = Schema.decodeUnknownSync(object)(
+      existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : {},
+    );
+    const entries = { ...Schema.decodeUnknownSync(object)(settings.mcpServers ?? {}) };
+    if (server) entries[name] = { command: server.command, args: server.args };
+    else delete entries[name];
+    privateJson(path, { ...settings, mcpServers: entries });
+  } finally {
+    closeSync(fd);
+    unlinkSync(lock);
+  }
+}
+
+const updateMcpEffect = Effect.fn('MCP.updateClient')(function* (
+  binary: Kind,
+  name: string,
+  server?: McpServer,
+) {
+  if (binary === 'omp') return yield* sync('MCP.writeOmp', () => writeOmpMcp(name, server));
+  yield* execEffect(
+    binary,
+    server ? mcpAddArgs(binary, name, server) : mcpRemoveArgs(binary, name),
+    { timeout: 30000 },
+  );
+});
+function mcpEntries(
+  binary: Kind,
+  path = trustSettingsPath(binary),
+): Schema.Schema.Type<typeof object> {
   if (!existsSync(path)) return {};
   const text = readFileSync(path, 'utf8');
   const settings = Schema.decodeUnknownSync(object)(
@@ -65,8 +117,8 @@ function mcpEntries(binary: Kind): Schema.Schema.Type<typeof object> {
     settings[binary === 'codex' ? 'mcp_servers' : 'mcpServers'] ?? {},
   );
 }
-export function readMcpRegistration(binary: Kind, name: string) {
-  const entries = mcpEntries(binary);
+export function readMcpRegistration(binary: Kind, name: string, path = trustSettingsPath(binary)) {
+  const entries = mcpEntries(binary, path);
   if (entries[name] === undefined) return undefined;
   const raw = Schema.decodeUnknownSync(object)(entries[name]);
   return { server: Schema.decodeUnknownSync(serverSchema)(raw), raw };
@@ -191,11 +243,11 @@ export const installMcpEffect = Effect.fn('MCP.install')(function* (
   const found = yield* sync('MCP.inspect', () => inspectMcpInstall(command, name, home));
   const unchanged = found && sameMcpServer(found.server, command.server);
   if (found && !unchanged) {
-    yield* execEffect(command.binary, mcpRemoveArgs(command.binary, name), { timeout: 15000 });
+    yield* updateMcpEffect(command.binary, name);
   }
   if (!unchanged) {
     yield* Effect.gen(function* () {
-      yield* execEffect(command.binary, command.args, { timeout: 30000 });
+      yield* updateMcpEffect(command.binary, name, command.server);
       const actual = yield* sync('MCP.verify', () => readMcpRegistration(command.binary, name));
       if (!actual || !sameMcpServer(actual.server, command.server))
         return yield* new AppError({
@@ -210,14 +262,8 @@ export const installMcpEffect = Effect.fn('MCP.install')(function* (
             readMcpRegistration(command.binary, name),
           );
           if (actual && !sameMcpServer(actual.server, command.server)) return;
-          if (actual)
-            yield* execEffect(command.binary, mcpRemoveArgs(command.binary, name), {
-              timeout: 15000,
-            });
-          if (found)
-            yield* execEffect(command.binary, mcpAddArgs(command.binary, name, found.server), {
-              timeout: 30000,
-            });
+          if (actual) yield* updateMcpEffect(command.binary, name);
+          if (found) yield* updateMcpEffect(command.binary, name, found.server);
         }),
       ),
     );
@@ -257,7 +303,7 @@ export const removeMcpEffect = Effect.fn('MCP.remove')(function* (
         message: `Refusing to remove changed ${binary} MCP registration ${name}. Restore or remove it manually.`,
         status: 409,
       });
-    yield* execEffect(binary, mcpRemoveArgs(binary, name), { timeout: 15000 });
+    yield* updateMcpEffect(binary, name);
     if (yield* sync('MCP.verifyRemoval', () => readMcpRegistration(binary, name)))
       return yield* new AppError({
         code: 'mcp_remove_failed',

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Marionette · Browser test harness</title>
+    <link rel="stylesheet" href="./client.css" />
+  </head>
+  <body>
+    <header>
+      <div><strong>Marionette</strong><span>Browser test harness</span></div>
+      <p id="status" role="status">Connecting…</p>
+      <button id="focus">Focus terminal</button>
+    </header>
+    <main id="terminal" aria-label="Herdr terminal"></main>
+    <footer>
+      Local test shell · Start the named Herdr session shown below · Closing this page preserves the
+      terminal
+    </footer>
+    <script type="module" src="./client.js"></script>
+  </body>
+</html>

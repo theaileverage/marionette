@@ -82,7 +82,7 @@ export const swarmRequestSchema = Schema.Union([
   }),
   Schema.Struct({
     action: Schema.Literal('capacity.feedback'),
-    provider: Schema.Literals(['codex', 'claude', 'agy']),
+    provider: Schema.Literals(['codex', 'claude', 'agy', 'omp']),
     retryAfterMs: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(1000)).check(
       Schema.isLessThanOrEqualTo(3600000),
     ),

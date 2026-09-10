@@ -12,8 +12,24 @@ export function workerMcpServer() {
     { name: 'marionette-worker', version: VERSION },
     {
       instructions:
-        'Use worker_inspect before editing, and worker_report to report progress, blockers, or completion. Check isError before using any result. These tools use your existing scoped worker identity; never read or supply credentials. Delegation requires explicit assignment authority.',
+        'Use worker_inspect before editing, worker_files for scoped file inspection without a shell, and worker_report to report progress, blockers, or completion. Check isError before using any result. These tools use your existing scoped worker identity; never read or supply credentials. Delegation requires explicit assignment authority.',
     },
+  );
+  server.registerTool(
+    'worker_files',
+    {
+      description:
+        'Inspect files inside this assignment without a shell. Use list for a directory or read with line bounds. Private runtime and Git metadata are excluded.',
+      inputSchema: {
+        action: z.enum(['read', 'list']),
+        revision: z.number().int().min(1),
+        path: z.string(),
+        startLine: z.number().int().min(1).default(1),
+        maxLines: z.number().int().min(1).max(1000).default(200),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    (input) => mcpResult(workerRequestEffect('worker-call', input)),
   );
   server.registerTool(
     'worker_inspect',

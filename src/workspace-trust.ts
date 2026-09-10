@@ -20,7 +20,7 @@ import type { Kind, Project } from './types.js';
 const object = Schema.Record(Schema.String, Schema.mutableKey(Schema.MutableJson));
 const decodeObject = Schema.decodeUnknownSync(object);
 const receiptSchema = Schema.Struct({
-  kind: Schema.Literals(['codex', 'claude', 'agy']),
+  kind: Schema.Literals(['codex', 'claude', 'agy', 'omp']),
   root: Schema.String,
   settingsPath: Schema.String,
   previous: Schema.NullOr(Schema.Union([Schema.String, Schema.Boolean])),
@@ -32,12 +32,22 @@ export function workspaceTrustEnabled(
   project: Pick<Project, 'trustWorkspaces' | 'trustAgyWorkspaces'>,
   kind: Kind,
 ) {
+  if (kind === 'omp') return false; // OMP has no equivalent workspace trust registry.
   // Legacy opt-in authorized AGY only. Upgrades must not silently broaden its scope.
   return project.trustWorkspaces ?? (kind === 'agy' && project.trustAgyWorkspaces === true);
 }
 export function trustSettingsPath(kind: Kind) {
   const env = (name: string, fallback: string) =>
     Effect.runSync(Config.string(name).pipe(Config.withDefault(fallback)));
+  if (kind === 'omp') {
+    const profile = env('OMP_PROFILE', env('PI_PROFILE', '')).trim();
+    const base = resolve(homedir(), env('PI_CONFIG_DIR', '.omp'));
+    const agent =
+      profile && profile !== 'default'
+        ? resolve(base, 'profiles', profile, 'agent')
+        : env('PI_CODING_AGENT_DIR', resolve(base, 'agent'));
+    return resolve(env('MARIONETTE_OMP_SETTINGS', resolve(agent, 'mcp.json')));
+  }
   if (kind === 'agy')
     return resolve(
       env('MARIONETTE_AGY_SETTINGS', resolve(homedir(), '.gemini/antigravity-cli/settings.json')),
@@ -200,6 +210,7 @@ export function trustWorkspace(
   projectId: string,
   settingsPath = trustSettingsPath(kind),
 ) {
+  if (kind === 'omp') return { kind, root, changed: false, unsupported: true };
   root = realpathSync(root);
   settingsPath = existsSync(settingsPath) ? realpathSync(settingsPath) : resolve(settingsPath);
   if (!statSync(root).isDirectory()) throw new Error('Workspace trust requires a directory');

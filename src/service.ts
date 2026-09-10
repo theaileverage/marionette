@@ -1,3 +1,4 @@
+import { grantAuthority, taskAuthority } from './authority.js';
 import { agentAccessSchema, agentAccessArgs } from './agent-access.js';
 import { Effect, Schema } from 'effect';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -113,6 +114,7 @@ export class Service {
       project,
       cleanupPolicy: this.cleanup.policy(projectId),
       swarm: {
+        activeIntents: this.swarm.activeIntents(projectId),
         intents: this.orchestration.outcomes(projectId).map((o) => this.swarm.intent(o.id)),
         openDecisions: this.orchestration
           .outcomes(projectId)
@@ -195,11 +197,18 @@ export class Service {
     Effect.fn('Service.invoke')(
       { self: this },
       function* (this: Service, action: string, raw: any = {}) {
+        if (action === 'authority.grant')
+          return yield* sync('Authority.grant', () => grantAuthority(this, raw));
+        if (action === 'authority.get')
+          return yield* sync(
+            'Authority.get',
+            () => this.store.get('authority', raw.outcomeId) ?? null,
+          );
         if (action.startsWith('swarm.')) return yield* this.swarm.invokeEffect(action, raw);
         if (action.startsWith('cleanup.')) return yield* this.cleanup.invokeEffect(action, raw);
         if (/^(lead\.wait|checkpoint\.|usage\.|adapter\.)/.test(action))
           return yield* this.continuation.invokeEffect(action, raw);
-        if (/^(outcome\.|plan\.|profile\.|limits\.|strategy\.|board\.)/.test(action))
+        if (/^(outcome\.|plan\.|role\.|profile\.|limits\.|strategy\.|board\.)/.test(action))
           return yield* this.orchestration.invokeEffect(action, raw);
         switch (action) {
           case 'project.list':
@@ -229,6 +238,7 @@ export class Service {
                       ),
                     ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
                   ),
+                  coordinatorOnly: Schema.optionalKey(Schema.Boolean),
                   agentAccess: Schema.optionalKey(agentAccessSchema),
                   trustWorkspaces: Schema.mutableKey(Schema.optional(Schema.Boolean)),
                   trustAgyWorkspaces: Schema.mutableKey(
@@ -271,7 +281,7 @@ export class Service {
               id: randomUUID(),
               createdAt: now(),
             }));
-            for (const kind of ['codex', 'claude', 'agy'] as const)
+            for (const kind of ['codex', 'claude', 'agy', 'omp'] as const)
               agentAccessArgs(kind, p.agentAccess, p.agentArgs[kind]);
             const h = yield* sync('Service.invoke', () => this.port(p));
             yield* herdrCall(h, 'ping');
@@ -390,6 +400,7 @@ export class Service {
               Schema.decodeUnknownSync(
                 Schema.Struct({
                   lease: Schema.mutableKey(credentialsSchema),
+                  coordinatorOnly: Schema.optionalKey(Schema.Boolean),
                   agentAccess: Schema.optionalKey(agentAccessSchema),
                   trustWorkspaces: Schema.mutableKey(Schema.optional(Schema.Boolean)),
                   trustAgyWorkspaces: Schema.mutableKey(Schema.optional(Schema.Boolean)),
@@ -409,12 +420,13 @@ export class Service {
             const c = yield* sync('Service.invoke', () => this.guard(i.lease)),
               p = yield* sync('Service.invoke', () => this.project(c.projectId));
             const updated = { ...p };
+            if (i.coordinatorOnly !== undefined) updated.coordinatorOnly = i.coordinatorOnly;
             if (i.trustWorkspaces !== undefined) updated.trustWorkspaces = i.trustWorkspaces;
             if (i.trustAgyWorkspaces !== undefined)
               updated.trustAgyWorkspaces = i.trustAgyWorkspaces;
             if (i.agentArgs) updated.agentArgs = i.agentArgs;
             if (i.agentAccess) updated.agentAccess = { ...p.agentAccess, ...i.agentAccess };
-            for (const kind of ['codex', 'claude', 'agy'] as const)
+            for (const kind of ['codex', 'claude', 'agy', 'omp'] as const)
               agentAccessArgs(kind, updated.agentAccess, updated.agentArgs[kind]);
             yield* sync('Service.invoke', () => this.store.put('project', p.id, updated));
             yield* sync('Service.invoke', () =>
@@ -960,6 +972,8 @@ export class Service {
     )(raw);
     return this.store.transaction(() => {
       let t = this.task(i.taskId);
+      if (i.checks || ['redirect', 'reply', 'keys'].includes(i.type))
+        taskAuthority(this, { ...t, checks: i.checks ?? t.checks });
       this.cleanup.assertMutable(t);
       if (t.projectId !== c.projectId)
         throw new AppError({

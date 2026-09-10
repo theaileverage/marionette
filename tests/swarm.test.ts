@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fixture } from './swarm-fixture.js';
 import { Store } from '../src/store.js';
+import { Service } from '../src/service.js';
 import { SwarmRuntime } from '../src/swarm-runtime.js';
 import { swarmRequestSchema, type Intent, type Watch } from '../src/swarm-types.js';
 import { swarmTools } from '../src/swarm-tools.js';
@@ -25,6 +26,72 @@ const entry = (key: string, extra: Partial<Assignment> = {}) => ({
     checks: [{ type: 'command', command: process.execPath, args: ['-e', 'process.exit(0)'] }],
     ...extra,
   },
+});
+
+test('adding an independent intent preserves earlier running work and exposes both recovery paths', async () => {
+  const f = await fixture();
+  try {
+    const first = await f.submit('Earlier research');
+    await f.tick();
+    assert.equal(f.service.task(first.id).status, 'running');
+    const checkpoint = await f.invoke('checkpoint.save', {
+      outcomeId: f.outcome.id,
+      summary: 'Next: assess the earlier research result, then integrate its evidence.',
+    });
+    const beforeTask = JSON.stringify(f.service.task(first.id));
+    const beforeOutcome = JSON.stringify(f.service.orchestration.outcome(f.outcome.id));
+    const secondOutcome = await f.invoke('outcome.create', {
+      outcome: {
+        projectId: f.p.id,
+        key: 'additional',
+        objective: 'Investigate startup',
+        originalRequest: 'Also investigate startup',
+        requestSource: 'User follow-up',
+        scope: ['.'],
+        criteria: [
+          { id: 'answer', description: 'Explain startup', requiredEvidence: 'Source evidence' },
+        ],
+      },
+    });
+    const second = await f.submit('Startup research', {
+      outcomeId: secondOutcome.id,
+      expectedTreeRevision: secondOutcome.revision,
+    });
+    await f.tick();
+    assert.equal(f.service.task(second.id).status, 'running');
+    assert.equal(JSON.stringify(f.service.task(first.id)), beforeTask);
+    assert.equal(JSON.stringify(f.service.orchestration.outcome(f.outcome.id)), beforeOutcome);
+    await f.invoke('swarm.intent.amend', {
+      outcomeId: secondOutcome.id,
+      expectedRevision: f.service.orchestration.outcome(secondOutcome.id).revision,
+      key: 'cold-start',
+      text: 'Focus on cold starts',
+      source: 'User correction',
+      taskIds: [second.id],
+    });
+    assert.equal(JSON.stringify(f.service.task(first.id)), beforeTask);
+    const active = f.service.briefing(f.p.id).swarm.activeIntents;
+    assert.deepEqual(
+      active.map((i) => i.outcomeId).sort(),
+      [f.outcome.id, secondOutcome.id].sort(),
+    );
+    const earlier = active.find((i) => i.outcomeId === f.outcome.id)!;
+    assert.equal(earlier.latestCheckpointId, checkpoint.id);
+    assert.equal(earlier.tasks[0].status, 'running');
+    assert.equal(earlier.intentVersion, 1);
+    assert.equal(active.find((i) => i.outcomeId === secondOutcome.id)?.intentVersion, 2);
+    assert.deepEqual(f.service.swarm.observe(f.p.id).activeIntents, active);
+    const reopened = new Store(f.store.path);
+    try {
+      const service = new Service(reopened, () => f.agents);
+      assert.deepEqual(service.swarm.activeIntents(f.p.id), active);
+    } finally {
+      reopened.close();
+    }
+    assert.equal(f.agents.calls.filter((c) => c.method === 'agent.send_keys').length, 0);
+  } finally {
+    await f.close();
+  }
 });
 
 test('batch dispatch is atomic, topological and idempotent without launching in the transaction', async () => {

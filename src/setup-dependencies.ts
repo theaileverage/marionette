@@ -22,7 +22,7 @@ export function setupRequirements(options: Pick<SetupOptions, 'lead' | 'mcp'>): 
       help: 'Install Git with your system package manager (macOS: xcode-select --install or brew install git).',
     },
     { binary: 'herdr', required: true, help: 'Install Herdr: https://herdr.dev/docs/install/' },
-    ...['codex', 'claude', 'agy'].map((binary) => ({
+    ...['codex', 'claude', 'agy', 'omp'].map((binary) => ({
       binary,
       required: binary === lead && (options.lead !== 'codex-desktop' || options.mcp === 'install'),
       help:
@@ -44,6 +44,8 @@ export function toolInstaller(
       : { url: 'https://herdr.dev/install.sh', shell: 'sh' };
   if (binary === 'git' && brew) return { binary: 'brew', args: ['install', 'git'] };
   if (binary === 'codex' && npm) return { binary: 'npm', args: ['install', '-g', '@openai/codex'] };
+  if (binary === 'omp')
+    return { binary: process.execPath, args: ['install', '-g', '@oh-my-pi/pi-coding-agent'] };
   if (binary === 'claude') return { url: 'https://claude.ai/install.sh', shell: 'bash' };
   return undefined;
 }

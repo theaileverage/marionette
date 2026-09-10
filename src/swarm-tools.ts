@@ -113,7 +113,7 @@ export const swarmTools = [
     description:
       'Record observed provider pressure and a bounded cooldown. Supply actual evidence, not an inferred model ranking. Blocks new work on this provider while preserving other providers.',
     schema: z.object({
-      provider: z.enum(['codex', 'claude', 'agy']),
+      provider: z.enum(['codex', 'claude', 'agy', 'omp']),
       retryAfterMs: z.number().min(1000).max(3600000),
       evidence: text,
     }),
@@ -146,7 +146,7 @@ export const swarmTools = [
   {
     action: 'observe',
     description:
-      'Read a fresh compact multi-objective snapshot: changes, tasks, decisions, pending instructions, watches and supervision/capacity health. Page event changes using cursor/hasMore. Does not dispatch, resolve decisions or publish.',
+      'Read fresh multi-objective state, including activeIntents for every open outcome with its tasks, open decisions and latest checkpoint reference. Also returns changes, pending instructions, watches and supervision/capacity health. Page changes using cursor/hasMore; preserve earlier work when new intent arrives.',
     readOnly: true,
     schema: z.object({ projectId: id, after: z.number().int().min(0).optional() }),
   },

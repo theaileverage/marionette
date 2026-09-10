@@ -24,6 +24,15 @@ import { leadContract } from './prompts.js';
 import { mcpResult } from './mcp-result.js';
 import { VERSION } from './version.js';
 import { swarmToolInputs } from './swarm-tools.js';
+import { leadActions } from './lead-capabilities.js';
+import { leadCallEffect } from './lead-client.js';
+const option = (name: string) => {
+  const at = process.argv.indexOf('--' + name);
+  return at >= 0 ? process.argv[at + 1] : undefined;
+};
+const leadLease = option('lead-lease'),
+  leadUrl = option('url');
+if (leadLease && !leadUrl) throw new Error('Scoped lead MCP requires --url');
 const i = process.argv.indexOf('--home'),
   home = homePath(i >= 0 ? process.argv[i + 1] : undefined);
 const server = new McpServer(
@@ -39,6 +48,11 @@ function tool(
   inputSchema: any,
   readOnly = false,
 ) {
+  if (leadLease && !leadActions.has(action)) return;
+  if (leadLease) {
+    const { lease: _lease, ...scopedSchema } = inputSchema;
+    inputSchema = scopedSchema;
+  }
   server.registerTool(
     name,
     {
@@ -46,9 +60,47 @@ function tool(
       inputSchema,
       annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly, openWorldHint: false },
     },
-    (input: any) => mcpResult(callEffect(home, action, input)),
+    (input: any) =>
+      mcpResult(
+        leadLease && leadUrl
+          ? leadCallEffect(leadLease, leadUrl, action, input)
+          : callEffect(home, action, input),
+      ),
   );
 }
+tool(
+  'role_list',
+  'role.list',
+  'List configured role profiles and suggested role names.',
+  { projectId: z.string() },
+  true,
+);
+tool(
+  'role_configure',
+  'role.configure',
+  'Configure project role profiles or instance defaults through an administrative client. Model selection does not grant execution authority.',
+  {
+    lease: credentialsSchema,
+    scope: z.enum(['project', 'instance']).optional(),
+    roles: z.array(
+      z
+        .object({
+          id: z.string().regex(/^[a-z0-9_-]{1,80}$/),
+          profileId: z.string().min(1),
+          activity: z.enum(['coordinate', 'inspect', 'documentation', 'implementation']),
+          canDelegate: z.boolean(),
+        })
+        .strict(),
+    ),
+  },
+);
+tool(
+  'authority_get',
+  'authority.get',
+  'Read user-granted outcome activities and paths. Skills and intent amendments cannot expand this authority.',
+  { outcomeId: z.string() },
+  true,
+);
 tool(
   'project_list',
   'project.list',
@@ -90,7 +142,7 @@ tool(
 tool(
   'project_briefing',
   'project.briefing',
-  'Get the current project briefing before planning, dispatching or taking over.',
+  'Read current project state: profiles and their availability, roles, profileDefaults, and swarm.activeIntents with all open objectives, tasks and checkpoint references. Read before planning or dispatch; a new user intent does not replace earlier work.',
   { projectId: z.string() },
   true,
 );
@@ -506,4 +558,6 @@ for (const entry of swarmToolInputs())
     entry.input,
     entry.readOnly === true,
   );
+if (leadLease && leadUrl)
+  await Effect.runPromise(leadCallEffect(leadLease, leadUrl, 'adapter.capabilities', {}));
 await Effect.runPromise(serveMcpEffect(server));

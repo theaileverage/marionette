@@ -224,7 +224,7 @@ export const inspectRemovalEffect = Effect.fn('Removal.inspect')(function* (
         'The state directory overlaps a protected directory. Refusing recursive uninstallation.',
       );
     const known =
-      /^(?:config\.json|state\.sqlite(?:-wal|-shm)?|runtime\.json|supervisor\.log|(?:maintenance|supervisor|setup)\.lock|setup-project-[a-f0-9]+\.json|runtimes|updates|clients|trust|leads|archives|worktrees)$/;
+      /^(?:config\.json|state\.sqlite(?:-wal|-shm)?|runtime\.json|supervisor\.log|(?:maintenance|supervisor|setup)\.lock|setup-project-[a-f0-9]+\.json|runtimes|updates|clients|trust|leads|guards|archives|worktrees)$/;
     const unknown = readdirSync(state.home).filter((name) => !known.test(name));
     if (unknown.length)
       blockers.push(
@@ -243,7 +243,7 @@ export const inspectRemovalEffect = Effect.fn('Removal.inspect')(function* (
       );
   }
   const removeClients = options.all || state.projects.every((p) => projectIds.includes(p.id));
-  const clients = (['codex', 'claude', 'agy'] as const).flatMap((kind) =>
+  const clients = (['codex', 'claude', 'agy', 'omp'] as const).flatMap((kind) =>
     listClientReceipts(state.home, kind).flatMap(({ receipt }) => {
       if (!removeClients && (!receipt.projectId || !projectIds.includes(receipt.projectId)))
         return [];
@@ -355,6 +355,8 @@ function removeProjectFiles(state: InstanceState, ids: string[]) {
   }
   for (const id of ids) {
     Schema.decodeUnknownSync(identifier)(id);
+    const guards = safePath(state.home, `guards/${id}`);
+    if (existsSync(guards)) rmSync(guards, { recursive: true });
     for (const suffix of ['.json', '.md', '.terminal.json']) {
       const path = safePath(state.home, `leads/${id}${suffix}`);
       if (existsSync(path)) unlinkSync(path);

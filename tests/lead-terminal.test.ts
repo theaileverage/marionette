@@ -216,3 +216,38 @@ test('unsupported control characters in custom launch arguments fail before crea
   );
   assert.equal(f.calls.length, 0);
 });
+
+test('guarded lead reuse requires proof of the same launch and terminal', async () => {
+  const f = fixture();
+  await Effect.runPromise(openLeadTerminalEffect(f.h, f.lead));
+  f.agents[0].terminal_id = 'terminal-1';
+  const guard = {
+    launchHash: 'guard-v1',
+    receipt: { launchHash: 'guard-v1', pane_id: 'w9:p7', terminal_id: 'terminal-1' },
+  };
+  await assert.rejects(
+    Effect.runPromise(
+      openLeadTerminalEffect(f.h, { ...f.lead, guard: { launchHash: 'guard-v1' } }),
+    ),
+    /launch configuration changed/,
+  );
+  await Effect.runPromise(openLeadTerminalEffect(f.h, { ...f.lead, guard }));
+  await assert.rejects(
+    Effect.runPromise(
+      openLeadTerminalEffect(f.h, { ...f.lead, guard: { ...guard, launchHash: 'guard-v2' } }),
+    ),
+    /launch configuration changed/,
+  );
+  assert.equal(f.calls.filter((c) => c.method === 'agent.start').length, 1);
+});
+
+for (const value of ['x'.repeat(1100), "'".repeat(300), '界'.repeat(400)]) {
+  test(`oversized encoded launch is rejected before touching Herdr (${value.length} characters)`, async () => {
+    const f = fixture();
+    await assert.rejects(
+      Effect.runPromise(openLeadTerminalEffect(f.h, { ...f.lead, args: [value] })),
+      /safe terminal input size/,
+    );
+    assert.equal(f.calls.length, 0);
+  });
+}

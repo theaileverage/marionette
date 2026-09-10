@@ -78,7 +78,7 @@ test('real HTTP and STDIO MCP enforce instance auth and expose the same durable 
       }),
     );
     const tools = await client.listTools();
-    assert.equal(tools.tools.length, 68);
+    assert.equal(tools.tools.length, 71);
     for (const name of [
       'project_configure',
       'outcome_create',
@@ -182,6 +182,53 @@ test('real HTTP and STDIO MCP enforce instance auth and expose the same durable 
       )[0].text,
     );
     writeFileSync(join(home, 'lease.json'), JSON.stringify(lease), { mode: 0o600 });
+    const lead = new Client({ name: 'scoped-lead', version: '1' });
+    try {
+      await lead.connect(
+        new StdioClientTransport({
+          command: process.execPath,
+          args: [mcpEntry, '--lead-lease', join(home, 'lease.json'), '--url', url],
+          stderr: 'pipe',
+        }),
+      );
+      const surface = await lead.listTools();
+      for (const name of [
+        'project_configure',
+        'profile_configure',
+        'role_configure',
+        'lead_acquire',
+        'authority_grant',
+        'cleanup_deliver',
+      ])
+        assert.ok(!surface.tools.some((t) => t.name === name));
+      assert.ok(
+        surface.tools.every((t) => !Object.hasOwn(t.inputSchema.properties ?? {}, 'lease')),
+      );
+      const brief = await lead.callTool({
+        name: 'project_briefing',
+        arguments: { projectId: 'parity' },
+      });
+      assert.equal(brief.isError, undefined);
+      assert.equal(JSON.stringify(brief).includes(config.token), false);
+      assert.equal(JSON.stringify(brief).includes(lease.token), false);
+      const outside = await lead.callTool({ name: 'task_get', arguments: { taskId: 'foreign' } });
+      assert.equal(outside.isError, true);
+      const denied = await fetch(url + '/api/lead/call', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${lease.token}` },
+        body: JSON.stringify({ lease, action: 'authority.grant', input: {} }),
+      });
+      assert.equal(denied.status, 403);
+      const admin = await fetch(url + '/api/call', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${lease.token}` },
+        body: JSON.stringify({ action: 'project.list' }),
+      });
+      assert.equal(admin.status, 401);
+    } finally {
+      await lead.close();
+    }
+
     writeFileSync(
       join(home, 'assignment.json'),
       JSON.stringify({
@@ -266,6 +313,7 @@ test('real HTTP and STDIO MCP enforce instance auth and expose the same durable 
       const catalog = await worker.listTools();
       assert.deepEqual(catalog.tools.map((tool) => tool.name).sort(), [
         'worker_call',
+        'worker_files',
         'worker_inspect',
         'worker_report',
       ]);
@@ -278,6 +326,57 @@ test('real HTTP and STDIO MCP enforce instance auth and expose the same durable 
       );
       assert.equal(JSON.stringify(inspected).includes(workerToken), false);
       assert.equal(JSON.stringify(inspected).includes(config.token), false);
+      const policyPath = join(home, 'guard-policy.json');
+      writeFileSync(
+        policyPath,
+        JSON.stringify({
+          version: 1,
+          root: home,
+          taskId: task.id,
+          role: 'implementation',
+          instructions: 'Fixture',
+          mcpName: 'marionette_worker',
+          ownership: ['obsolete.txt'],
+        }),
+      );
+      const runHook = async () => {
+        const process = Bun.spawn(
+          [globalThis.process.execPath, cliEntry, 'guard-hook', '--policy', policyPath],
+          {
+            env: {
+              ...globalThis.process.env,
+              MARIONETTE_URL: url,
+              MARIONETTE_TASK_ID: task.id,
+              MARIONETTE_WORKER_TOKEN: workerToken,
+            },
+            stdin: new Blob([
+              JSON.stringify({
+                hook_event_name: 'PreToolUse',
+                cwd: home,
+                tool_name: 'Write',
+                tool_input: { file_path: 'result.txt' },
+              }),
+            ]),
+            stdout: 'pipe',
+            stderr: 'pipe',
+          },
+        );
+        const [code, stdout, stderr] = await Promise.all([
+          process.exited,
+          new Response(process.stdout).text(),
+          new Response(process.stderr).text(),
+        ]);
+        return { code, stdout, stderr };
+      };
+      const currentHook = await runHook();
+      assert.equal(currentHook.code, 0);
+      assert.equal(JSON.parse(currentHook.stdout).hookSpecificOutput.permissionDecision, undefined);
+      runtime.service.updateTask(runtime.service.task(task.id), { status: 'paused' });
+      const pausedHook = await runHook();
+      assert.equal(pausedHook.code, 2);
+      assert.equal(pausedHook.stderr.includes(workerToken), false);
+      runtime.service.updateTask(runtime.service.task(task.id), { status: 'running' });
+
       const notification = await client.callTool({
         name: 'swarm_message_send',
         arguments: {

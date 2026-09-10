@@ -1,0 +1,20 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "marionette-browser-harness",
+      "dependencies": {
+        "@wterm/dom": "0.5.0",
+        "@wterm/ghostty": "0.5.0",
+      },
+    },
+  },
+  "packages": {
+    "@wterm/core": ["@wterm/core@0.5.0", "", {}, "sha512-2bodU1AK0GmDghJ/GpkQ1v2YHC6j8CI4utXFI6NBPDJ3sU5lvzRYBAEm9fUVOCN2Gjs6fug/+6XRDtWre9lYMA=="],
+
+    "@wterm/dom": ["@wterm/dom@0.5.0", "", { "dependencies": { "@wterm/core": "0.5.0" } }, "sha512-vMIaca+p6uytiIL86Dxu7lFsx2eiOmg4JnL/rCnwdapAoPuVEVV24SyecdaoQXSaQg8HoAx4misKT73goYRWHQ=="],
+
+    "@wterm/ghostty": ["@wterm/ghostty@0.5.0", "", { "dependencies": { "@wterm/core": "0.5.0" } }, "sha512-MOZTFazB1g3gd2xWslE3Ua0D8opfiTBsskIMtdclE0IsoghHMn4lu0oFEbQV0ZiUNGrou8Td+dPNNm5GYjMhvQ=="],
+  }
+}

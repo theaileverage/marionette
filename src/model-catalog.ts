@@ -2,6 +2,7 @@ import { Effect, Latch, Option, Schema } from 'effect';
 import { spawn } from 'node:child_process';
 import { BoundaryError, boundaryError, sync } from './effect-runtime.js';
 import { commandEffect } from './files.js';
+import { processEffect } from './process.js';
 import { profileSchema, type Profile } from './orchestration-types.js';
 import { AppError, now, type Kind } from './types.js';
 export interface CatalogModel {
@@ -196,6 +197,37 @@ const nativeModelSchema = Schema.Struct({
 });
 export function parseCatalog<Input>(kind: Kind, raw: Input): CatalogModel[] {
   const result: CatalogModel[] = [];
+  if (kind === 'omp') {
+    const catalog = Schema.decodeUnknownSync(
+      Schema.Struct({
+        models: Schema.Array(
+          Schema.Struct({
+            provider: Schema.String,
+            id: Schema.String,
+            selector: Schema.String,
+            name: Schema.String,
+            thinking: Schema.NullOr(Schema.Array(Schema.String)),
+            input: Schema.Array(Schema.String),
+          }),
+        ),
+      }),
+    )(raw);
+    for (const item of catalog.models) {
+      if (
+        item.selector !== `${item.provider}/${item.id}` ||
+        /^(auto|default|latest)$/.test(item.id)
+      )
+        continue;
+      result.push({
+        model: item.selector,
+        name: item.name,
+        description: `Listed by oh-my-pi provider ${item.provider}; availability requires an account probe.`,
+        reasoning: [...(item.thinking ?? [])],
+        capabilities: ['tools', ...item.input],
+      });
+    }
+    return [...new Map(result.map((m) => [m.model, m])).values()];
+  }
   if (kind === 'agy') {
     if (!Schema.is(Schema.String)(raw))
       throw new AppError({
@@ -279,7 +311,7 @@ export function catalogProfiles(catalog: ModelCatalog): Profile[] {
         .toLowerCase()
         .replace(/[^a-z0-9_-]+/g, '-')
         .replace(/-$/, ''),
-      name: `${catalog.kind === 'codex' ? 'Codex' : catalog.kind === 'claude' ? 'Claude' : 'AGY'} · ${m.name}`,
+      name: `${catalog.kind === 'codex' ? 'Codex' : catalog.kind === 'claude' ? 'Claude' : catalog.kind === 'omp' ? 'oh-my-pi' : 'AGY'} · ${m.name}`,
       kind: catalog.kind,
       model: m.model,
       reasoning: m.defaultReasoning,
@@ -299,7 +331,21 @@ export const discoverModelsEffect = Effect.fn('discoverModels')(function* (
   cwd: string,
 ) {
   let raw: unknown, source: string;
-  if (kind === 'agy') {
+  if (kind === 'omp') {
+    const result = yield* processEffect('omp', ['models', '--json', '--no-extensions'], {
+      cwd,
+      timeout: 30000,
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    if (result.code !== 0 || result.timedOut)
+      return yield* new AppError({
+        code: 'catalog_unavailable',
+        message: 'omp models failed',
+        status: 400,
+      });
+    raw = yield* sync('ModelCatalog.omp', () => JSON.parse(result.stdout));
+    source = 'omp models --json';
+  } else if (kind === 'agy') {
     const result = yield* commandEffect('agy', ['models'], cwd, 30000);
     if (result.code !== 0 || result.timedOut)
       return yield* new AppError({

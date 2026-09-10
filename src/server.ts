@@ -1,3 +1,5 @@
+import { scopeLeadInput } from './lead-capabilities.js';
+import { credentialsSchema } from './types.js';
 import { Context, Effect, Fiber, FiberMap, Latch, Layer, ManagedRuntime, Schema } from 'effect';
 import express from 'express';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
@@ -101,6 +103,25 @@ const serverLayer = (shutdown: () => Promise<void>) =>
           });
         } catch (e) {
           next(e);
+        }
+      });
+      app.post('/api/lead/call', async (req, res, next) => {
+        try {
+          if (stopping)
+            throw new AppError({
+              code: 'stopping',
+              message: 'Supervisor is stopping',
+              status: 503,
+            });
+          const credentials = Schema.decodeUnknownSync(credentialsSchema)({
+            ...req.body.lease,
+            token: (req.headers.authorization ?? '').replace(/^Bearer /, ''),
+          });
+          const action = Schema.decodeUnknownSync(Schema.String)(req.body.action);
+          const input = scopeLeadInput(service, credentials, action, req.body.input ?? {});
+          res.json({ result: await runRequest(randomUUID(), application.invoke(action, input)) });
+        } catch (error) {
+          next(error);
         }
       });
       app.use('/api', (req, res, next) => {
