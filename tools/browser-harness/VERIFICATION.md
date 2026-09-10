@@ -92,3 +92,14 @@ resources and private evidence are retained; no raw credentials or terminal
 capability URLs are included in this record.
 The three native trust entries added for disposable model-test repositories were
 restored after testing; all other parsed Codex configuration was preserved.
+
+## PR 17 CI portability repair — 10 September 2026
+
+The guarded-launch unit fixture now supplies its own Codex help executable, and
+its symlink escape fixture targets the platform temporary directory. Production
+source is unchanged. Local type/lint, formatting, all 250 tests, and runtime
+lifecycle checks passed. A new browser-controlled Herdr session verified
+`HERDR_ENV=1`, fresh/existing/repeat setup, distinct stable project identities,
+and preservation of dirty/untracked fixture files. All nine coordinator tests
+also passed through browser input; terminal success markers were checked against
+independent evidence logs. This repair did not rerun real model completion.

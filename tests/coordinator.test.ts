@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'bun:test';
 import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import {
   applyWorkerGuardState,
   guardHook,
@@ -45,6 +46,16 @@ test('scoped lead registers outcome waits without adding excess transport fields
 
 test('guarded worker launch uses one scoped MCP configuration within the terminal limit', async () => {
   const f = await fixture();
+  const previousPath = process.env.PATH;
+  const bin = join(f.root, 'bin');
+  mkdirSync(bin);
+  // This protocol fixture does not launch a real agent; only capability discovery is real.
+  writeFileSync(
+    join(bin, 'codex'),
+    '#!/bin/sh\n[ "$1" = "--help" ] || exit 1\nprintf "%s\\n" "--dangerously-bypass-hook-trust --config"\n',
+    { mode: 0o755 },
+  );
+  process.env.PATH = `${bin}:${previousPath ?? ''}`;
   try {
     f.store.put('project', f.p.id, { ...f.p, coordinatorOnly: true });
     const task = await f.submit('Read only inspection', {
@@ -67,6 +78,8 @@ test('guarded worker launch uses one scoped MCP configuration within the termina
     assert.doesNotThrow(() => validateTerminalArguments('codex', args));
     assert.equal(args.filter((arg) => arg.startsWith('mcp_servers.marionette_worker')).length, 1);
   } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
     await f.close();
   }
 });
@@ -306,7 +319,7 @@ test('documentation guards reject source, shell, escaped paths, and native deleg
   const f = await fixture();
   try {
     mkdirSync(join(f.root, 'docs'));
-    symlinkSync('/private/tmp', join(f.root, 'docs/outside'));
+    symlinkSync(tmpdir(), join(f.root, 'docs/outside'));
     const policy: GuardPolicy = {
       version: 1,
       root: f.root,
