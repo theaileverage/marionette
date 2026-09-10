@@ -8,15 +8,29 @@ const packages = new Set([
   'node_modules/lucide-react',
 ]);
 for (const [name, entry] of [
+  ['harness-guard', 'src/harness-guard.ts'],
   ['cli', 'src/cli.ts'],
   ['mcp', 'src/mcp.ts'],
-  ['harness-guard', 'src/harness-guard.ts'],
   ['evaluate-swarm', 'scripts/evaluate-swarm.mjs'],
 ]) {
   const result = await build({
     entryPoints: [entry],
     outfile: `dist/${name}.js`,
     bundle: true,
+    plugins:
+      name === 'cli'
+        ? [
+            {
+              name: 'runtime-guard-fallback',
+              setup(plugin) {
+                plugin.onLoad({ filter: /[/\\]runtime-bundle\.ts$/ }, () => ({
+                  contents: `export function bundledGuard() { return ${JSON.stringify(readFileSync('dist/harness-guard.js', 'utf8'))}; }`,
+                  loader: 'js',
+                }));
+              },
+            },
+          ]
+        : [],
     loader: { '.mustache': 'text', '.md': 'text' },
     platform: 'node',
     format: 'esm',

@@ -26,11 +26,11 @@ bunx --bun @theaileverage/marionette setup
 
 You can also use `npx @theaileverage/marionette setup`. Bun must still be installed and on PATH; `npx` downloads the package but does not install Bun.
 
-The interactive setup uses editable defaults and arrow-key choices. It offers to install missing required tools, then starts the supervisor, connects a named Herdr session and project workspace, and configures a guarded lead with Codex CLI (the default), Claude Code, or oh-my-pi. Codex desktop and AGY integrations require the explicit legacy configuration described in the [coordinator guide](documentation/coordinator.md).
+The interactive setup uses editable defaults and arrow-key choices. It offers to install missing required tools, then starts the supervisor, connects the shared Herdr `default` session and a project workspace, and configures a guarded lead with Codex CLI (the default), Claude Code, or oh-my-pi. Codex desktop and AGY integrations require the explicit legacy configuration described in the [coordinator guide](documentation/coordinator.md).
 
 Setup installs Herdr through Homebrew when available, or its [official installer](https://herdr.dev/docs/install/); Git through existing Homebrew; Codex through npm when available; Claude Code through its official installer; and oh-my-pi through Bun. AGY and Git without Homebrew require manual installation. Agent sign-in remains a separate step. Setup does not install every optional worker or change existing agent integrations.
 
-The project defaults to your current directory. To select Menderly from another directory, for example, pass `setup --project /path/to/menderly`.
+New projects use Herdr’s existing `default` session, with a separate workspace per project so every Marionette project appears in the same Herdr window. `--session NAME` explicitly selects an isolated session. Existing project bindings keep their saved session, workspace, and running conversations across updates. The project defaults to your current directory. To select Menderly from another directory, for example, pass `setup --project /path/to/menderly`.
 
 For a terminal lead:
 
@@ -112,7 +112,7 @@ marionette upgrade                  # Alias for update
 marionette update --from /path/to/built/marionette  # Use a local build
 ```
 
-An instance can serve several projects. Updating moves all its saved project bindings and owned MCP registrations together, restarts the supervisor, and preserves worker terminals, assignments, and lead leases. A failed restart restores the previous runtime and database. Recovery files are retained only if rollback needs attention. Refresh or restart agent MCP clients afterward. `--runtime-only` leaves the global CLI package unchanged; `--home DIR` selects another instance. Global package-manager failures are reported separately from the runtime migration and can be retried.
+An instance can serve several projects. Updating moves all its saved project bindings and owned MCP registrations together, restarts the supervisor, and preserves worker terminals, assignments, and lead leases. A failed restart restores the previous runtime and database. Recovery files are retained only if rollback needs attention. Existing MCP processes continue calling the updated supervisor; no agent restart is required for routine updates. Repeating `marionette lead` reconnects to the original conversation, including leads launched before 0.5.2. Running leads retain their launch settings, model, and guard files. A newly added or changed MCP tool catalog may need the client’s tool refresh; it does not require replacing the lead conversation. `--runtime-only` leaves the global CLI package unchanged; `--home DIR` selects another instance. Global package-manager failures are reported separately from the runtime migration and can be retried.
 
 Setup detects a different saved or running runtime and offers the same migration. For scripts, use `setup --yes --upgrade`; without `--upgrade`, setup reports the required update command before changing project state.
 
@@ -133,6 +133,27 @@ Project removal deletes its binding, leases, stored project history, and archive
 Removal previews active tasks, pending operations, and terminal ownership before making changes. Exit lead/worker agents first, or explicitly use `--stop-agents` to close verified project agents. Use `--keep-herdr` to retain terminal resources, including offline sessions. Herdr itself and the coding-agent applications remain installed. Noninteractive removal requires `--yes`; `--json` provides structured output. `--project-id ID` can remove an orphaned project whose source directory no longer exists.
 
 `remove --force` (also supported by `uninstall`) discards unfinished task and lead-wait records and permits closing verified agents. It retains unverified agents, busy panes, shared workspaces, and offline sessions, and reports retained resources. Add `--keep-herdr` to retain all terminals. Force still requires confirmation or `--yes`; unresolved operations, managed worktrees, and changed MCP registrations remain blockers.
+
+## Configure model profiles and roles
+
+Use `marionette --help` for every CLI command and callable action; `marionette COMMAND --help` shows its options without running it. `marionette help COMMAND` works too.
+
+```sh
+marionette profiles                         # List exact models and availability
+marionette profiles discover --kind codex   # Read the installed harness catalog
+marionette profiles show PROFILE_ID
+marionette profiles set my-model --kind codex --model EXACT_MODEL_ID \
+  --reasoning high --supported-reasoning low,medium,high \
+  --categories orchestration,implementation,review --can-delegate true
+marionette profiles validate my-model       # Small account probe; may incur usage
+marionette profiles default orchestration my-model
+marionette roles set lead --profile my-model --activity coordinate --can-delegate true
+marionette roles set reviewer --profile my-model --activity inspect
+marionette roles show reviewer
+marionette roles remove reviewer
+```
+
+`set` adds or edits one entry while retaining the others. Model and effort changes invalidate previous availability evidence. Profiles referenced by roles cannot be removed. `roles --global` edits instance defaults; project overrides take precedence, and removing an override reveals its instance default. Append `--project DIR` to target another project. JSON replacement remains available through `profiles --file FILE` (array or `{profiles, defaults}`) and `roles --file FILE` (array).
 
 ## How it runs
 

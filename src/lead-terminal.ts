@@ -35,6 +35,40 @@ export function terminalLeadArgs(
   ];
 }
 
+/** A launch receipt pins a running terminal, independent of installed runtime paths.
+ * Reattach before preparing launch files so updates never rewrite a live guard.
+ */
+export const resumeLeadTerminalEffect = Effect.fn('Lead.resumeTerminal')(function* (
+  h: HerdrPort,
+  lead: Omit<TerminalLead, 'args' | 'guard'>,
+  receipt?: { pane_id: string; terminal_id: string; agent_session?: { value: string } | null },
+  guarded = true,
+) {
+  const name = `lead-${createHash('sha256').update(lead.projectId).digest('hex').slice(0, 12)}-${lead.epoch}`;
+  const { agents }: { agents: ResponseTypes.AgentInfo[] } = yield* herdrCall(h, 'agent.list');
+  const candidates = agents.filter((agent) => agent.name === name);
+  if (!candidates.length) return undefined;
+  const existing = candidates[0];
+  if (
+    candidates.length !== 1 ||
+    existing.workspace_id !== lead.workspace ||
+    existing.agent !== lead.kind ||
+    existing.cwd !== lead.root ||
+    (guarded &&
+      (!receipt ||
+        receipt.pane_id !== existing.pane_id ||
+        receipt.terminal_id !== existing.terminal_id ||
+        (receipt.agent_session && receipt.agent_session.value !== existing.agent_session?.value)))
+  )
+    return yield* new AppError({
+      code: 'lead_identity',
+      message: `Herdr agent ${name} does not match this project’s saved terminal. Inspect it before retrying.`,
+      status: 409,
+    });
+  yield* herdrCall(h, 'tab.focus', { tab_id: existing.tab_id });
+  return existing;
+});
+
 /** Reuse a surviving tab only after verifying that its sole foreground process is its shell. */
 export const openLeadTerminalEffect = Effect.fn('Lead.openTerminal')(function* (
   h: HerdrPort,

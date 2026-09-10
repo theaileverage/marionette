@@ -251,3 +251,46 @@ for (const value of ['x'.repeat(1100), "'".repeat(300), '界'.repeat(400)]) {
     assert.equal(f.calls.length, 0);
   });
 }
+
+test('resume accepts a pre-0.5.2 receipt and never replays launch after a runtime update', async () => {
+  const { resumeLeadTerminalEffect } = await import('../src/lead-terminal.js');
+  const f = fixture();
+  await Effect.runPromise(openLeadTerminalEffect(f.h, f.lead));
+  f.agents[0].terminal_id = 'old-terminal';
+  const receipt = { pane_id: 'w9:p7', terminal_id: 'old-terminal' };
+  const calls = f.calls.length;
+  const resumed = await Effect.runPromise(resumeLeadTerminalEffect(f.h, f.lead, receipt));
+  assert.equal(resumed?.terminal_id, 'old-terminal');
+  assert.deepEqual(
+    f.calls.slice(calls).map((c) => c.method),
+    ['agent.list', 'tab.focus'],
+  );
+  f.agents[0].terminal_id = 'replacement-terminal';
+  await assert.rejects(
+    Effect.runPromise(resumeLeadTerminalEffect(f.h, f.lead, receipt)),
+    /saved terminal/,
+  );
+  assert.equal(f.calls.filter((c) => c.method === 'agent.start').length, 1);
+});
+
+test('resume requires a receipt and preserves pinned native conversation identity', async () => {
+  const { resumeLeadTerminalEffect } = await import('../src/lead-terminal.js');
+  const f = fixture();
+  await Effect.runPromise(openLeadTerminalEffect(f.h, f.lead));
+  f.agents[0].terminal_id = 'terminal';
+  f.agents[0].agent_session = { value: 'session-original' };
+  await assert.rejects(Effect.runPromise(resumeLeadTerminalEffect(f.h, f.lead)), /saved terminal/);
+  const receipt = {
+    pane_id: 'w9:p7',
+    terminal_id: 'terminal',
+    agent_session: { value: 'session-original' },
+  };
+  await Effect.runPromise(resumeLeadTerminalEffect(f.h, f.lead, receipt));
+  f.agents[0].agent_session.value = 'session-replaced';
+  await assert.rejects(
+    Effect.runPromise(resumeLeadTerminalEffect(f.h, f.lead, receipt)),
+    /saved terminal/,
+  );
+  f.agents.length = 0;
+  assert.equal(await Effect.runPromise(resumeLeadTerminalEffect(f.h, f.lead, receipt)), undefined);
+});

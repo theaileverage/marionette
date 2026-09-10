@@ -3,7 +3,14 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { Schema } from 'effect';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
@@ -524,6 +531,85 @@ test('shutdown drains an in-flight HTTP operation even after its client disconne
   } finally {
     release.openUnsafe();
     controller.abort();
+    await runtime.shutdown();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('connected administrative and scoped lead MCP clients survive a supervisor restart', async () => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'marionette-mcp-restart-')));
+  const probe = net.createServer();
+  await new Promise<void>((r) => probe.listen(0, '127.0.0.1', r));
+  const port = Schema.decodeUnknownSync(Schema.Struct({ port: Schema.Finite }))(
+    probe.address(),
+  ).port;
+  await new Promise<void>((r) => probe.close(() => r()));
+  let runtime = await serve(home, port);
+  const clients = [
+    new Client({ name: 'admin', version: '1' }),
+    new Client({ name: 'lead', version: '1' }),
+  ];
+  try {
+    await runtime.supervisor.stop();
+    runtime.service.store.put('project', 'restart', {
+      id: 'restart',
+      name: 'Restart',
+      root: home,
+      session: 'default',
+      socketPath: join(home, 'absent.sock'),
+      workspaceId: 'w1',
+      maxConcurrency: 1,
+      agentArgs: {},
+      createdAt: new Date().toISOString(),
+    });
+    const { lease } = await runtime.service.invoke('lead.acquire', {
+      projectId: 'restart',
+      owner: 'Ada',
+      agent: 'codex',
+      expectedEpoch: 0,
+      reason: 'Restart fixture',
+    });
+    const leaseFile = join(home, 'lead.json');
+    writeFileSync(leaseFile, JSON.stringify(lease), { mode: 0o600 });
+    await clients[0].connect(
+      new StdioClientTransport({
+        command: process.execPath,
+        args: [mcpEntry, '--home', home],
+        stderr: 'pipe',
+      }),
+    );
+    await clients[1].connect(
+      new StdioClientTransport({
+        command: process.execPath,
+        args: [mcpEntry, '--lead-lease', leaseFile, '--url', `http://127.0.0.1:${port}`],
+        stderr: 'pipe',
+      }),
+    );
+    for (const client of clients)
+      assert.equal(
+        (await client.callTool({ name: 'project_briefing', arguments: { projectId: 'restart' } }))
+          .isError,
+        undefined,
+      );
+    await runtime.shutdown();
+    runtime = await serve(home, port);
+    await runtime.supervisor.stop();
+    for (const client of clients) {
+      const response = await client.callTool({
+        name: 'project_briefing',
+        arguments: { projectId: 'restart' },
+      });
+      assert.equal(response.isError, undefined);
+      assert.match(JSON.stringify(response), /Ada/);
+    }
+    const decision = await clients[1].callTool({
+      name: 'decision_record',
+      arguments: { text: 'Same lead after update' },
+    });
+    assert.equal(decision.isError, undefined);
+    assert.equal(readFileSync(leaseFile, 'utf8'), JSON.stringify(lease));
+  } finally {
+    for (const client of clients) await client.close();
     await runtime.shutdown();
     rmSync(home, { recursive: true, force: true });
   }

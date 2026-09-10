@@ -169,7 +169,7 @@ export const maintenanceCommandEffect = Effect.fn('CLI.maintenance')(function* (
     if (json) print(result);
     else
       console.log(
-        `Marionette ${version} is ready. ${plan.projects.length} project binding(s) updated. Refresh or restart agent MCP clients to load the new runtime.`,
+        `Marionette ${version} is ready. ${plan.projects.length} project binding(s) updated. Existing lead conversations and MCP connections remain usable. Run marionette lead to reconnect. Refresh MCP tools only if you need a changed tool catalog.`,
       );
     return;
   }
