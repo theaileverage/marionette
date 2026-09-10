@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.2 — 2026-09-10
+
+- Default new projects to guarded coordinator leads with scoped MCP access and explicit per-outcome write authority. Enforce worker roles, assigned paths, and delegation capabilities.
+- Add exact model profiles by role and oh-my-pi support, with native guard configuration and bounded worker file inspection.
+- Preserve independent intents, scoped waits, and lead startup instructions through recovery and compaction.
+- Validate shell-encoded terminal argument sizes and use short private launcher paths for guarded Codex leads and workers.
+- Add reusable browser scenarios for setup, guarded launches, scoped waits, and multiple intents; make coordinator test fixtures portable across Linux and macOS.
+
 ## 0.5.1 — 2026-09-09
 
 - Launch terminal leads with a short prompt-file reference to avoid truncating long bootstrap commands in Herdr. Preserve configured harness access settings.
