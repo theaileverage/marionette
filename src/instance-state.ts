@@ -76,6 +76,7 @@ export function projectRecordKeys(state: InstanceState, projectIds: string[]) {
     'lead',
     'profiles',
     'profile-defaults',
+    'roles',
     'limits',
     'cleanup-policy',
   ]);

@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 export const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 /** Copy the bundled executable and UI out of the ephemeral package cache. */
 export function installRuntime(home: string, source = packageRoot) {
-  const files: string[] = ['dist/cli.js', 'dist/mcp.js', 'package.json'];
+  const files: string[] = ['dist/cli.js', 'dist/mcp.js', 'dist/harness-guard.js', 'package.json'];
   if (existsSync(resolve(source, 'THIRD_PARTY_NOTICES.md'))) files.push('THIRD_PARTY_NOTICES.md');
   function walk(dir: string) {
     for (const entry of readdirSync(resolve(source, dir), { withFileTypes: true })) {

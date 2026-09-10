@@ -1,8 +1,8 @@
 import type { AgentAccess } from './agent-access.js';
 import { Effect, Schema } from 'effect';
-export const leadAgentSchema = Schema.Literals(['codex-desktop', 'codex', 'claude', 'agy']);
+export const leadAgentSchema = Schema.Literals(['codex-desktop', 'codex', 'claude', 'agy', 'omp']);
 export type LeadAgent = Schema.Schema.Type<typeof leadAgentSchema>;
-export const kindSchema = Schema.Literals(['codex', 'claude', 'agy']);
+export const kindSchema = Schema.Literals(['codex', 'claude', 'agy', 'omp']);
 export const checkSchema = Schema.Union([
   Schema.Struct({
     type: Schema.mutableKey(Schema.Literal('file')),
@@ -47,6 +47,7 @@ export const assignmentSchema = Schema.Struct({
   parentId: Schema.mutableKey(Schema.optional(Schema.String)),
   required: Schema.mutableKey(Schema.optional(Schema.Boolean)),
   profileId: Schema.mutableKey(Schema.optional(Schema.String)),
+  role: Schema.mutableKey(Schema.optional(Schema.String)),
   category: Schema.mutableKey(Schema.optional(Schema.String)),
   model: Schema.mutableKey(Schema.optional(Schema.String)),
   reasoning: Schema.mutableKey(Schema.optional(Schema.String)),
@@ -129,6 +130,7 @@ export interface Project {
   maxConcurrency: number;
   agentArgs: Partial<Record<Kind, string[]>>;
   agentAccess?: AgentAccess;
+  coordinatorOnly?: boolean;
   trustWorkspaces?: boolean;
   /** Legacy AGY-only opt-in; retained when reading older state. */
   trustAgyWorkspaces?: boolean;
@@ -151,6 +153,7 @@ export interface Task extends Omit<Assignment, 'key'> {
   id: string;
   cwd: string;
   worktree?: ManagedWorktree;
+  resolvedRole?: import('./roles.js').Role;
   resolvedProfile?: import('./orchestration-types.js').Profile;
   supersededBy?: string;
   strategyId?: string;

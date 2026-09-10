@@ -1,5 +1,6 @@
 import Mustache from 'mustache';
 import leadTemplate from './templates/lead.mustache' with { type: 'text' };
+import workerGuardTemplate from './templates/worker-guard.mustache' with { type: 'text' };
 import workerTemplate from './templates/worker.mustache' with { type: 'text' };
 import delegationTemplate from './templates/worker-delegation.mustache' with { type: 'text' };
 import strategyTemplate from './templates/worker-strategy.mustache' with { type: 'text' };
@@ -127,4 +128,8 @@ export function renderWorkerFollowup(context: WorkerFollowupContext) {
     redirect: context.kind === 'redirect',
     text: context.kind === 'children' ? undefined : context.text,
   }).trim();
+}
+
+export function renderWorkerGuardPrompt(taskId: string) {
+  return Mustache.render(workerGuardTemplate, { taskId }).trim();
 }

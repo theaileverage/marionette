@@ -17,6 +17,7 @@ export const bindingSchema = Schema.Struct({
   lead: leadAgentSchema,
   leadName: Schema.String,
   leadProfile: Schema.optional(Schema.String),
+  coordinatorOnly: Schema.optional(Schema.Boolean),
   leasePath: Schema.String,
   runtime: Schema.String,
   runtimeExecutable: Schema.optional(Schema.String),

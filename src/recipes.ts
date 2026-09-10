@@ -5,6 +5,7 @@ import recipe3 from '../skills/marionette/references/recipes/review-repair.md' w
 import recipe4 from '../skills/marionette/references/recipes/deliver.md' with { type: 'text' };
 import recipe5 from '../skills/marionette/references/recipes/recover.md' with { type: 'text' };
 import recipe6 from '../skills/marionette/references/recipes/catch-up.md' with { type: 'text' };
+import multipleIntents from '../skills/marionette/references/recipes/multiple-intents.md' with { type: 'text' };
 
 /** Source guidance is embedded identically in CLI and MCP bundles. */
 export const recipes = [
@@ -15,6 +16,7 @@ export const recipes = [
   { name: 'deliver', instructions: recipe4 },
   { name: 'recover', instructions: recipe5 },
   { name: 'catch-up', instructions: recipe6 },
+  { name: 'multiple-intents', instructions: multipleIntents },
 ].map((recipe) => ({
   ...recipe,
   version:

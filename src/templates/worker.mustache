@@ -52,6 +52,7 @@ Persistent outcome: {{{outcomeId}}}. Inspect its current objective and criteria.
 Use the marionette_worker MCP server first: worker_inspect with {} returns
 your current assignment and outcome revisions; worker_report submits reports;
 worker_call submits a finding or an authorized coordination request.
+worker_files reads or lists bounded files within this assignment, without a shell.
 These tools already carry your scoped worker identity and do not require a
 network call from the sandboxed shell. Do not read credentials or use lead tools.
 Check isError on every MCP response before using its data or claiming success.

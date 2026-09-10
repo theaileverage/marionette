@@ -1,4 +1,5 @@
 import { agentAccessSchema, agentAccessArgs } from './agent-access.js';
+import { prepareGuardLaunchEffect, verifyGuardHarnessEffect } from './harness-guard.js';
 import { Effect, Config as Environment, Option, Result, Schedule, Schema, Struct } from 'effect';
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
@@ -64,7 +65,7 @@ export const setupSchema = Schema.Struct({
     ),
   ),
   lead: Schema.mutableKey(
-    leadAgentSchema.pipe(Schema.withDecodingDefault(Effect.succeed('codex-desktop'))),
+    leadAgentSchema.pipe(Schema.withDecodingDefault(Effect.succeed('codex'))),
   ),
   leadName: Schema.mutableKey(
     Schema.Trim.check(Schema.isMinLength(1))
@@ -72,6 +73,9 @@ export const setupSchema = Schema.Struct({
       .pipe(Schema.withDecodingDefault(Effect.succeed('Lead'))),
   ),
   leadProfile: Schema.mutableKey(Schema.optional(Schema.String.check(Schema.isMinLength(1)))),
+  coordinatorOnly: Schema.mutableKey(
+    Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  ),
   trustWorkspaces: Schema.mutableKey(
     Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   ),
@@ -117,6 +121,7 @@ export function setupPlan<Input extends object>(input: Input) {
     lead: binding?.lead,
     leadName: binding?.leadName,
     leadProfile: binding?.leadProfile,
+    coordinatorOnly: binding?.coordinatorOnly,
     trustAgy: binding?.trustAgy,
     mcp: binding?.mcp,
     ...supplied,
@@ -226,11 +231,16 @@ export const wizardEffect = Effect.fn('Setup.wizard')(function* (input: Partial<
         {
           value: 'codex-desktop' as const,
           label: 'Codex desktop',
-          hint: 'Continue in the desktop app',
+          hint: 'Prompt-only; requires coordinatorOnly: false',
         },
         { value: 'codex' as const, label: 'Codex CLI', hint: 'Open in Herdr' },
         { value: 'claude' as const, label: 'Claude Code', hint: 'Open in Herdr' },
-        { value: 'agy' as const, label: 'AGY', hint: 'Open in Herdr' },
+        {
+          value: 'agy' as const,
+          label: 'AGY',
+          hint: 'Legacy mode; requires coordinatorOnly: false',
+        },
+        { value: 'omp' as const, label: 'oh-my-pi', hint: 'Open in Herdr' },
       ],
     }),
   );
@@ -248,7 +258,7 @@ export const wizardEffect = Effect.fn('Setup.wizard')(function* (input: Partial<
     }),
   );
   input.agentAccess ??= {};
-  for (const kind of ['codex', 'claude', 'agy'] as const) {
+  for (const kind of ['codex', 'claude', 'agy', 'omp'] as const) {
     input.agentAccess[kind] ??= yield* promptEffect((signal) =>
       prompts.select({
         message: `${kind} access for new Marionette sessions`,
@@ -353,7 +363,16 @@ export const runSetupEffect = Effect.fn('runSetup')(function* (
   interactive = false,
 ) {
   const p = yield* sync('runSetup.runSetup', () => setupPlan(input));
+  if (p.coordinatorOnly && (p.lead === 'codex-desktop' || p.lead === 'agy'))
+    return yield* new AppError({
+      code: 'guard_unsupported',
+      message:
+        'Coordinator enforcement requires Codex CLI, Claude Code, or oh-my-pi. Select --lead codex, --lead claude, or --lead omp. Legacy prompt-only setups require coordinatorOnly: false in the setup configuration.',
+      status: 400,
+    });
   const dependencies = yield* ensureDependenciesEffect(p, interactive);
+  if (p.coordinatorOnly && p.lead !== 'codex-desktop')
+    yield* verifyGuardHarnessEffect(p.lead, p.root);
   const status = yield* runtimeStatusEffect(p.home);
   if (status.needsUpgrade || (p.upgrade && existsSync(resolve(p.home, 'config.json')))) {
     const approved =
@@ -564,6 +583,7 @@ export const runSetupEffect = Effect.fn('runSetup')(function* (
   }
   yield* callEffect(p.home, 'project.configure', {
     lease,
+    coordinatorOnly: p.coordinatorOnly,
     trustWorkspaces: p.trustWorkspaces,
     agentAccess: p.agentAccess ?? {},
   });
@@ -581,6 +601,7 @@ export const runSetupEffect = Effect.fn('runSetup')(function* (
     lead: p.lead,
     leadName: p.leadName,
     leadProfile: p.leadProfile,
+    coordinatorOnly: p.coordinatorOnly,
     leasePath,
     runtime,
     runtimeExecutable: process.execPath,
@@ -689,10 +710,21 @@ export const launchLeadEffect = Effect.fn('launchLead')(function* (
   const prompt = yield* sync('launchLead.launchLead', () =>
     leadPrompt(binding.projectId, owner, binding.leasePath, brief.project.name),
   );
-  if (printOnly || binding.lead === 'codex-desktop') {
+  if (printOnly) {
     yield* sync('launchLead.launchLead', () => console.log(prompt));
     return;
   }
+  if (binding.lead === 'codex-desktop' && brief.project.coordinatorOnly === false) {
+    console.log(prompt);
+    return;
+  }
+  if (binding.lead === 'codex-desktop')
+    return yield* new AppError({
+      code: 'guard_unsupported',
+      message:
+        'The desktop host cannot be configured by this launcher for coordinator enforcement. Select --lead codex during setup, or use lead --print for an explicitly prompt-only integration.',
+      status: 400,
+    });
   if (!process.stdin.isTTY)
     return yield* boundaryError('launchLead.launchLead')(
       new Error('lead requires an interactive terminal; use lead --print for agent setup.'),
@@ -701,7 +733,11 @@ export const launchLeadEffect = Effect.fn('launchLead')(function* (
     yield* sync('launchLead.trust', () =>
       trustWorkspace(binding.root, binding.lead, binding.home, binding.projectId),
     );
-  const requestedProfile = profileId ?? binding.leadProfile ?? brief.profileDefaults?.orchestration;
+  const requestedProfile =
+    profileId ??
+    binding.leadProfile ??
+    brief.roles?.find((r) => r.id === 'lead')?.profileId ??
+    brief.profileDefaults?.orchestration;
   const profile = yield* sync('launchLead.launchLead', () =>
     requestedProfile ? brief.profiles.find((p: any) => p.id === requestedProfile) : undefined,
   );
@@ -767,6 +803,58 @@ export const launchLeadEffect = Effect.fn('launchLead')(function* (
       });
     const promptPath = resolve(binding.home, 'leads', binding.projectId + '.md');
     yield* sync('Lead.promptFile', () => writeFileSync(promptPath, prompt + '\n', { mode: 0o600 }));
+    const guarded = current.project.coordinatorOnly !== false;
+    const guardArgs = guarded
+      ? yield* prepareGuardLaunchEffect({
+          kind: binary,
+          directory: resolve(binding.home, 'guards', binding.projectId, `lead-${lease.epoch}`),
+          executable: binding.runtimeExecutable ?? process.execPath,
+          cliPath: resolve(binding.runtime, 'dist/cli.js'),
+          policy: {
+            version: 1,
+            root: binding.root,
+            role: 'coordinate',
+            instructions: prompt,
+            mcpName: 'marionette_lead',
+            ownership: [],
+          },
+          server: {
+            command: binding.runtimeExecutable ?? process.execPath,
+            args: [
+              resolve(binding.runtime, 'dist/mcp.js'),
+              '--lead-lease',
+              binding.leasePath,
+              '--url',
+              `http://127.0.0.1:${loadConfig(binding.home).port}`,
+            ],
+          },
+        })
+      : [];
+    if (guarded && !current.project.coordinatorOnly)
+      yield* callEffect(binding.home, 'project.configure', { lease, coordinatorOnly: true });
+    const launchArgs = terminalLeadArgs(
+      binary,
+      guarded
+        ? [...model, ...guardArgs]
+        : agentAccessArgs(binary, current.project.agentAccess, model),
+      promptPath,
+      guarded,
+    );
+    const launchHash = createHash('sha256')
+      .update(JSON.stringify({ args: launchArgs, prompt, runtime: binding.runtime }))
+      .digest('hex');
+    const receiptPath = resolve(binding.home, 'leads', binding.projectId + '.terminal.json');
+    const receipt = yield* sync('Lead.previousReceipt', () =>
+      existsSync(receiptPath)
+        ? Schema.decodeUnknownOption(
+            Schema.Struct({
+              launchHash: Schema.String,
+              pane_id: Schema.String,
+              terminal_id: Schema.String,
+            }),
+          )(JSON.parse(readFileSync(receiptPath, 'utf8')))
+        : Option.none(),
+    );
     const opened = yield* openLeadTerminalEffect(h, {
       projectId: binding.projectId,
       root: binding.root,
@@ -774,11 +862,8 @@ export const launchLeadEffect = Effect.fn('launchLead')(function* (
       epoch: lease.epoch,
       owner,
       kind: binary,
-      args: terminalLeadArgs(
-        binary,
-        agentAccessArgs(binary, current.project.agentAccess, model),
-        promptPath,
-      ),
+      args: launchArgs,
+      guard: guarded ? { launchHash, receipt: Option.getOrUndefined(receipt) } : undefined,
     });
     if (opened.status === 'inspect') {
       console.log(opened.message);
@@ -787,6 +872,7 @@ export const launchLeadEffect = Effect.fn('launchLead')(function* (
     const terminal = opened.agent;
     yield* sync('Lead.terminalReceipt', () =>
       privateJson(resolve(binding.home, 'leads', binding.projectId + '.terminal.json'), {
+        launchHash,
         pane_id: terminal.pane_id,
         terminal_id: terminal.terminal_id,
         name: terminal.name,

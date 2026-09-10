@@ -55,6 +55,7 @@ function fixture() {
     });
     copyFileSync(resolve('tests/fixtures/runtime-cli.mjs'), resolve(dir, 'dist/cli.js'));
     chmodSync(resolve(dir, 'dist/cli.js'), 0o755);
+    writeFileSync(resolve(dir, 'dist/harness-guard.js'), 'guard');
     writeFileSync(resolve(dir, 'dist/mcp.js'), '// fixture');
     writeFileSync(resolve(dir, 'public/index.html'), '<p>fixture</p>');
     return dir;

@@ -527,6 +527,67 @@ test('read-only workers can attach their reserved JSON reports but cannot claim 
   }
 });
 
+test('independent outcome waits coexist and reserve only one concurrent lead delivery', async () => {
+  const f = await fixture();
+  try {
+    const second = await f.invoke('outcome.create', {
+      outcome: {
+        projectId: f.p.id,
+        key: 'second',
+        objective: 'Second independent result',
+        scope: ['.'],
+        criteria: [
+          { id: 'correct', description: 'Correct result', requiredEvidence: 'Verified result' },
+        ],
+      },
+    });
+    const adapter = f.leadAgent();
+    const waits: LeadWait[] = [];
+    for (const outcomeId of [f.outcome.id, second.id]) {
+      const wait = await f.invoke('lead.wait', {
+        key: outcomeId,
+        outcomeId,
+        condition: { tasks: [], intervention: true },
+        adapter,
+      });
+      const ready: LeadWait = { ...wait, state: 'ready', readyAt: 0 };
+      f.store.put('lead-wait', wait.id, ready);
+      waits.push(ready);
+    }
+    await assert.rejects(
+      f.invoke('lead.wait', {
+        key: 'duplicate-first',
+        outcomeId: f.outcome.id,
+        condition: { tasks: [], intervention: true },
+        adapter,
+      }),
+      /One coordination wait may be active per outcome/,
+    );
+    const deliveries = await Promise.allSettled(
+      waits.map((w) => f.service.continuation.process(w)),
+    );
+    for (const delivery of deliveries)
+      if (delivery.status === 'rejected')
+        assert.match(String(delivery.reason), /continuation queued/);
+    assert.equal(f.agents.calls.filter((c) => c.method === 'agent.prompt').length, 1);
+    const current = f.store.all<LeadWait>('lead-wait');
+    const delivered = current.find((w) => w.state === 'delivered')!;
+    const pending = current.find((w) => w.state === 'ready')!;
+    assert.ok(delivered && pending);
+    assert.equal(current.filter((w) => w.reservation).length, 1);
+    await f.invoke('lead.wait-ack', { waitId: delivered.id });
+    f.agents.agents.get(adapter.paneId).agent_status = 'idle';
+    await f.service.continuation.process(f.store.get<LeadWait>('lead-wait', delivered.id)!);
+    await f.service.continuation.process(pending);
+    assert.equal(f.store.get<LeadWait>('lead-wait', pending.id)?.state, 'delivered');
+    assert.equal(f.agents.calls.filter((c) => c.method === 'agent.prompt').length, 2);
+    for (const id of [f.outcome.id, second.id])
+      assert.equal(f.service.orchestration.outcome(id).turnsUsed, 1);
+  } finally {
+    await f.close();
+  }
+});
+
 test('lead waits group routine results and preserve native session identity without polling model turns', async () => {
   const f = await fixture();
   try {

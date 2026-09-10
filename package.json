@@ -58,6 +58,7 @@
   "files": [
     "dist/cli.js",
     "dist/mcp.js",
+    "dist/harness-guard.js",
     "public/",
     "README.md",
     "THIRD_PARTY_NOTICES.md",
@@ -82,7 +83,8 @@
     "documentation/effect-compatibility.md",
     "documentation/swarm-runtime.md",
     "evaluations/",
-    "dist/evaluate-swarm.js"
+    "dist/evaluate-swarm.js",
+    "documentation/coordinator.md"
   ],
   "publishConfig": {
     "access": "public"

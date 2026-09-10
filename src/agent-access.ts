@@ -6,6 +6,7 @@ export const agentAccessSchema = Schema.Struct({
   codex: Schema.mutableKey(Schema.optionalKey(accessModeSchema)),
   claude: Schema.mutableKey(Schema.optionalKey(accessModeSchema)),
   agy: Schema.mutableKey(Schema.optionalKey(accessModeSchema)),
+  omp: Schema.mutableKey(Schema.optionalKey(accessModeSchema)),
 }).annotate({ parseOptions: { onExcessProperty: 'error' } });
 export type AgentAccess = Schema.Schema.Type<typeof agentAccessSchema>;
 
@@ -35,7 +36,9 @@ export function agentAccessArgs(
             '--allow-dangerously-skip-permissions',
             '--settings',
           ]
-        : ['--sandbox', '--dangerously-skip-permissions', '--mode'];
+        : kind === 'omp'
+          ? ['--approval-mode', '--auto-approve']
+          : ['--sandbox', '--dangerously-skip-permissions', '--mode'];
   const conflict = custom.some(
     (arg) =>
       permissionFlags.some((flag) => arg === flag || arg.startsWith(flag + '=')) ||
@@ -56,5 +59,6 @@ export function agentAccessArgs(
       '--settings',
       '{"sandbox":{"enabled":false}}',
     ];
+  if (kind === 'omp') return [...custom, '--approval-mode', 'yolo'];
   return [...custom, '--dangerously-skip-permissions', '--sandbox=false'];
 }

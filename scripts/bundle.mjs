@@ -10,6 +10,7 @@ const packages = new Set([
 for (const [name, entry] of [
   ['cli', 'src/cli.ts'],
   ['mcp', 'src/mcp.ts'],
+  ['harness-guard', 'src/harness-guard.ts'],
   ['evaluate-swarm', 'scripts/evaluate-swarm.mjs'],
 ]) {
   const result = await build({

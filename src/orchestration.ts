@@ -1,3 +1,6 @@
+import { taskAuthority } from './authority.js';
+import { inspectWorkerFiles } from './worker-files.js';
+import { roleSchema, resolveRole, validateRoles, suggestedRoles, type Role } from './roles.js';
 import { Effect, Result, Schema } from 'effect';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -424,10 +427,16 @@ export class Orchestration {
       this.s.store.get<Profile[]>('profiles', projectId) ?? builtinProfiles.map((p) => ({ ...p }))
     );
   }
+  roles(projectId: string) {
+    const shared = this.s.store.get<Role[]>('role-defaults', 'instance') ?? [];
+    const local = this.s.store.get<Role[]>('roles', projectId) ?? [];
+    return [...new Map([...shared, ...local].map((role) => [role.id, role])).values()];
+  }
   resolveProfile(a: Assignment) {
+    const role = resolveRole(this.roles(a.projectId), a);
     const defaults =
       this.s.store.get<Record<string, string>>('profile-defaults', a.projectId) ?? {};
-    const id = a.profileId ?? (a.category ? defaults[a.category] : undefined);
+    const id = a.profileId ?? role?.profileId ?? (a.category ? defaults[a.category] : undefined);
     if (!id) return undefined;
     const profile =
       this.profiles(a.projectId).find((p) => p.id === id) ??
@@ -533,6 +542,16 @@ export class Orchestration {
       this.s.swarm.captureIntent(o);
       task.outcomeId = o.id;
     }
+    task.resolvedRole = resolveRole(this.roles(task.projectId), assignment);
+    if (task.resolvedRole) {
+      if (task.resolvedRole.activity === 'coordinate')
+        fail('role_activity', 'Coordinator roles cannot be submitted as execution workers');
+      if (task.resolvedRole.activity === 'inspect' && (!task.readOnly || task.ownership.length))
+        fail('role_activity', 'Inspection roles require readOnly: true and ownership: []');
+      if (task.canDelegate && !task.resolvedRole.canDelegate)
+        fail('delegation_denied', 'Role does not permit delegation');
+      task.canDelegate ??= task.resolvedRole.canDelegate;
+    }
     task.resolvedProfile = this.resolveProfile(assignment);
     if (task.resolvedProfile) {
       task.profileId = task.resolvedProfile.id;
@@ -545,6 +564,7 @@ export class Orchestration {
         'model_unverified',
         'Configure and validate an exact model profile before selecting a model',
       );
+    taskAuthority(this.s, task);
     this.validateGraph([...this.s.tasks(task.projectId), task]);
     return task;
   }
@@ -727,6 +747,7 @@ export class Orchestration {
       status: patch.supersededBy ? 'cancelled' : t.runId && !released ? 'paused' : 'queued',
       updatedAt: now(),
     };
+    taskAuthority(this.s, updated);
     this.validateGraph(
       this.s.tasks(c.projectId).map((task) => (task.id === t.id ? updated : task)),
     );
@@ -752,13 +773,31 @@ export class Orchestration {
         this.s.workerGuard(
           taskId,
           token,
-          raw.action === 'inspect'
+          raw.action === 'inspect' || raw.action === 'guard'
             ? task.revision
             : Schema.decodeUnknownSync(Schema.Finite.check(Schema.isInt()))(raw.revision),
-          raw.action === 'inspect',
+          raw.action === 'inspect' || raw.action === 'guard',
         ),
       );
+      if (raw.action === 'guard')
+        return yield* sync('Worker.guard', () => {
+          if (t.status !== 'running')
+            fail('worker_inactive', 'Native tools require a running assignment');
+          taskAuthority(this.s, t);
+          return {
+            taskId: t.id,
+            root: t.cwd,
+            role: t.readOnly
+              ? 'inspect'
+              : t.resolvedRole?.activity === 'documentation'
+                ? 'documentation'
+                : 'implementation',
+            ownership: t.retainedOwnership ?? t.ownership,
+          };
+        });
       const descendants = yield* sync('Orchestration.workerAction', () => this.descendants(t.id));
+      if (raw.action === 'read' || raw.action === 'list')
+        return yield* sync('Worker.inspectFiles', () => inspectWorkerFiles(t.cwd, raw));
       if (raw.action === 'inspect') {
         if (
           raw.taskId &&
@@ -849,7 +888,11 @@ export class Orchestration {
     },
   );
   board(projectId: string) {
-    const outcomes = this.outcomes(projectId).map((o) => ({ ...o, unmet: this.unmet(o) }));
+    const outcomes = this.outcomes(projectId).map((o) => ({
+      ...o,
+      authority: this.s.store.get('authority', o.id) ?? null,
+      unmet: this.unmet(o),
+    }));
     return {
       outcomes,
       tasks: this.s.tasks(projectId).map(({ output: _output, prompt, ...task }) => ({
@@ -862,6 +905,7 @@ export class Orchestration {
         .filter((r) => r.projectId === projectId)
         .map(({ before: _before, after: _after, ...summary }) => summary),
       findings: this.s.store.all<any>('finding').filter((f) => f.projectId === projectId),
+      roles: this.roles(projectId),
       profiles: this.profiles(projectId),
       profileDefaults:
         this.s.store.get<Record<string, string>>('profile-defaults', projectId) ?? {},
@@ -876,6 +920,13 @@ export class Orchestration {
     Effect.fn('Orchestration.invoke')(
       { self: this },
       function* (this: Orchestration, action: string, raw: any) {
+        if (action === 'role.list')
+          return yield* sync('Role.list', () => ({
+            roles: this.roles(raw.projectId),
+            defaults: this.s.store.get<Role[]>('role-defaults', 'instance') ?? [],
+            overrides: this.s.store.get<Role[]>('roles', raw.projectId) ?? [],
+            suggestedRoles,
+          }));
         if (action === 'outcome.list' || action === 'board.get')
           return yield* sync('Orchestration.invoke', () =>
             this.board(Schema.decodeUnknownSync(text)(raw.projectId)),
@@ -898,7 +949,7 @@ export class Orchestration {
         const c = yield* sync('Orchestration.invoke', () => this.s.guard(raw.lease));
         if (action === 'profile.discover') {
           const kind = yield* sync('Orchestration.invoke', () =>
-            Schema.decodeUnknownSync(Schema.Literals(['codex', 'claude', 'agy']))(raw.kind),
+            Schema.decodeUnknownSync(Schema.Literals(['codex', 'claude', 'agy', 'omp']))(raw.kind),
           );
           const catalog = yield* this.discoverModels(kind, this.s.project(c.projectId).root);
           yield* sync('Orchestration.invoke', () => this.s.guard(raw.lease));
@@ -1008,6 +1059,24 @@ export class Orchestration {
                 return o;
               });
             }
+            if (action === 'role.configure') {
+              const roles = Schema.decodeUnknownSync(Schema.Array(roleSchema))(raw.roles);
+              validateRoles(roles, this.profiles(c.projectId));
+              const scope = Schema.decodeUnknownSync(Schema.Literals(['project', 'instance']))(
+                raw.scope ?? 'project',
+              );
+              this.s.store.put(
+                scope === 'instance' ? 'role-defaults' : 'roles',
+                scope === 'instance' ? 'instance' : c.projectId,
+                roles,
+              );
+              this.s.store.event(
+                c.projectId,
+                'roles.configured',
+                'Updated role profiles and capabilities',
+              );
+              return { roles };
+            }
             if (action === 'profile.configure') {
               const oldProfiles = this.profiles(c.projectId);
               const profiles = Schema.decodeUnknownSync(
@@ -1041,6 +1110,7 @@ export class Orchestration {
               for (const [category, id] of Object.entries(defaults))
                 if (!profiles.some((p) => p.id === id && p.categories.includes(category)))
                   fail('profile_default', 'Category default does not match a configured profile');
+              validateRoles(this.roles(c.projectId), profiles);
               this.s.store.put('profiles', c.projectId, profiles);
               this.s.store.put('profile-defaults', c.projectId, defaults);
               this.s.store.event(

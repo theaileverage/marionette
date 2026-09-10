@@ -34,7 +34,7 @@ import { privateJson } from './private-json.js';
 import { installRuntime, packageRoot } from './runtime.js';
 import { AppError, type Kind } from './types.js';
 
-const kinds: Kind[] = ['codex', 'claude', 'agy'];
+const kinds: Kind[] = ['codex', 'claude', 'agy', 'omp'];
 export function previousRuntime(state: InstanceState, version?: string, runningRuntime?: string) {
   const pointer = resolve(state.home, 'runtime.json');
   const candidates = [

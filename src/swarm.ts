@@ -6,6 +6,7 @@ import { execEffect } from './process.js';
 import { recipes } from './recipes.js';
 import type { Outcome } from './orchestration-types.js';
 import type { Service } from './service.js';
+import type { Checkpoint } from './continuation.js';
 import { SwarmRuntime } from './swarm-runtime.js';
 import {
   swarmRequestSchema,
@@ -279,6 +280,34 @@ export class Swarm {
         this.s.orchestration.evidenceCurrent(e.selection.references, e.projectId),
     };
   }
+  activeIntents(projectId: string) {
+    const tasks = this.s.tasks(projectId);
+    const checkpoints = this.s.store
+      .all<Checkpoint>('checkpoint')
+      .filter((c) => c.projectId === projectId);
+    return this.s.orchestration
+      .outcomes(projectId)
+      .filter((o) => o.status === 'open')
+      .map((o) => ({
+        outcomeId: o.id,
+        objective: o.objective,
+        revision: o.revision,
+        intentVersion: this.intent(o.id).version,
+        tasks: tasks
+          .filter((t) => t.outcomeId === o.id)
+          .map((t) => ({
+            id: t.id,
+            title: t.title,
+            status: t.status,
+            revision: t.revision,
+            waitingFor: t.waitReason,
+          })),
+        openDecisionIds: this.decisions(o.id)
+          .filter((d) => !d.resolution)
+          .map((d) => d.id),
+        latestCheckpointId: checkpoints.filter((c) => c.outcomeId === o.id).at(-1)?.id,
+      }));
+  }
   observe(projectId: string, after = 0) {
     this.s.project(projectId);
     const events = this.s.store.events(projectId, after, 200);
@@ -288,6 +317,7 @@ export class Swarm {
       cursor: events.at(-1)?.id ?? after,
       hasMore: events.length === 200,
       changes: events,
+      activeIntents: this.activeIntents(projectId),
       objectives: outcomes.map((o) => ({
         id: o.id,
         objective: o.objective,
@@ -601,6 +631,13 @@ export class Swarm {
     if (i.action === 'capacity.configure' || i.action === 'capacity.feedback')
       return this.runtime.configure(i, c);
     if (i.action === 'watch.create') {
+      if (this.s.project(c.projectId).coordinatorOnly && i.condition.type === 'command')
+        throw new AppError({
+          code: 'lead_capability',
+          message:
+            'Coordinator watches cannot execute commands. Delegate an authorized verification task.',
+          status: 403,
+        });
       this.outcome(i.outcomeId, c);
       if (i.taskId) this.task(i.taskId, c, i.outcomeId);
       if (i.condition.type === 'file') safePath(this.s.project(c.projectId).root, i.condition.path);
