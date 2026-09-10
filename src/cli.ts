@@ -15,6 +15,8 @@ import { prompts } from './cli-prompts.js';
 import { launchLeadEffect, runSetupEffect, setupPlan, wizardEffect } from './setup.js';
 import { workerMcpEffect } from './worker-mcp.js';
 import { guardHookEffect, readGuardPolicy } from './harness-guard.js';
+import { cliCommands, commandHelp, fullHelp } from './cli-help.js';
+import { configurationCommandEffect } from './configuration-cli.js';
 import { findBinding } from './project-binding.js';
 const args = process.argv.slice(2);
 function flag(name: string) {
@@ -24,7 +26,35 @@ function flag(name: string) {
 const home = homePath(flag('home'));
 const print = <T>(v: T) => console.log(JSON.stringify(v, null, 2));
 const mainEffect = Effect.fn('main')(function* () {
-  const cmd = args[0] ?? 'help';
+  let cmd = args[0] ?? 'help';
+  if (cmd === 'help' && args[1]) {
+    cmd = args[1];
+    args.splice(0, args.length, cmd, '--help');
+  }
+  if (['help', '--help', '-h'].includes(cmd)) {
+    console.log(fullHelp());
+    return;
+  }
+  if (args.includes('-h')) args[args.indexOf('-h')] = '--help';
+  if (
+    args.includes('--help') &&
+    cmd in cliCommands &&
+    ![
+      'setup',
+      'init',
+      'lead',
+      'authorize',
+      'update',
+      'upgrade',
+      'remove',
+      'uninstall',
+      'profiles',
+      'roles',
+    ].includes(cmd)
+  ) {
+    console.log(commandHelp(cmd));
+    return;
+  }
   if (cmd === 'guard-hook') {
     yield* sync('Guard.readHook', () => ({
       policy: readGuardPolicy(flag('policy') ?? ''),
@@ -73,34 +103,8 @@ const mainEffect = Effect.fn('main')(function* () {
     );
     return;
   }
-  if (cmd === 'roles') {
-    if (args.includes('--help')) {
-      console.log(
-        'Usage: marionette roles [--project DIR] [--file roles.json] [--global]\nList role profiles, or replace them from a JSON array. Use marionette call profile.discover/profile.configure/profile.validate to prepare exact model profiles first.',
-      );
-      return;
-    }
-    const values = parseArgs({
-      args: args.slice(1),
-      options: {
-        project: { type: 'string' },
-        file: { type: 'string' },
-        global: { type: 'boolean' },
-        home: { type: 'string' },
-      },
-    }).values;
-    const { binding } = findBinding(values.project ?? process.cwd());
-    if (values.file) {
-      const roles = JSON.parse(readFileSync(values.file, 'utf8'));
-      const lease = JSON.parse(readFileSync(binding.leasePath, 'utf8'));
-      print(
-        yield* callEffect(binding.home, 'role.configure', {
-          lease,
-          roles,
-          scope: values.global ? 'instance' : 'project',
-        }),
-      );
-    } else print(yield* callEffect(binding.home, 'role.list', { projectId: binding.projectId }));
+  if (cmd === 'roles' || cmd === 'profiles') {
+    yield* configurationCommandEffect(cmd, args.slice(1));
     return;
   }
   if (cmd === 'worker-mcp') {
@@ -415,11 +419,7 @@ const mainEffect = Effect.fn('main')(function* () {
     );
     return;
   }
-  yield* sync('main.main', () =>
-    console.log(
-      `Marionette — one project, many workers\n\nUsage: marionette <command> [--home /absolute/state/directory]\n\n  setup | init            Guided setup (setup --help for automation flags)\n  lead [--print]          Open the selected lead or print its bootstrap prompt\n  update | upgrade       Update runtimes, shared supervisor and MCP clients\n  remove                  Remove this project from Marionette\n  uninstall               Remove the instance; --global also removes the CLI\n  start | serve | stop    Manage the persistent supervisor (workers survive stop)\n  dashboard               Print the private dashboard access link\n  mcp-config              Print the desktop/terminal MCP configuration\n  projects                List explicitly connected projects\n  briefing PROJECT        Current assignments, lead, decisions and questions\n  inbox PROJECT           Read durable notifications [--consumer NAME]\n  doctor                  Inspect configured connections\n  roles [--file JSON]     Configure project role profiles [--global for instance defaults]\n  authorize               Record scoped user authority (authorize --help)\n  call ACTION --file JSON [--lease FILE] [--save-lease FILE]\n  worker-report --file JSON  Submit a scoped report from a worker pane\n  worker-call --file JSON    Inspect, delegate, revise or control within worker scope\n\nActions: project.register, project.inspect, project.briefing, lead.acquire,\nlead.handover, task.submit, task.get, task.control, task.retry, task.reconcile,\ndecision.record, inbox.read, inbox.ack. See README.md for examples.\n`,
-    ),
-  );
+  throw new Error(`Unknown command: ${cmd}. Run marionette --help for all commands.`);
 });
 const main = () => Effect.runPromise(mainEffect());
 main().catch((e) => {

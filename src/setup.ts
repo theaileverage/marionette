@@ -18,7 +18,11 @@ import net from 'node:net';
 import { homedir } from 'node:os';
 import { basename, dirname, resolve } from 'node:path';
 import { prompts, promptEffect } from './cli-prompts.js';
-import { openLeadTerminalEffect, terminalLeadArgs } from './lead-terminal.js';
+import {
+  openLeadTerminalEffect,
+  resumeLeadTerminalEffect,
+  terminalLeadArgs,
+} from './lead-terminal.js';
 import { toolPathEffect, ensureDependenciesEffect } from './setup-dependencies.js';
 import { trustWorkspace, workspaceTrustEnabled } from './workspace-trust.js';
 import { callEffect, initConfig, loadConfig } from './config.js';
@@ -45,6 +49,7 @@ import { runtimeStatusEffect, upgradeInstanceEffect } from './runtime-upgrade.js
 import { maintenanceLockEffect } from './maintenance.js';
 import { packageRoot } from './runtime.js';
 import { SETUP_VERSION } from './version.js';
+import { herdrSessionSocket } from './herdr-session.js';
 import { setupWorkspaceEffect } from './setup-workspace.js';
 export const setupSchema = Schema.Struct({
   project: Schema.mutableKey(Schema.optional(Schema.String)),
@@ -145,11 +150,11 @@ export function setupPlan<Input extends object>(input: Input) {
       binding?.home ??
       (existsSync(resolve(legacy, 'config.json')) ? legacy : resolve(dataHome, 'marionette')),
   );
-  const session = options.session ?? binding?.session ?? `marionette-${hash}`;
+  const session = options.session ?? binding?.session ?? 'default';
   const socket = resolve(
     options.socket ??
-      binding?.socket ??
-      resolve(homedir(), '.config/herdr/sessions', session, 'herdr.sock'),
+      (options.session && options.session !== binding?.session ? undefined : binding?.socket) ??
+      herdrSessionSocket(session),
   );
   return {
     ...options,
@@ -158,7 +163,7 @@ export function setupPlan<Input extends object>(input: Input) {
     name: options.name ?? basename(root),
     session,
     socket,
-    workspace: options.workspace ?? binding?.workspace,
+    workspace: options.workspace ?? (socket === binding?.socket ? binding.workspace : undefined),
     workspaceExplicit: supplied.workspace !== undefined,
     savedProjectId: binding?.home && resolve(binding.home) === home ? binding.projectId : undefined,
     bindingPath,
@@ -166,7 +171,8 @@ export function setupPlan<Input extends object>(input: Input) {
       binding?.ownsWorkspace === true &&
       (!options.workspace || options.workspace === binding.workspace) &&
       socket === binding.socket,
-    ownsSession: binding?.ownsSession === true && socket === binding.socket,
+    ownsSession:
+      session !== 'default' && binding?.ownsSession === true && socket === binding.socket,
     workspaceLabel: `Marionette ${hash}`,
     effects: [
       'Check required tools and report optional worker CLIs',
@@ -336,7 +342,7 @@ const ensureHerdrEffect = Effect.fn('Setup.ensureHerdr')(function* (
   const h = new Herdr(plan.socket);
   const connected = yield* Effect.result(herdrCall(h, 'ping'));
   if (Result.isSuccess(connected)) return h;
-  if (plan.socket !== resolve(homedir(), '.config/herdr/sessions', plan.session, 'herdr.sock'))
+  if (plan.socket !== herdrSessionSocket(plan.session))
     return yield* boundaryError('Setup.ensureHerdr')(
       new Error(`Cannot connect to supplied socket ${plan.socket}; start its Herdr session first`),
     );
@@ -456,9 +462,9 @@ export const runSetupEffect = Effect.fn('runSetup')(function* (
     );
   progress?.message('Connecting the project’s Herdr workspace');
   const ownsSession =
-    p.ownsSession ||
-    (p.socket === resolve(homedir(), '.config/herdr/sessions', p.session, 'herdr.sock') &&
-      !existsSync(dirname(p.socket)));
+    p.session !== 'default' &&
+    (p.ownsSession ||
+      (p.socket === herdrSessionSocket(p.session) && !existsSync(dirname(p.socket))));
   const h = yield* ensureHerdrEffect(p);
   const { workspaceId, ownsWorkspace, recovered } = yield* setupWorkspaceEffect(h, p);
   if (recovered && interactive)
@@ -733,38 +739,15 @@ export const launchLeadEffect = Effect.fn('launchLead')(function* (
     yield* sync('launchLead.trust', () =>
       trustWorkspace(binding.root, binding.lead, binding.home, binding.projectId),
     );
-  const requestedProfile =
-    profileId ??
-    binding.leadProfile ??
-    brief.roles?.find((r) => r.id === 'lead')?.profileId ??
-    brief.profileDefaults?.orchestration;
-  const profile = yield* sync('launchLead.launchLead', () =>
-    requestedProfile ? brief.profiles.find((p: any) => p.id === requestedProfile) : undefined,
-  );
-  if (requestedProfile && (!profile || profile.availability !== 'available'))
-    return yield* boundaryError('launchLead.launchLead')(
-      new Error(
-        'The requested lead model profile is not validated. Run profile.validate for its exact ID first. No fallback was selected.',
-      ),
-    );
-  if (profile && profile.kind !== binding.lead)
-    return yield* boundaryError('launchLead.launchLead')(
-      new Error(
-        'The requested profile runtime differs from the configured lead. Select the intended lead explicitly.',
-      ),
-    );
-  const model = yield* sync('launchLead.launchLead', () => (profile ? profileArgs(profile) : []));
   const binary = yield* Schema.decodeUnknownEffect(leadAgentSchema)(binding.lead).pipe(
     Effect.mapError(boundaryError('Setup.lead')),
   );
   if (binary === 'codex-desktop') return;
-  if (
-    binding.socket !== resolve(homedir(), '.config/herdr/sessions', binding.session, 'herdr.sock')
-  )
+  if (binding.socket !== herdrSessionSocket(binding.session))
     return yield* new AppError({
       code: 'lead_socket',
       message:
-        'Terminal lead attachment requires the configured named Herdr session socket. Repeat setup with its --session and standard socket, or use lead --print in your custom session.',
+        'Terminal lead attachment requires the configured Herdr session socket. Repeat setup with its --session and standard socket, or use lead --print in your custom session.',
       status: 400,
     });
   yield* toolPathEffect();
@@ -801,6 +784,63 @@ export const launchLeadEffect = Effect.fn('launchLead')(function* (
         message: 'Lead ownership changed during launch. Refresh setup before retrying.',
         status: 409,
       });
+    const receiptPath = resolve(binding.home, 'leads', binding.projectId + '.terminal.json');
+    const receipt = yield* sync('Lead.previousReceipt', () =>
+      existsSync(receiptPath)
+        ? Schema.decodeUnknownOption(
+            Schema.Struct({
+              launchHash: Schema.optional(Schema.String),
+              pane_id: Schema.String,
+              terminal_id: Schema.String,
+              agent_session: Schema.optional(
+                Schema.NullOr(Schema.Struct({ value: Schema.String })),
+              ),
+            }),
+          )(JSON.parse(readFileSync(receiptPath, 'utf8')))
+        : Option.none(),
+    );
+    const resumed = yield* resumeLeadTerminalEffect(
+      h,
+      {
+        projectId: binding.projectId,
+        root: binding.root,
+        workspace: binding.workspace,
+        epoch: lease.epoch,
+        owner,
+        kind: binary,
+      },
+      Option.getOrUndefined(receipt),
+      current.project.coordinatorOnly !== false,
+    );
+    if (resumed) {
+      console.log('Reconnected to the existing lead conversation.');
+      if (profileId)
+        console.log(
+          'The running lead keeps its model. Use --profile again after this lead exits to launch with a different profile.',
+        );
+      return;
+    }
+    const requestedProfile =
+      profileId ??
+      binding.leadProfile ??
+      current.roles?.find((r) => r.id === 'lead')?.profileId ??
+      current.profileDefaults?.orchestration;
+    const profile = yield* sync('launchLead.launchLead', () =>
+      requestedProfile ? current.profiles.find((p) => p.id === requestedProfile) : undefined,
+    );
+    if (requestedProfile && (!profile || profile.availability !== 'available'))
+      return yield* boundaryError('launchLead.launchLead')(
+        new Error(
+          'The requested lead model profile is not validated. Run profile.validate for its exact ID first. No fallback was selected.',
+        ),
+      );
+    if (profile && profile.kind !== binding.lead)
+      return yield* boundaryError('launchLead.launchLead')(
+        new Error(
+          'The requested profile runtime differs from the configured lead. Select the intended lead explicitly.',
+        ),
+      );
+    const model = yield* sync('launchLead.launchLead', () => (profile ? profileArgs(profile) : []));
     const promptPath = resolve(binding.home, 'leads', binding.projectId + '.md');
     yield* sync('Lead.promptFile', () => writeFileSync(promptPath, prompt + '\n', { mode: 0o600 }));
     const guarded = current.project.coordinatorOnly !== false;
@@ -843,18 +883,6 @@ export const launchLeadEffect = Effect.fn('launchLead')(function* (
     const launchHash = createHash('sha256')
       .update(JSON.stringify({ args: launchArgs, prompt, runtime: binding.runtime }))
       .digest('hex');
-    const receiptPath = resolve(binding.home, 'leads', binding.projectId + '.terminal.json');
-    const receipt = yield* sync('Lead.previousReceipt', () =>
-      existsSync(receiptPath)
-        ? Schema.decodeUnknownOption(
-            Schema.Struct({
-              launchHash: Schema.String,
-              pane_id: Schema.String,
-              terminal_id: Schema.String,
-            }),
-          )(JSON.parse(readFileSync(receiptPath, 'utf8')))
-        : Option.none(),
-    );
     const opened = yield* openLeadTerminalEffect(h, {
       projectId: binding.projectId,
       root: binding.root,
@@ -863,7 +891,7 @@ export const launchLeadEffect = Effect.fn('launchLead')(function* (
       owner,
       kind: binary,
       args: launchArgs,
-      guard: guarded ? { launchHash, receipt: Option.getOrUndefined(receipt) } : undefined,
+      guard: guarded ? { launchHash } : undefined,
     });
     if (opened.status === 'inspect') {
       console.log(opened.message);

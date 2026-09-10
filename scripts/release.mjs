@@ -1,7 +1,16 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -149,6 +158,65 @@ function smoke(tarball) {
     'Fresh package setup must use the caller project directory',
   );
   assert.equal(existsSync(join(dir, '.marionette')), false, 'Dry-run must not create state');
+  assert.equal(plan.session, 'default', 'New projects must join the shared default session');
+  assert.ok(!plan.socket.includes('/sessions/default/'), 'Default uses the top-level Herdr socket');
+  const help = run(process.execPath, [cli, '--help'], { cwd: dir });
+  for (const command of [
+    'profiles',
+    'roles',
+    'profile.validate',
+    'swarm.dispatch',
+    'cleanup.collect',
+  ])
+    assert.ok(help.includes(command), `Installed help is missing ${command}`);
+  // Exercise the copied runtime, not only the package-cache entry point. This
+  // catches missing auxiliary bundles before publishing another updater.
+  const home = join(dir, 'runtime-smoke');
+  const legacy = join(home, 'runtimes', pkg.version + '-legacy-installer');
+  mkdirSync(join(legacy, 'dist'), { recursive: true });
+  const installed = join(dir, 'node_modules', '@theaileverage', 'marionette');
+  for (const file of ['dist/cli.js', 'dist/mcp.js', 'package.json', 'public'])
+    cpSync(join(installed, file), join(legacy, file), { recursive: true });
+  writeFileSync(join(legacy, '.complete'), '1\n');
+  const legacyCli = join(legacy, 'dist/cli.js');
+  const port = run(
+    process.execPath,
+    [
+      '--eval',
+      "const s = Bun.serve({hostname:'127.0.0.1',port:0,fetch:()=>new Response('smoke')}); console.log(s.port); s.stop(true);",
+    ],
+    { cwd: dir },
+  );
+  try {
+    run(process.execPath, [legacyCli, 'start', '--home', home, '--port', port], {
+      cwd: dir,
+      timeout: 30000,
+    });
+    const runtimes = readdirSync(join(home, 'runtimes'));
+    assert.equal(
+      runtimes.length,
+      1,
+      'Legacy upgrades must retain the runtime path pinned by the old updater',
+    );
+    for (const bundle of ['cli.js', 'mcp.js', 'harness-guard.js'])
+      assert.ok(
+        existsSync(join(home, 'runtimes', runtimes[0], 'dist', bundle)),
+        `Copied runtime lacks ${bundle}`,
+      );
+    assert.equal(
+      readFileSync(join(home, 'runtimes', runtimes[0], 'dist/harness-guard.js'), 'utf8'),
+      readFileSync(join(installed, 'dist/harness-guard.js'), 'utf8'),
+      'Recovered guard must match the shipped bundle byte for byte',
+    );
+    assert.equal(
+      run(process.execPath, [join(home, 'runtimes', runtimes[0], 'dist/cli.js'), '--version']),
+      pkg.version,
+    );
+  } finally {
+    if (existsSync(join(home, 'config.json')))
+      run(process.execPath, [cli, 'stop', '--home', home], { cwd: dir, timeout: 30000 });
+  }
+
   assert.ok(
     !readFileSync(cli, 'utf8').includes('node:sqlite'),
     'Bun package must not load node:sqlite',

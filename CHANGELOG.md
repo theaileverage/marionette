@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.3 — 2026-09-10
+
+- Reconnect existing terminal leads across runtime updates, including pre-0.5.2 launch receipts, without changing the native conversation, replaying startup prompts, or rewriting live guard files. Continue checking project, lease, workspace, pane, terminal, and native session identity.
+- Use Herdr’s shared `default` session and correct top-level socket for new projects. Retain saved sessions for existing projects and explicit named-session selection. Never claim ownership of the shared default session.
+- Add direct `profiles` commands for discovery, listing, editing, validation, removal, and category defaults, plus `roles` commands for project overrides and instance defaults.
+- Show every CLI command and callable action in help; add safe per-command help and reject unknown commands.
+- Preserve usable MCP connections through supervisor updates and remove the blanket agent-restart instruction. Clients only need a tool refresh when their MCP catalog changes.
+- Copy all bundled runtime files rather than a fixed filename list. Recover the guard bundle omitted by older installers while preserving their expected runtime path, and test this installed-runtime startup and shutdown path before publication.
+
 ## 0.5.2 — 2026-09-10
 
 - Default new projects to guarded coordinator leads with scoped MCP access and explicit per-outcome write authority. Enforce worker roles, assigned paths, and delegation capabilities.

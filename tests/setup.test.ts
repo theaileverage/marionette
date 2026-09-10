@@ -7,6 +7,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -341,4 +342,188 @@ test('lead rejects recovery flags and unknown options before loading project sta
     encoding: 'utf8',
   });
   assert.match(help, /Usage: marionette lead/);
+});
+
+test('new projects share the default Herdr session while saved and explicit sessions remain stable', () => {
+  const root = fixture();
+  const other = fixture();
+  const first = setupPlan({ project: root });
+  const second = setupPlan({ project: other });
+  assert.equal(first.session, 'default');
+  assert.equal(second.socket, first.socket);
+  assert.notEqual(first.workspaceLabel, second.workspaceLabel);
+  assert.equal(setupPlan({ project: root, session: 'custom' }).session, 'custom');
+  privateJson(resolve(root, '.marionette/project.json'), {
+    session: 'marionette-legacy',
+    socket: '/saved/herdr.sock',
+    workspace: 'w9',
+  });
+  const saved = setupPlan({ project: root });
+  assert.equal(saved.session, 'marionette-legacy');
+  assert.equal(saved.socket, '/saved/herdr.sock');
+  assert.equal(saved.workspace, 'w9');
+  const explicit = setupPlan({ project: root, session: 'default' });
+  assert.equal(explicit.session, 'default');
+  assert.notEqual(explicit.socket, '/saved/herdr.sock');
+});
+
+test('runtime installer copies future bundles and includes them in its content identity', () => {
+  const root = fixture();
+  const source = resolve(root, 'package');
+  mkdirSync(resolve(source, 'dist/chunks'), { recursive: true });
+  mkdirSync(resolve(source, 'public'), { recursive: true });
+  writeFileSync(resolve(source, 'package.json'), '{"version":"0.5.3"}');
+  writeFileSync(resolve(source, 'dist/cli.js'), 'cli');
+  writeFileSync(resolve(source, 'dist/mcp.js'), 'mcp');
+  writeFileSync(resolve(source, 'dist/harness-guard.js'), 'guard');
+  writeFileSync(resolve(source, 'dist/chunks/future.js'), 'future-v1');
+  writeFileSync(resolve(source, 'public/index.html'), 'ui');
+  const first = installRuntime(resolve(root, 'home'), source);
+  const alias = resolve(root, 'home-alias');
+  symlinkSync(resolve(root, 'home'), alias, 'dir');
+  assert.equal(
+    installRuntime(alias, first),
+    first,
+    'An installed runtime retains its path through a home alias',
+  );
+  assert.equal(readFileSync(resolve(first, 'dist/chunks/future.js'), 'utf8'), 'future-v1');
+  writeFileSync(resolve(source, 'dist/chunks/future.js'), 'future-v2');
+  const second = installRuntime(resolve(root, 'home'), source);
+  assert.notEqual(first, second);
+  assert.equal(readFileSync(resolve(second, 'dist/chunks/future.js'), 'utf8'), 'future-v2');
+});
+
+test('lead reconnects a legacy receipt after update without rewriting live guard files or validating new profiles', async () => {
+  const { createHash } = await import('node:crypto');
+  const { createServer } = await import('node:net');
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const { initConfig } = await import('../src/config.js');
+  const root = fixture();
+  const home = resolve(root, 'state');
+  const xdg = resolve(root, 'xdg');
+  const socket = resolve(xdg, 'herdr/herdr.sock');
+  mkdirSync(resolve(xdg, 'herdr'), { recursive: true });
+  const projectId = 'legacy-project';
+  const name = `lead-${createHash('sha256').update(projectId).digest('hex').slice(0, 12)}-1`;
+  const agent = {
+    name,
+    agent: 'codex',
+    cwd: root,
+    workspace_id: 'w1',
+    tab_id: 'w1:t2',
+    pane_id: 'w1:p2',
+    terminal_id: 'original-terminal',
+  };
+  const methods: string[] = [];
+  const herdr = createServer((stream) => {
+    let buffer = '';
+    stream.on('data', (data) => {
+      buffer += data;
+      if (!buffer.includes('\n')) return;
+      const request = JSON.parse(buffer.slice(0, buffer.indexOf('\n')));
+      methods.push(request.method);
+      if (!['ping', 'workspace.get', 'agent.list', 'tab.focus'].includes(request.method)) {
+        stream.end(
+          JSON.stringify({
+            id: request.id,
+            error: { code: 'unexpected', message: request.method },
+          }) + '\n',
+        );
+        return;
+      }
+      const result = request.method === 'agent.list' ? { agents: [agent] } : { type: 'ok' };
+      stream.end(JSON.stringify({ id: request.id, result }) + '\n');
+    });
+  });
+  await new Promise<void>((ok, fail) => {
+    herdr.once('error', fail);
+    herdr.listen(socket, ok);
+  });
+  onTestFinished(() => new Promise<void>((ok) => herdr.close(() => ok())));
+  const calls: string[] = [];
+  const http = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    async fetch(request) {
+      const input = await request.json();
+      calls.push(input.action);
+      assert.equal(input.action, 'project.briefing');
+      return Response.json({
+        result: {
+          project: {
+            id: projectId,
+            name: 'Legacy project',
+            root,
+            session: 'default',
+            socketPath: socket,
+            workspaceId: 'w1',
+            maxConcurrency: 1,
+            agentArgs: {},
+            coordinatorOnly: true,
+            trustWorkspaces: false,
+            createdAt: 'now',
+          },
+          lead: { owner: 'Ada', epoch: 1, agent: 'codex' },
+          profiles: [],
+        },
+      });
+    },
+  });
+  onTestFinished(() => http.stop(true));
+  initConfig(home, http.port!);
+  const leasePath = resolve(home, 'leads/legacy-project.json');
+  privateJson(leasePath, { projectId, owner: 'Ada', epoch: 1, token: 'a'.repeat(48) });
+  const receiptPath = resolve(home, 'leads/legacy-project.terminal.json');
+  privateJson(receiptPath, {
+    name,
+    agent: 'codex',
+    pane_id: agent.pane_id,
+    terminal_id: agent.terminal_id,
+  });
+  const receipt = readFileSync(receiptPath, 'utf8');
+  const policy = resolve(home, 'guards/legacy-project/lead-1/policy.json');
+  privateJson(policy, { marker: 'original-live-policy' });
+  const originalPolicy = readFileSync(policy, 'utf8');
+  for (const version of ['0.5.2', '0.5.3']) {
+    privateJson(resolve(root, '.marionette/project.json'), {
+      root,
+      home,
+      projectId,
+      leasePath,
+      lead: 'codex',
+      leadName: 'Ada',
+      session: 'default',
+      socket,
+      workspace: 'w1',
+      runtime: resolve(home, 'runtimes', version),
+      leadProfile: 'not-validated-yet',
+    });
+    const cli = resolve(process.env.MARIONETTE_TEST_CLI ?? 'src/cli.ts');
+    const output = await promisify(execFile)(
+      process.execPath,
+      [
+        '--eval',
+        `Object.defineProperty(process.stdin, 'isTTY', {value:true}); process.argv = ['bun', ${JSON.stringify(cli)}, 'lead', '--project', ${JSON.stringify(root)}]; await import(${JSON.stringify(cli)});`,
+      ],
+      {
+        env: { ...process.env, XDG_CONFIG_HOME: xdg, HERDR_ENV: '1', HERDR_SOCKET_PATH: socket },
+      },
+    );
+    assert.match(output.stdout, /Reconnected to the existing lead conversation/);
+    assert.equal(readFileSync(receiptPath, 'utf8'), receipt);
+    assert.equal(readFileSync(policy, 'utf8'), originalPolicy);
+    assert.equal(existsSync(resolve(root, '.marionette/lead.lock')), false);
+  }
+  assert.deepEqual(methods, [
+    'ping',
+    'workspace.get',
+    'agent.list',
+    'tab.focus',
+    'ping',
+    'workspace.get',
+    'agent.list',
+    'tab.focus',
+  ]);
+  assert.deepEqual(calls, Array(4).fill('project.briefing'));
 });
