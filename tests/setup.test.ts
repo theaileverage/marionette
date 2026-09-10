@@ -7,6 +7,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -378,6 +379,13 @@ test('runtime installer copies future bundles and includes them in its content i
   writeFileSync(resolve(source, 'dist/chunks/future.js'), 'future-v1');
   writeFileSync(resolve(source, 'public/index.html'), 'ui');
   const first = installRuntime(resolve(root, 'home'), source);
+  const alias = resolve(root, 'home-alias');
+  symlinkSync(resolve(root, 'home'), alias, 'dir');
+  assert.equal(
+    installRuntime(alias, first),
+    first,
+    'An installed runtime retains its path through a home alias',
+  );
   assert.equal(readFileSync(resolve(first, 'dist/chunks/future.js'), 'utf8'), 'future-v1');
   writeFileSync(resolve(source, 'dist/chunks/future.js'), 'future-v2');
   const second = installRuntime(resolve(root, 'home'), source);

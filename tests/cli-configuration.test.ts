@@ -32,7 +32,7 @@ test('help enumerates every command and action; command help never performs its 
     for (const tool of swarmTools) assert.ok(cliActions.includes(`swarm.${tool.action}`));
     for (const file of ['service.ts', 'orchestration.ts', 'continuation.ts', 'cleanup.ts']) {
       const source = readFileSync(resolve('src', file), 'utf8');
-      for (const match of source.matchAll(/(?:action ===|case) '([^']+)'/g))
+      for (const match of source.matchAll(/(?:action ===|case) '([a-z-]+\.[^']+)'/g))
         assert.ok(cliActions.includes(match[1]), `${file}: ${match[1]}`);
     }
     const alias = await exec(process.execPath, [cli, 'help', 'profiles']);

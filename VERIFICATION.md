@@ -1,5 +1,17 @@
 # Verification record
 
+## Upgrade continuity and CLI configuration — 0.5.3
+
+Verified on macOS arm64 with Bun 1.3.14. The full suite passed **258 tests across 28 files**. Production CLI/MCP bundles passed all **21 integration, setup, and CLI-configuration tests**, including the final runtime-path alias regression. Type checking, lint, formatting, runtime lifecycle, release metadata, and standalone package/SDK checks passed. Effect diagnostics reported zero errors and zero warnings (six existing informational messages); the quality-tooling sentinel passed.
+
+The legacy-lead regression uses an isolated HTTP supervisor fixture and Herdr Unix-socket fixture with a pre-0.5.2 receipt. Repeated CLI launches across changed runtime paths focus only the original tab, preserve the receipt and guard file bytes, retain the lease, skip newly selected profile validation for the already-running conversation, and never issue another agent launch. Separate identity tests reject replaced terminals, native conversations, and missing receipts.
+
+Real STDIO MCP clients retain read and write access through a supervisor restart. Separate temporary-instance trials used the actual published **0.5.1 and 0.5.2 tarballs** to run their own `update --from` commands against the 0.5.3 package. Both completed successfully, matched the supervisor runtime to the updated project binding, retained session/lease/receipt state, and kept their already-connected MCP clients usable. The 0.5.1 trial verifies recovery of its omitted guard bundle; the 0.5.2 trial verifies both administrative and scoped lead MCP clients.
+
+The installed-tarball smoke now emulates an older installer that copied only CLI/MCP bundles, package metadata, and public assets into a completed runtime. It starts that runtime, checks the restored guard and unchanged runtime directory, verifies its version, and shuts it down. This exposed and fixed a macOS `/var` versus `/private/var` alias comparison before release. Runtime-copy tests cover future auxiliary bundles and preserve installed paths through equivalent home aliases.
+
+CLI regressions cover complete help without executing commands, unknown commands, native discovery/probe routing through fixtures, profile defaults, availability validation, role overrides and instance defaults, and rejection of invalid or referenced profile removal. New-project plans use the shared Herdr `default` session; saved bindings retain their original sessions. Herdr 0.9's default socket and XDG paths were checked against its tagged source. Live user Herdr panes and paid model sessions were not operated during these tests.
+
 ## Lead recovery and force removal — 0.5.1
 
 Verified on macOS arm64 with Bun 1.3.14 against the 0.5.0 release baseline. All 231 tests across 24 files passed, along with type checking, lint, formatting, release metadata, quality-tooling probes, and runtime lifecycle checks.

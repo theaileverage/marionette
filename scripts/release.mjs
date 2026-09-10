@@ -204,6 +204,11 @@ function smoke(tarball) {
         `Copied runtime lacks ${bundle}`,
       );
     assert.equal(
+      readFileSync(join(home, 'runtimes', runtimes[0], 'dist/harness-guard.js'), 'utf8'),
+      readFileSync(join(installed, 'dist/harness-guard.js'), 'utf8'),
+      'Recovered guard must match the shipped bundle byte for byte',
+    );
+    assert.equal(
       run(process.execPath, [join(home, 'runtimes', runtimes[0], 'dist/cli.js'), '--version']),
       pkg.version,
     );

@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -41,7 +42,11 @@ export function installRuntime(home: string, source = packageRoot) {
   // An older updater has already bound projects to this managed runtime path.
   // Repair its omitted guard in place; changing the path would fail that updater's
   // supervisor identity check and roll back an otherwise healthy upgrade.
-  if (dirname(source) === resolve(home, 'runtimes') && existsSync(resolve(source, '.complete'))) {
+  if (
+    existsSync(resolve(home, 'runtimes')) &&
+    realpathSync(dirname(source)) === realpathSync(resolve(home, 'runtimes')) &&
+    existsSync(resolve(source, '.complete'))
+  ) {
     if (recoverGuard) writeFileSync(resolve(source, guard), embeddedGuard);
     return source;
   }
