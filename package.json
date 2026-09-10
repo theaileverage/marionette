@@ -40,7 +40,7 @@
     "effect": "4.0.0-rc.112",
     "esbuild": "^0.28.2",
     "express": "^5.1.0",
-    "lucide-react": "^0.468.0",
+    "lucide-react": "^1.41.0",
     "mustache": "^4.2.0",
     "oxlint": "1.82.0",
     "oxlint-tsgolint": "7.0.2001",
