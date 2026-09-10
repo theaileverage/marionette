@@ -49,7 +49,7 @@
     "react-dom": "^19.1.0",
     "typescript": "7.0.2",
     "vite": "^6.3.5",
-    "zod": "^3.25.0"
+    "zod": "^4.5.4"
   },
   "description": "Persistent multi-agent orchestration for Herdr, with a named lead, MCP tools, and a local dashboard.",
   "bin": {
