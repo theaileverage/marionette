@@ -111,6 +111,35 @@ export function smokePackage(tarball) {
     );
     assert.equal(read.entries.length, 1);
     assert.equal(read.entries[0].body, 'installed SDK post');
+    const flaggedRead = JSON.parse(
+      run(
+        process.execPath,
+        [
+          cli,
+          'board',
+          'read',
+          '--project',
+          setup.context.bindingPath,
+          '--thread-id',
+          setup.threadId,
+          '--output',
+          'json',
+        ],
+        { cwd: directory, env: isolatedEnv },
+      ),
+    );
+    assert.deepEqual(flaggedRead, read);
+    const contract = JSON.parse(
+      run(process.execPath, [cli, 'schema', 'board.read', '--output', 'json'], {
+        cwd: directory,
+        env: isolatedEnv,
+      }),
+    );
+    assert.equal(contract.version, pkg.version);
+    assert.equal(contract.operations[0].operation, 'board.read');
+    assert.equal(contract.operations[0].outputSchema.type, 'object');
+    assert.ok(contract.operations[0].flags.some((flag) => flag.name === 'thread-id'));
+
     const sqlInput = join(directory, 'sql-read.json');
     writeFileSync(sqlInput, JSON.stringify({ operation: 'sql.read', sql: 'SELECT 1 AS value' }));
     const sql = JSON.parse(

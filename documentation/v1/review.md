@@ -16,6 +16,12 @@ Independent reviews covered runtime effects, context and actor checks, handoff, 
 
 The comment review found no actionable comment or suppression changes. The retained explanatory comments cover recursive JSON and Node declaration gaps.
 
+## CLI contract
+
+The command registry derives scalar flags from the operation schemas and supplies help and offline introspection metadata. The installed CLI exposes input constraints and output contracts, supports flags or bounded raw JSON without merging them, and keeps machine stdout separate from diagnostics. Human output escapes controls and reports abbreviation. Process validation precedes project connection. Workspace retirement has a local preview that shares retirement checks while skipping native effects and persistent mutation.
+
+Review corrected explicit machine output being ignored on parser errors, human watcher warnings using JSON, and malformed credential JSON leaking parser excerpts. Context reports credential source and effective scope without exposing the bearer. Non-board list pagination remains a follow-up to preserve the existing complete JSON results.
+
 ## Verification
 
 The integrated Node suite passes 85 tests against temporary SQLite databases, Git worktrees, local Unix sockets, and native protocol fixtures. Type checking, lint, formatting, release metadata, and production build pass. The installed tarball smoke checks CLI/SDK collaboration, an isolated SQL worker from an unrelated directory, workflow resource loading, and public TypeScript declarations.

@@ -229,6 +229,33 @@ const attemptNativeSchema = publicObject({
   native: nativeObservationSchema,
 });
 
+const retirementTargetSchema = publicObject({
+  session: publicObject({ id: AgentSessionIdSchema, generation: SessionGenerationSchema }),
+  identity: NativeIdentitySchema,
+});
+export const retirementPreviewOutputSchema = publicObject({
+  kind: z.enum(['ready', 'blocked', 'unconfirmed']),
+  workspaceId: WorkspaceIdSchema,
+  reason: z.string().optional(),
+  nativeTargets: z.array(retirementTargetSchema),
+  effects: z
+    .discriminatedUnion('kind', [
+      publicObject({ kind: z.literal('cleanup-native-tab'), ...retirementTargetSchema.shape }),
+      publicObject({ kind: z.literal('remove-worktree'), path: z.string() }),
+      publicObject({ kind: z.literal('mark-workspace-retired'), workspaceId: WorkspaceIdSchema }),
+    ])
+    .array(),
+  skippedChecks: publicObject({
+    kind: z.enum([
+      'native-observation',
+      'native-cleanup',
+      'post-native-cleanup-state',
+      'post-worktree-removal',
+    ]),
+    reason: z.string(),
+  }).array(),
+});
+
 type OperationName = Operation['operation'];
 type OperationOutputSchemaMap = { [Name in OperationName]: z.ZodTypeAny };
 
@@ -238,6 +265,12 @@ export const operationOutputSchemas = {
     project: ProjectBindingSchema,
     bindingPath: z.string().min(1),
     session: sessionSchema,
+    authentication: publicObject({
+      source: z.enum(['managed-context-file', 'local-session-file']),
+      projectId: ProjectBindingSchema.shape.id,
+      role: sessionSchema.shape.role,
+      workspaceId: WorkspaceIdSchema.nullable(),
+    }),
   }),
   'handoff.get': handoffSchema,
   'handoff.create': handoffSchema,

@@ -25,7 +25,15 @@ Commands discover the binding from the current directory. Use `--project /absolu
 
 ## CLI input
 
-Commands accept JSON through `--input FILE` or `--input -` for stdin. Results are JSON. Errors go to stderr and produce a nonzero exit status.
+Common operations accept flags, for example `marionette board create --title Notes --idempotency-key notes`. Nested requests accept `--input FILE`, `--input -` for stdin, or `--json JSON_OR_FILE`. Request flags and raw JSON cannot be combined. Both paths use the same validation; input files and inline JSON are limited to 1 MiB.
+
+The CLI never prompts. When both stdin and stdout are terminals, results use readable, escaped output capped at 4000 characters with an explicit abbreviation notice. Pipes retain complete JSON results. Override with `--output human|json|ndjson`; NDJSON emits one line per top-level array item. Diagnostics go to stderr. Exit codes are 0 for success, 1 for operational failures, and 2 for invalid input.
+
+`marionette schema [OPERATION]` (also `describe`) works offline and describes this installed version's inputs, constraints, defaults, flags, output schemas, effects, environment, and exit codes. `marionette COMMAND --help` describes a command. JSON success values remain unwrapped for compatibility; errors have a stable `error` object containing `code`, `message`, `fields`, `retry`, and `mutation`.
+
+`marionette workspace retire --workspace-id ID --idempotency-key KEY --dry-run` checks local authorization, persisted state, and Git state, and reports planned effects. It does not record retirement intent, contact native agents, close tabs, or remove worktrees. Its `skippedChecks` list identifies checks that execution must still perform. A ready preview is a snapshot, not a guarantee that a later retirement will succeed.
+
+Board reads already support bounded pages. Other list operations retain their complete JSON response for compatibility; pagination and projections for those operations remain follow-ups. `marionette context` reports the credential source and effective project, role, and workspace scope without printing the token. Authentication continues to use the existing private local session files; this alpha has no remote login flow.
 
 ```sh
 printf '%s\n' '{"title":"Implementation notes","idempotencyKey":"notes-thread"}' |

@@ -25,7 +25,7 @@ import { Settings, profileSchema } from './settings.js';
 import { SqlQueryService, type SqlRead } from './sql.js';
 import { Runtime } from './runtime.js';
 import { Handoffs } from './handoff.js';
-import { retireRuntimeWorkspace } from './runtime-retirement.js';
+import { previewRuntimeWorkspaceRetirement, retireRuntimeWorkspace } from './runtime-retirement.js';
 import { Watcher } from './watcher.js';
 import { NativeBoardDelivery } from './delivery.js';
 import {
@@ -152,12 +152,34 @@ export class Marionette {
 
   context() {
     const session = this.#authenticate();
-    return { project: this.#store.project, bindingPath: this.#resolved.bindingPath, session };
+    return {
+      project: this.#store.project,
+      bindingPath: this.#resolved.bindingPath,
+      session,
+      authentication: {
+        source: this.#resolved.session ? 'managed-context-file' : 'local-session-file',
+        projectId: session.projectId,
+        role: session.role,
+        workspaceId: session.workspaceId,
+      },
+    };
   }
 
   registerWorkspace(input: Omit<RegisterWorkspaceInput, 'actor'>) {
     this.#authenticate();
     return this.#store.registerWorkspace({ ...input, actor: this.#identity });
+  }
+
+  previewRetirement(input: {
+    workspaceId: z.infer<typeof WorkspaceIdSchema>;
+    idempotencyKey: string;
+  }) {
+    this.#authenticate();
+    return previewRuntimeWorkspaceRetirement({
+      ...input,
+      store: this.#store,
+      actor: this.#identity,
+    });
   }
 
   retireWorkspace(input: {
