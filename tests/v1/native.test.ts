@@ -9,6 +9,7 @@ import {
   LocalEndpointInspector,
   type LocalCommandRunner,
   type NativeEffect,
+  type NativeIdentity,
   type NativeJournal,
 } from '../../src/v1/native.js';
 
@@ -33,6 +34,10 @@ function agent(
     terminal_id: 'terminal-1',
     workspace_id: 'workspace-1',
   };
+}
+
+function agentWithoutSession(status: 'idle' | 'working' | 'blocked' | 'done' | 'unknown' = 'idle') {
+  return { ...agent(status), agent_session: null };
 }
 
 async function fakeHerdr(socketPath: string, onRequest: (request: Request) => HerdrReply) {
@@ -148,6 +153,11 @@ test('native adapter registers, launches AGY in an owned tab, prompts, settles, 
     if (request.method === 'agent.start')
       return { type: 'agent_started', agent: agent(), argv: ['agy'] };
     if (request.method === 'agent.get') return { type: 'agent_info', agent: agent() };
+    if (request.method === 'pane.read')
+      return {
+        type: 'pane_read',
+        read: { pane_id: 'pane-1', tab_id: 'tab-1', workspace_id: 'workspace-1', text: '' },
+      };
     if (request.method === 'agent.prompt')
       return { type: 'agent_prompted', agent: agent('working') };
     if (request.method === 'agent.send_keys') return { type: 'ok' };
@@ -222,6 +232,11 @@ test('native cleanup does not close a tab after another pane joins it', async ()
     if (request.method === 'agent.start')
       return { type: 'agent_started', agent: agent(), argv: ['agy'] };
     if (request.method === 'agent.get') return { type: 'agent_info', agent: agent() };
+    if (request.method === 'pane.read')
+      return {
+        type: 'pane_read',
+        read: { pane_id: 'pane-1', tab_id: 'tab-1', workspace_id: 'workspace-1', text: '' },
+      };
     if (request.method === 'pane.list')
       return {
         type: 'pane_list',
@@ -253,6 +268,145 @@ test('native cleanup does not close a tab after another pane joins it', async ()
     siblingAdded = true;
     assert.equal((await adapter.cleanup(launch.identity, true)).kind, 'unconfirmed');
     assert.equal(tabCloseCalls, 0);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('native trust screen is manual-required and never receives a prompt or key press', async () => {
+  const root = mkdtempSync('/private/tmp/marionette-v1-native-');
+  const socketPath = join(root, 'herdr.sock');
+  const methods: string[] = [];
+  const server = await fakeHerdr(socketPath, (request) => {
+    methods.push(request.method);
+    if (request.method === 'ping')
+      return { type: 'pong', protocol: 22, version: '0.9.0', capabilities: {} };
+    if (request.method === 'workspace.get')
+      return { type: 'workspace_info', workspace: { workspace_id: 'workspace-1' } };
+    if (request.method === 'agent.get') return { type: 'agent_info', agent: agent() };
+    if (request.method === 'pane.read')
+      return {
+        type: 'pane_read',
+        read: {
+          pane_id: 'pane-1',
+          tab_id: 'tab-1',
+          workspace_id: 'workspace-1',
+          text: 'Do you trust the contents of this project?\n> Yes, I trust this folder',
+        },
+      };
+    throw new Error(`unexpected ${request.method}`);
+  });
+  try {
+    const adapter = new HerdrNativeAdapter(journal().value, endpointInspector);
+    const binding = await adapter.register({
+      hostId: 'host-1',
+      socketPath,
+      workspaceId: 'workspace-1',
+    });
+    assert.ok(!('kind' in binding));
+    if ('kind' in binding) return;
+    const identity: NativeIdentity = {
+      binding,
+      tabId: 'tab-1',
+      paneId: 'pane-1',
+      terminalId: 'terminal-1',
+      agentKind: 'agy',
+      agentName: 'worker',
+      nativeSession: 'native-1',
+      identityRevision: 4,
+      ownedTabId: 'tab-1',
+    };
+    const observation = await adapter.observe(identity);
+    assert.equal(observation.kind, 'manual-required');
+    const prompt = await adapter.prompt(identity, 'must not reach the trust dialog');
+    assert.equal(prompt.kind, 'unconfirmed');
+    const interrupt = await adapter.interrupt(identity);
+    assert.equal(interrupt.kind, 'unconfirmed');
+    assert.equal(methods.includes('agent.prompt'), false);
+    assert.equal(methods.includes('agent.send_keys'), false);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('native adapter uses a foreground process start identity when AGY has no native session', async () => {
+  const root = mkdtempSync('/private/tmp/marionette-v1-native-');
+  const socketPath = join(root, 'herdr.sock');
+  const methods: string[] = [];
+  let startToken = 'process-start-1';
+  const server = await fakeHerdr(socketPath, (request) => {
+    methods.push(request.method);
+    if (request.method === 'ping')
+      return { type: 'pong', protocol: 22, version: '0.9.0', capabilities: {} };
+    if (request.method === 'workspace.get')
+      return { type: 'workspace_info', workspace: { workspace_id: 'workspace-1' } };
+    if (request.method === 'tab.create')
+      return {
+        type: 'tab_created',
+        tab: { tab_id: 'tab-1', workspace_id: 'workspace-1' },
+        root_pane: { ...agent(), agent: null, agent_session: null, name: null },
+      };
+    if (request.method === 'agent.start')
+      return { type: 'agent_started', agent: agentWithoutSession(), argv: ['agy'] };
+    if (request.method === 'agent.get') return { type: 'agent_info', agent: agentWithoutSession() };
+    if (request.method === 'pane.process_info')
+      return {
+        type: 'pane_process_info',
+        process_info: {
+          pane_id: 'pane-1',
+          foreground_processes: [{ name: 'agy', argv0: 'agy', pid: 19937 }],
+        },
+      };
+    if (request.method === 'pane.read')
+      return {
+        type: 'pane_read',
+        read: { pane_id: 'pane-1', tab_id: 'tab-1', workspace_id: 'workspace-1', text: '' },
+      };
+    if (request.method === 'agent.prompt')
+      return { type: 'agent_prompted', agent: agentWithoutSession('working') };
+    throw new Error(`unexpected ${request.method}`);
+  });
+  try {
+    const processInspector = {
+      async startToken(processId: number) {
+        assert.equal(processId, 19937);
+        return startToken;
+      },
+    };
+    const adapter = new HerdrNativeAdapter(
+      journal().value,
+      endpointInspector,
+      undefined,
+      processInspector,
+    );
+    const binding = await adapter.register({
+      hostId: 'host-1',
+      socketPath,
+      workspaceId: 'workspace-1',
+    });
+    assert.ok(!('kind' in binding));
+    if ('kind' in binding) return;
+    const launch = await adapter.launch(binding, {
+      cwd: '/work/project',
+      env: { MARIONETTE_CONTEXT: '/private/session.json', MARIONETTE_STATE_HOME: '/private/state' },
+      agentKind: 'agy',
+      agentName: 'worker',
+    });
+    assert.equal(launch.kind, 'launched');
+    if (launch.kind !== 'launched') return;
+    assert.deepEqual(launch.identity.foregroundProcess, {
+      pid: 19937,
+      startToken: 'process-start-1',
+    });
+    assert.equal(launch.identity.nativeSession, undefined);
+    startToken = 'process-start-2';
+    assert.equal(
+      (await adapter.prompt(launch.identity, 'must not reach a reused process')).kind,
+      'unconfirmed',
+    );
+    assert.equal(methods.includes('agent.prompt'), false);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     rmSync(root, { recursive: true, force: true });

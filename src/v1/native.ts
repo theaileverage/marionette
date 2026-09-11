@@ -28,10 +28,13 @@ export type NativeIdentity = {
   terminalId: string;
   agentKind: string;
   agentName: string;
-  nativeSession: string;
+  nativeSession?: string;
+  foregroundProcess?: NativeForegroundProcess;
   identityRevision: number;
   ownedTabId: string;
 };
+
+export type NativeForegroundProcess = { pid: number; startToken: string };
 
 export const NativeBindingSchema = z
   .object({
@@ -59,11 +62,22 @@ export const NativeIdentitySchema = z
     terminalId: z.string().min(1),
     agentKind: z.string().min(1),
     agentName: z.string().min(1),
-    nativeSession: z.string().min(1),
+    nativeSession: z.string().min(1).optional(),
+    foregroundProcess: z
+      .object({ pid: z.number().int().positive(), startToken: z.string().min(1) })
+      .strict()
+      .optional(),
     identityRevision: z.number().int().nonnegative(),
     ownedTabId: z.string().min(1),
   })
-  .strict();
+  .strict()
+  .superRefine((identity, context) => {
+    if (!identity.nativeSession && !identity.foregroundProcess)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Native identity needs a native session or foreground process instance',
+      });
+  });
 
 export type NativeLaunchLocator = {
   binding: NativeBinding;
@@ -74,6 +88,7 @@ export type NativeLaunchLocator = {
   agentName: string;
   ownedTabId: string;
   nativeSession?: string;
+  foregroundProcess?: NativeForegroundProcess;
   identityRevision?: number;
 };
 
@@ -93,6 +108,10 @@ export interface NativeJournal {
 
 export interface NativeEndpointInspector {
   serverStartToken(socketPath: string): Promise<string | undefined>;
+}
+
+export interface NativeProcessInspector {
+  startToken(processId: number): Promise<string | undefined>;
 }
 
 export type LocalCommandResult = { stdout: string };
@@ -121,6 +140,25 @@ const localCommandRunner: LocalCommandRunner = {
   },
 };
 
+async function processStartToken(
+  commands: LocalCommandRunner,
+  processId: number,
+): Promise<string | undefined> {
+  const started = await commands.run('ps', ['-o', 'lstart=', '-p', String(processId)]);
+  if (!started) return undefined;
+  const start = processStartSchema.safeParse(started.stdout.trim());
+  if (!start.success) return undefined;
+  return createHash('sha256').update(`${processId}\u0000${start.data}`).digest('base64url');
+}
+
+export class LocalProcessInspector implements NativeProcessInspector {
+  constructor(private readonly commands: LocalCommandRunner = localCommandRunner) {}
+
+  startToken(processId: number): Promise<string | undefined> {
+    return processStartToken(this.commands, processId);
+  }
+}
+
 /** Maps a local Unix socket to a process start instance; absence is never treated as proof. */
 export class LocalEndpointInspector implements NativeEndpointInspector {
   constructor(private readonly commands: LocalCommandRunner = localCommandRunner) {}
@@ -141,11 +179,7 @@ export class LocalEndpointInspector implements NativeEndpointInspector {
     if (processIds.size !== 1) return undefined;
     const [processId] = processIds;
     if (!processId) return undefined;
-    const started = await this.commands.run('ps', ['-o', 'lstart=', '-p', processId]);
-    if (!started) return undefined;
-    const start = processStartSchema.safeParse(started.stdout.trim());
-    if (!start.success) return undefined;
-    return createHash('sha256').update(`${processId}\u0000${start.data}`).digest('base64url');
+    return processStartToken(this.commands, Number(processId));
   }
 }
 
@@ -157,6 +191,7 @@ export type NativeSubmission =
 export type NativeObservation =
   | { kind: 'working'; identity: NativeIdentity }
   | { kind: 'blocked'; identity: NativeIdentity; reason: string }
+  | { kind: 'manual-required'; identity: NativeIdentity; reason: string }
   | { kind: 'settled'; identity: NativeIdentity; slotReady: true }
   | { kind: 'unconfirmed'; reason: string };
 
@@ -206,39 +241,52 @@ function agentIdentity(
   agent: ResponseTypes.AgentInfo,
   request: Pick<LaunchRequest, 'agentKind' | 'agentName'>,
   ownedTabId: string,
+  foregroundProcess?: NativeForegroundProcess,
 ) {
   const nativeSession = agent.agent_session?.value;
   if (
-    !nativeSession ||
+    (!nativeSession && !foregroundProcess) ||
     agent.workspace_id !== binding.workspaceId ||
     agent.tab_id !== ownedTabId ||
     agent.agent !== request.agentKind ||
     agent.name !== request.agentName
   )
     return undefined;
-  return {
+  const identity: NativeIdentity = {
     binding,
     tabId: agent.tab_id,
     paneId: agent.pane_id,
     terminalId: agent.terminal_id,
     agentKind: request.agentKind,
     agentName: request.agentName,
-    nativeSession,
     identityRevision: agent.revision,
     ownedTabId,
-  } satisfies NativeIdentity;
+  };
+  if (nativeSession) identity.nativeSession = nativeSession;
+  if (foregroundProcess) identity.foregroundProcess = foregroundProcess;
+  return identity;
 }
 
-function sameIdentity(identity: NativeIdentity, agent: ResponseTypes.AgentInfo) {
+function sameAgent(identity: NativeIdentity, agent: ResponseTypes.AgentInfo) {
   return (
     agent.workspace_id === identity.binding.workspaceId &&
     agent.tab_id === identity.tabId &&
     agent.pane_id === identity.paneId &&
     agent.terminal_id === identity.terminalId &&
     agent.agent === identity.agentKind &&
-    agent.name === identity.agentName &&
-    agent.agent_session?.value === identity.nativeSession
+    agent.name === identity.agentName
   );
+}
+
+function manualRequirement(text: string) {
+  if (
+    /do you trust the contents of this project\?/i.test(text) ||
+    /yes, i trust this folder/i.test(text)
+  )
+    return 'Native trust prompt requires an explicit user action';
+  if (/approval required/i.test(text) || /awaiting (?:your )?approval/i.test(text))
+    return 'Native approval prompt requires an explicit user action';
+  return undefined;
 }
 
 function launchLocator(
@@ -283,7 +331,56 @@ export class HerdrNativeAdapter {
     private readonly journal: NativeJournal,
     private readonly endpointInspector: NativeEndpointInspector = new LocalEndpointInspector(),
     private readonly clientFor = (socketPath: string) => new HerdrClient(socketPath),
+    private readonly processInspector: NativeProcessInspector = new LocalProcessInspector(),
   ) {}
+
+  private async foregroundProcess(client: HerdrClient, paneId: string, agentKind: string) {
+    const response = await client.request('pane.process_info', { pane_id: paneId });
+    if (response.type !== 'pane_process_info' || response.process_info.pane_id !== paneId)
+      return undefined;
+    const matches = (response.process_info.foreground_processes ?? []).filter(
+      (process) => process.name === agentKind && process.argv0 === agentKind,
+    );
+    if (matches.length !== 1) return undefined;
+    const process = matches[0];
+    const startToken = await this.processInspector.startToken(process.pid);
+    return startToken ? { pid: process.pid, startToken } : undefined;
+  }
+
+  private async identity(
+    client: HerdrClient,
+    binding: NativeBinding,
+    agent: ResponseTypes.AgentInfo,
+    request: Pick<LaunchRequest, 'agentKind' | 'agentName'>,
+    ownedTabId: string,
+  ) {
+    if (agent.agent_session?.value) return agentIdentity(binding, agent, request, ownedTabId);
+    const foregroundProcess = await this.foregroundProcess(
+      client,
+      agent.pane_id,
+      request.agentKind,
+    );
+    return agentIdentity(binding, agent, request, ownedTabId, foregroundProcess);
+  }
+
+  private async sameIdentity(
+    client: HerdrClient,
+    identity: NativeIdentity,
+    agent: ResponseTypes.AgentInfo,
+  ) {
+    if (!sameAgent(identity, agent)) return false;
+    if (identity.nativeSession) return agent.agent_session?.value === identity.nativeSession;
+    if (!identity.foregroundProcess) return false;
+    const foregroundProcess = await this.foregroundProcess(
+      client,
+      identity.paneId,
+      identity.agentKind,
+    );
+    return (
+      foregroundProcess?.pid === identity.foregroundProcess.pid &&
+      foregroundProcess.startToken === identity.foregroundProcess.startToken
+    );
+  }
 
   async register(input: {
     hostId: string;
@@ -383,13 +480,19 @@ export class HerdrNativeAdapter {
       });
       if (started.type !== 'agent_started')
         return unconfirmedLaunch(operationId, 'Herdr did not acknowledge agent start', locator);
-      const startedIdentity = agentIdentity(binding, started.agent, request, tab.tab.tab_id);
+      const startedIdentity = await this.identity(
+        client,
+        binding,
+        started.agent,
+        request,
+        tab.tab.tab_id,
+      );
       if (startedIdentity) locator = identityLocator(startedIdentity);
       client = await this.client(binding);
       const current = await client.request('agent.get', { target: tab.root_pane.pane_id });
       if (current.type !== 'agent_info')
         return unconfirmedLaunch(operationId, 'Herdr did not return agent identity', locator);
-      const identity = agentIdentity(binding, current.agent, request, tab.tab.tab_id);
+      const identity = await this.identity(client, binding, current.agent, request, tab.tab.tab_id);
       if (!identity)
         return unconfirmedLaunch(
           operationId,
@@ -411,13 +514,36 @@ export class HerdrNativeAdapter {
 
   async observe(identity: NativeIdentity): Promise<NativeObservation> {
     try {
-      const current = await (
-        await this.client(identity.binding)
-      ).request('agent.get', {
+      const client = await this.client(identity.binding);
+      const current = await client.request('agent.get', {
         target: identity.paneId,
       });
-      if (current.type !== 'agent_info' || !sameIdentity(identity, current.agent))
+      if (
+        current.type !== 'agent_info' ||
+        !(await this.sameIdentity(client, identity, current.agent))
+      )
         return { kind: 'unconfirmed', reason: 'Native agent identity changed' };
+      if (current.agent.agent_status === 'idle' || current.agent.agent_status === 'done') {
+        const screen = await client.request('pane.read', {
+          pane_id: identity.paneId,
+          source: 'recent_unwrapped',
+          format: 'text',
+          lines: 120,
+          strip_ansi: true,
+        });
+        if (
+          screen.type !== 'pane_read' ||
+          screen.read.pane_id !== identity.paneId ||
+          screen.read.tab_id !== identity.tabId ||
+          screen.read.workspace_id !== identity.binding.workspaceId
+        )
+          return {
+            kind: 'unconfirmed',
+            reason: 'Native pane read did not match the registered pane',
+          };
+        const required = manualRequirement(screen.read.text);
+        if (required) return { kind: 'manual-required', identity, reason: required };
+      }
       if (current.agent.agent_status === 'working') return { kind: 'working', identity };
       if (current.agent.agent_status === 'blocked')
         return { kind: 'blocked', identity, reason: 'Native agent is blocked' };
@@ -477,7 +603,7 @@ export class HerdrNativeAdapter {
     const prepared = await this.journal.prepare({ kind: 'interrupt', paneId: identity.paneId });
     if (prepared.kind === 'rejected') return { kind: 'unsupported', reason: prepared.reason };
     const observation = await this.observe(identity);
-    if (observation.kind === 'unconfirmed')
+    if (observation.kind === 'unconfirmed' || observation.kind === 'manual-required')
       return { kind: 'unconfirmed', operationId: prepared.operationId, reason: observation.reason };
     try {
       await (
