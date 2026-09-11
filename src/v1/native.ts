@@ -92,6 +92,31 @@ export type NativeLaunchLocator = {
   identityRevision?: number;
 };
 
+export const NativeLaunchLocatorSchema = z
+  .object({
+    binding: NativeBindingSchema,
+    tabId: z.string().min(1),
+    paneId: z.string().min(1),
+    terminalId: z.string().min(1),
+    agentKind: z.string().min(1),
+    agentName: z.string().min(1),
+    ownedTabId: z.string().min(1),
+    nativeSession: z.string().min(1).optional(),
+    foregroundProcess: z
+      .object({ pid: z.number().int().positive(), startToken: z.string().min(1) })
+      .strict()
+      .optional(),
+    identityRevision: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .superRefine((locator, context) => {
+    if (!locator.nativeSession && !locator.foregroundProcess)
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Native launch locator needs a native session or foreground process instance',
+      });
+  });
+
 export type NativeEffect =
   | { kind: 'create-tab'; workspaceId: string }
   | { kind: 'start-agent'; paneId: string; agentKind: string }
@@ -267,7 +292,12 @@ function agentIdentity(
   return identity;
 }
 
-function sameAgent(identity: NativeIdentity, agent: ResponseTypes.AgentInfo) {
+type NativeAgentTarget = Pick<
+  NativeIdentity,
+  'binding' | 'tabId' | 'paneId' | 'terminalId' | 'agentKind' | 'agentName'
+>;
+
+function sameAgent(identity: NativeAgentTarget, agent: ResponseTypes.AgentInfo) {
   return (
     agent.workspace_id === identity.binding.workspaceId &&
     agent.tab_id === identity.tabId &&
@@ -275,6 +305,19 @@ function sameAgent(identity: NativeIdentity, agent: ResponseTypes.AgentInfo) {
     agent.terminal_id === identity.terminalId &&
     agent.agent === identity.agentKind &&
     agent.name === identity.agentName
+  );
+}
+
+function sameBinding(a: NativeBinding, b: NativeBinding) {
+  return (
+    a.hostId === b.hostId &&
+    a.socketPath === b.socketPath &&
+    a.workspaceId === b.workspaceId &&
+    a.endpoint.device === b.endpoint.device &&
+    a.endpoint.inode === b.endpoint.inode &&
+    a.endpoint.birthtimeMs === b.endpoint.birthtimeMs &&
+    a.endpoint.serverStartToken === b.endpoint.serverStartToken &&
+    a.endpoint.protocol === b.endpoint.protocol
   );
 }
 
@@ -380,6 +423,54 @@ export class HerdrNativeAdapter {
       foregroundProcess?.pid === identity.foregroundProcess.pid &&
       foregroundProcess.startToken === identity.foregroundProcess.startToken
     );
+  }
+
+  /** Reopens a persisted launch locator using read-only checks; it never creates or controls a pane. */
+  async recover(binding: NativeBinding, locator: NativeLaunchLocator): Promise<NativeObservation> {
+    if (!NativeLaunchLocatorSchema.safeParse(locator).success)
+      return { kind: 'unconfirmed', reason: 'Persisted native launch locator is invalid' };
+    if (!sameBinding(binding, locator.binding) || locator.ownedTabId !== locator.tabId)
+      return { kind: 'unconfirmed', reason: 'Persisted native launch locator changed' };
+    try {
+      const client = await this.client(binding);
+      const current = await client.request('agent.get', { target: locator.paneId });
+      if (current.type !== 'agent_info' || !sameAgent(locator, current.agent))
+        return { kind: 'unconfirmed', reason: 'Native agent locator no longer matches' };
+      if (locator.nativeSession) {
+        if (current.agent.agent_session?.value !== locator.nativeSession)
+          return { kind: 'unconfirmed', reason: 'Native agent session changed' };
+        const identity = agentIdentity(binding, current.agent, locator, locator.ownedTabId);
+        if (!identity)
+          return { kind: 'unconfirmed', reason: 'Native agent identity is unavailable' };
+        return this.observe(identity);
+      }
+      if (!locator.foregroundProcess)
+        return { kind: 'unconfirmed', reason: 'Native process identity is unavailable' };
+      const foregroundProcess = await this.foregroundProcess(
+        client,
+        locator.paneId,
+        locator.agentKind,
+      );
+      if (
+        foregroundProcess?.pid !== locator.foregroundProcess.pid ||
+        foregroundProcess.startToken !== locator.foregroundProcess.startToken
+      )
+        return { kind: 'unconfirmed', reason: 'Native foreground process changed' };
+      const identity = agentIdentity(
+        binding,
+        current.agent,
+        locator,
+        locator.ownedTabId,
+        foregroundProcess,
+      );
+      if (!identity) return { kind: 'unconfirmed', reason: 'Native agent identity is unavailable' };
+      return this.observe(identity);
+    } catch (error) {
+      return {
+        kind: 'unconfirmed',
+        reason: error instanceof Error ? errorText(error) : 'Native recovery failed',
+      };
+    }
   }
 
   async register(input: {

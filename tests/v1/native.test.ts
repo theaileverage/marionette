@@ -11,6 +11,7 @@ import {
   type NativeEffect,
   type NativeIdentity,
   type NativeJournal,
+  type NativeLaunchLocator,
 } from '../../src/v1/native.js';
 
 type Request = { id: string; method: string; params: object };
@@ -407,6 +408,60 @@ test('native adapter uses a foreground process start identity when AGY has no na
       'unconfirmed',
     );
     assert.equal(methods.includes('agent.prompt'), false);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('native recovery reopens only an unchanged session locator', async () => {
+  const root = mkdtempSync('/private/tmp/marionette-v1-native-');
+  const socketPath = join(root, 'herdr.sock');
+  const methods: string[] = [];
+  const server = await fakeHerdr(socketPath, (request) => {
+    methods.push(request.method);
+    if (request.method === 'ping')
+      return { type: 'pong', protocol: 22, version: '0.9.0', capabilities: {} };
+    if (request.method === 'workspace.get')
+      return { type: 'workspace_info', workspace: { workspace_id: 'workspace-1' } };
+    if (request.method === 'agent.get') return { type: 'agent_info', agent: agent() };
+    if (request.method === 'pane.read')
+      return {
+        type: 'pane_read',
+        read: { pane_id: 'pane-1', tab_id: 'tab-1', workspace_id: 'workspace-1', text: '' },
+      };
+    throw new Error(`unexpected ${request.method}`);
+  });
+  try {
+    const adapter = new HerdrNativeAdapter(journal().value, endpointInspector);
+    const binding = await adapter.register({
+      hostId: 'host-1',
+      socketPath,
+      workspaceId: 'workspace-1',
+    });
+    assert.ok(!('kind' in binding));
+    if ('kind' in binding) return;
+    const locator: NativeLaunchLocator = {
+      binding,
+      tabId: 'tab-1',
+      paneId: 'pane-1',
+      terminalId: 'terminal-1',
+      agentKind: 'agy',
+      agentName: 'worker',
+      ownedTabId: 'tab-1',
+      nativeSession: 'native-1',
+      identityRevision: 4,
+    };
+    assert.equal((await adapter.recover(binding, locator)).kind, 'settled');
+    assert.equal(
+      (await adapter.recover(binding, { ...locator, nativeSession: 'native-session-changed' }))
+        .kind,
+      'unconfirmed',
+    );
+    assert.equal(methods.includes('tab.create'), false);
+    assert.equal(methods.includes('agent.start'), false);
+    assert.equal(methods.includes('agent.prompt'), false);
+    assert.equal(methods.includes('agent.send_keys'), false);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     rmSync(root, { recursive: true, force: true });
