@@ -22,8 +22,10 @@ import {
 } from './native.js';
 import {
   nativeLocatorForRetirement,
+  previewWorkspaceRetirement,
   retireWorkspace,
   type NativeRetirementTarget,
+  type RetirementPreview,
   type RetirementResult,
   type WorkspaceRetirementGit,
 } from './retirement.js';
@@ -61,6 +63,8 @@ export type RuntimeRetirementInput = {
   adapterFor?: RuntimeRetirementAdapterFactory;
   git?: WorkspaceRetirementGit;
 };
+
+export type RuntimeRetirementPreviewInput = Omit<RuntimeRetirementInput, 'adapterFor'>;
 
 export class RuntimeRetirementError extends Error {
   constructor(message: string) {
@@ -155,6 +159,31 @@ function nativeTargets(input: RuntimeRetirementInput): RuntimeNativeTarget[] {
     tabs.add(target.identity.ownedTabId);
   }
   return targets;
+}
+
+/** Plans retirement from Runtime's persisted native bindings without constructing an adapter. */
+export function previewRuntimeWorkspaceRetirement(
+  input: RuntimeRetirementPreviewInput,
+): RetirementPreview {
+  try {
+    return previewWorkspaceRetirement({
+      store: input.store,
+      actor: input.actor,
+      workspaceId: input.workspaceId,
+      idempotencyKey: input.idempotencyKey,
+      nativeTargets: nativeTargets(input),
+      git: input.git,
+    });
+  } catch (error) {
+    return {
+      kind: 'blocked',
+      workspaceId: input.workspaceId,
+      reason: error instanceof Error ? error.message : 'Runtime retirement preview is unavailable',
+      nativeTargets: [],
+      effects: [],
+      skippedChecks: [],
+    };
+  }
 }
 
 function requireCleanupEffect(

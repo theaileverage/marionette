@@ -132,6 +132,15 @@ export type RetireWorkspaceInput = {
   retirementIdFactory?: () => string;
 };
 
+export type PreviewWorkspaceRetirementInput = {
+  store: Store;
+  actor: SessionIdentity;
+  workspaceId: WorkspaceId;
+  idempotencyKey: string;
+  nativeTargets?: readonly NativeRetirementTarget[];
+  git?: WorkspaceRetirementGit;
+};
+
 export type RetirementResult =
   | {
       kind: 'completed';
@@ -146,6 +155,26 @@ export type RetirementResult =
       revision: number;
       reason: string;
     };
+
+export type RetirementPreviewEffect =
+  | { kind: 'cleanup-native-tab'; session: SessionIdentity; identity: NativeIdentity }
+  | { kind: 'remove-worktree'; path: string }
+  | { kind: 'mark-workspace-retired'; workspaceId: WorkspaceId };
+
+export type RetirementPreviewSkippedCheck =
+  | { kind: 'native-observation'; reason: string }
+  | { kind: 'native-cleanup'; reason: string }
+  | { kind: 'post-native-cleanup-state'; reason: string }
+  | { kind: 'post-worktree-removal'; reason: string };
+
+export type RetirementPreview = {
+  kind: 'ready' | 'blocked' | 'unconfirmed';
+  workspaceId: WorkspaceId;
+  reason?: string;
+  nativeTargets: readonly NativeRetirementTarget[];
+  effects: readonly RetirementPreviewEffect[];
+  skippedChecks: readonly RetirementPreviewSkippedCheck[];
+};
 
 export class WorkspaceRetirementError extends Error {
   constructor(
@@ -259,8 +288,8 @@ function now(input: RetireWorkspaceInput): z.infer<typeof TimestampSchema> {
   return TimestampSchema.parse((input.clock ?? (() => new Date()))().toISOString());
 }
 
-function requireActor(input: RetireWorkspaceInput): void {
-  input.store.read((database) => {
+function actorReason(input: Pick<RetireWorkspaceInput, 'store' | 'actor'>): string | null {
+  return input.store.read((database) => {
     const row = z
       .object({ role: z.enum(['user', 'controller', 'worker']), state: z.string() })
       .safeParse(
@@ -271,20 +300,38 @@ function requireActor(input: RetireWorkspaceInput): void {
           )
           .get(input.store.project.id, input.actor.id, input.actor.generation),
       );
-    if (
-      !row.success ||
+    return !row.success ||
       row.data.state !== 'active' ||
       (row.data.role !== 'user' && row.data.role !== 'controller')
-    ) {
-      throw new WorkspaceRetirementError(
-        'identity-mismatch',
-        'Only an active user or controller can retire a workspace',
-      );
-    }
+      ? 'Only an active user or controller can retire a workspace'
+      : null;
   });
 }
 
-function loadWorkspace(database: DatabaseSync, input: RetireWorkspaceInput): Workspace {
+function requireActor(input: RetireWorkspaceInput): void {
+  const reason = actorReason(input);
+  if (reason !== null) throw new WorkspaceRetirementError('identity-mismatch', reason);
+}
+
+function activeRetirementReason(
+  input: Pick<RetireWorkspaceInput, 'store' | 'workspaceId'>,
+): string | null {
+  return input.store.read((database) =>
+    database
+      .prepare(
+        `SELECT id FROM workspace_retirements
+         WHERE project_id = ? AND workspace_id = ? AND state <> 'completed'`,
+      )
+      .get(input.store.project.id, input.workspaceId) === undefined
+      ? null
+      : `Workspace ${input.workspaceId} already has an active retirement`,
+  );
+}
+
+function loadWorkspace(
+  database: DatabaseSync,
+  input: Pick<RetireWorkspaceInput, 'store' | 'workspaceId'>,
+): Workspace {
   const row = workspaceRowSchema.safeParse(
     database
       .prepare('SELECT * FROM workspaces WHERE project_id = ? AND id = ?')
@@ -452,7 +499,10 @@ function count(database: DatabaseSync, sql: string, parameters: readonly string[
   return countRowSchema.parse(database.prepare(sql).get(...parameters)).count;
 }
 
-function blockingConsumerReason(input: RetireWorkspaceInput, workspace: Workspace): string | null {
+function blockingConsumerReason(
+  input: Pick<RetireWorkspaceInput, 'store'>,
+  workspace: Workspace,
+): string | null {
   return input.store.read((database) => {
     const parameters = [input.store.project.id, workspace.id];
     if (
@@ -524,7 +574,7 @@ function blockingConsumerReason(input: RetireWorkspaceInput, workspace: Workspac
   });
 }
 
-function requiredArtifactRows(input: RetireWorkspaceInput, workspace: Workspace) {
+function requiredArtifactRows(input: Pick<RetireWorkspaceInput, 'store'>, workspace: Workspace) {
   return input.store.read((database) => {
     const required = new Set<z.infer<typeof DigestSchema>>();
     const references = database
@@ -571,7 +621,10 @@ function requiredArtifactRows(input: RetireWorkspaceInput, workspace: Workspace)
   });
 }
 
-function verifyRequiredArtifacts(input: RetireWorkspaceInput, workspace: Workspace): string | null {
+function verifyRequiredArtifacts(
+  input: Pick<RetireWorkspaceInput, 'store'>,
+  workspace: Workspace,
+): string | null {
   try {
     const { required, artifacts } = requiredArtifactRows(input, workspace);
     for (const digest of required) {
@@ -605,7 +658,10 @@ function verifyRequiredArtifacts(input: RetireWorkspaceInput, workspace: Workspa
   }
 }
 
-function nativeSessions(input: RetireWorkspaceInput, workspace: Workspace): NativeSessionRow[] {
+function nativeSessions(
+  input: Pick<RetireWorkspaceInput, 'store'>,
+  workspace: Workspace,
+): NativeSessionRow[] {
   return input.store.read((database) =>
     database
       .prepare(
@@ -623,7 +679,7 @@ function sessionKey(identity: SessionIdentity): string {
 }
 
 function matchesNativeTarget(
-  input: RetireWorkspaceInput,
+  input: Pick<RetireWorkspaceInput, 'store'>,
   workspace: Workspace,
   row: NativeSessionRow,
   target: NativeRetirementTarget,
@@ -678,37 +734,49 @@ function settleNativeSession(
 
 type NativeClosure = { kind: 'closed' } | { kind: 'blocked' | 'unconfirmed'; reason: string };
 
-async function closeNativeConsumers(
-  input: RetireWorkspaceInput,
+type NativeCleanupPlan = {
+  kind: 'ready';
+  cleanups: readonly { row: NativeSessionRow; target: NativeRetirementTarget }[];
+};
+
+function nativeCleanupPlan(
+  input: Pick<RetireWorkspaceInput, 'store' | 'nativeTargets'>,
   workspace: Workspace,
-): Promise<NativeClosure> {
+): NativeCleanupPlan | { kind: 'blocked'; reason: string } {
   const rows = nativeSessions(input, workspace);
   const targets = new Map<string, NativeRetirementTarget>();
   for (const rawTarget of input.nativeTargets ?? []) {
     const identity = NativeIdentitySchema.safeParse(rawTarget.identity);
-    if (!identity.success) {
+    if (!identity.success)
       return { kind: 'blocked', reason: 'Native cleanup target has an invalid identity' };
-    }
-    const target = {
-      session: rawTarget.session,
-      identity: identity.data,
-    };
+    const target = { session: rawTarget.session, identity: identity.data };
     const key = sessionKey(target.session);
     if (targets.has(key)) return { kind: 'blocked', reason: 'Duplicate native cleanup target' };
     targets.set(key, target);
   }
   for (const [key, target] of targets) {
     const row = rows.find((candidate) => sessionKey(candidate) === key);
-    if (row === undefined || !matchesNativeTarget(input, workspace, row, target)) {
+    if (row === undefined || !matchesNativeTarget(input, workspace, row, target))
       return { kind: 'blocked', reason: 'Native cleanup target does not match its registration' };
-    }
   }
+  const cleanups: { row: NativeSessionRow; target: NativeRetirementTarget }[] = [];
   for (const row of rows) {
     if (row.state === 'settled') continue;
     const target = targets.get(sessionKey(row));
-    if (target === undefined) {
+    if (target === undefined)
       return { kind: 'blocked', reason: `Workspace session ${row.id} is still a consumer` };
-    }
+    cleanups.push({ row, target });
+  }
+  return { kind: 'ready', cleanups };
+}
+
+async function closeNativeConsumers(
+  input: RetireWorkspaceInput,
+  workspace: Workspace,
+): Promise<NativeClosure> {
+  const plan = nativeCleanupPlan(input, workspace);
+  if (plan.kind === 'blocked') return plan;
+  for (const { row, target } of plan.cleanups) {
     if (input.nativeAdapter === undefined) {
       return { kind: 'blocked', reason: 'Native cleanup requires a registered adapter' };
     }
@@ -788,6 +856,105 @@ function stop(
   reason: string,
 ): RetirementResult {
   return result(transition(input, row, state, reason));
+}
+
+function preview(
+  kind: RetirementPreview['kind'],
+  workspaceId: WorkspaceId,
+  reason?: string,
+  nativeTargets: readonly NativeRetirementTarget[] = [],
+  effects: readonly RetirementPreviewEffect[] = [],
+  skippedChecks: readonly RetirementPreviewSkippedCheck[] = [],
+): RetirementPreview {
+  const result: RetirementPreview = { kind, workspaceId, nativeTargets, effects, skippedChecks };
+  if (reason !== undefined) result.reason = reason;
+  return result;
+}
+
+/** Reads current retirement preconditions without recording an intent or running an effect. */
+export function previewWorkspaceRetirement(
+  input: PreviewWorkspaceRetirementInput,
+): RetirementPreview {
+  const actor = actorReason(input);
+  if (actor !== null) return preview('blocked', input.workspaceId, actor);
+  const active = activeRetirementReason(input);
+  if (active !== null) return preview('blocked', input.workspaceId, active);
+  let workspace: Workspace;
+  try {
+    workspace = input.store.read((database) => loadWorkspace(database, input));
+  } catch (error) {
+    return preview(
+      'unconfirmed',
+      input.workspaceId,
+      error instanceof Error ? error.message : 'Workspace preview failed',
+    );
+  }
+  if (workspace.kind !== 'isolated')
+    return preview('blocked', workspace.id, 'Only an isolated managed worktree can be retired');
+  if (workspace.retiredAt !== null)
+    return preview('unconfirmed', workspace.id, 'Workspace was retired outside this intent');
+  const consumer = blockingConsumerReason(input, workspace);
+  if (consumer !== null) return preview('blocked', workspace.id, consumer);
+  const artifactFailure = verifyRequiredArtifacts(input, workspace);
+  if (artifactFailure !== null) return preview('blocked', workspace.id, artifactFailure);
+  const native = nativeCleanupPlan(input, workspace);
+  const nativeTargets = (input.nativeTargets ?? []).map((target) => ({
+    session: target.session,
+    identity: target.identity,
+  }));
+  if (native.kind === 'blocked')
+    return preview('blocked', workspace.id, native.reason, nativeTargets);
+  const effects: RetirementPreviewEffect[] = native.cleanups.map(({ target }) => ({
+    kind: 'cleanup-native-tab',
+    session: target.session,
+    identity: target.identity,
+  }));
+  const skippedChecks: RetirementPreviewSkippedCheck[] =
+    native.cleanups.length === 0
+      ? []
+      : [
+          {
+            kind: 'native-observation',
+            reason: 'Native state is checked only while executing retirement',
+          },
+          {
+            kind: 'native-cleanup',
+            reason: 'Native cleanup and its durable claim are not run during preview',
+          },
+          {
+            kind: 'post-native-cleanup-state',
+            reason: 'Session settlement and consumer state are rechecked after cleanup',
+          },
+        ];
+  const gitAdapter = input.git ?? new NativeWorkspaceRetirementGit();
+  const observed = gitAdapter.observe(workspace);
+  if (observed.kind === 'dirty')
+    return preview(
+      'blocked',
+      workspace.id,
+      'Workspace has tracked or untracked changes',
+      nativeTargets,
+      effects,
+      skippedChecks,
+    );
+  if (observed.kind === 'protected')
+    return preview('blocked', workspace.id, observed.reason, nativeTargets, effects, skippedChecks);
+  if (observed.kind === 'unconfirmed')
+    return preview(
+      'unconfirmed',
+      workspace.id,
+      observed.reason,
+      nativeTargets,
+      effects,
+      skippedChecks,
+    );
+  if (observed.kind === 'ready') effects.push({ kind: 'remove-worktree', path: observed.path });
+  effects.push({ kind: 'mark-workspace-retired', workspaceId: workspace.id });
+  skippedChecks.push({
+    kind: 'post-worktree-removal',
+    reason: 'Worktree absence is rechecked only after removal',
+  });
+  return preview('ready', workspace.id, undefined, nativeTargets, effects, skippedChecks);
 }
 
 export async function retireWorkspace(input: RetireWorkspaceInput): Promise<RetirementResult> {
