@@ -95,6 +95,8 @@ export const WorkflowStepSchema = z.object({
   resources: z.array(z.string().min(1)),
   outputContract: z.string().min(1),
   permittedMethods: z.array(z.string().min(1)),
+  requiredEvidence: z.array(z.string().min(1)),
+  requiresDistinctRole: z.boolean().default(false),
 });
 export type WorkflowStep = z.infer<typeof WorkflowStepSchema>;
 
