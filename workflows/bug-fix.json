@@ -21,6 +21,9 @@
       "permittedMethods": [
         "control-cli",
         "control-ui"
+      ],
+      "requiredEvidence": [
+        "failing-reproduction"
       ]
     },
     {
@@ -35,6 +38,9 @@
       "permittedMethods": [
         "how",
         "why"
+      ],
+      "requiredEvidence": [
+        "root-cause"
       ]
     },
     {
@@ -48,6 +54,9 @@
       "permittedMethods": [
         "architect"
       ],
+      "requiredEvidence": [
+        "design-artifact"
+      ],
       "stopBoundary": "design"
     },
     {
@@ -60,6 +69,9 @@
       "outputContract": "Scoped artifact with source state, changed paths, and digests.",
       "permittedMethods": [
         "arena"
+      ],
+      "requiredEvidence": [
+        "artifact-digest"
       ]
     },
     {
@@ -74,7 +86,11 @@
       "permittedMethods": [
         "code-review",
         "interrogate"
-      ]
+      ],
+      "requiredEvidence": [
+        "independent-review"
+      ],
+      "requiresDistinctRole": true
     },
     {
       "name": "verify",
@@ -88,6 +104,9 @@
       "permittedMethods": [
         "control-cli",
         "control-ui"
+      ],
+      "requiredEvidence": [
+        "verification"
       ]
     },
     {
@@ -97,7 +116,10 @@
         "poteto-mode/playbooks/bug-fix.md"
       ],
       "outputContract": "Resolved delivery with retained or integrated artifact evidence for the requested outcome.",
-      "permittedMethods": []
+      "permittedMethods": [],
+      "requiredEvidence": [
+        "handoff"
+      ]
     }
   ],
   "transitions": [

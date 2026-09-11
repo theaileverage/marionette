@@ -31,6 +31,17 @@ const methods = {
   'pin-behavior': ['how'], design: ['architect'], implement: ['arena'],
   review: ['code-review', 'interrogate'], verify: ['control-cli', 'control-ui'], handoff: [],
 };
+const evidence = {
+  ground: ['subsystem-trace'],
+  reproduce: ['failing-reproduction'],
+  diagnose: ['root-cause'],
+  'pin-behavior': ['behavior-baseline'],
+  design: ['design-artifact'],
+  implement: ['artifact-digest'],
+  review: ['independent-review'],
+  verify: ['verification'],
+  handoff: ['handoff'],
+};
 
 function closure(entries) {
   const resources = {};
@@ -81,6 +92,8 @@ for (const definition of packages) {
     resources: [...common, definition.entry, ...(methods[name] ?? []).map((method) => `${method}/SKILL.md`)],
     outputContract: contracts[name],
     permittedMethods: methods[name] ?? [],
+    requiredEvidence: evidence[name],
+    ...(name === 'review' ? { requiresDistinctRole: true } : {}),
     ...(name === 'design' ? { stopBoundary: 'design' } : {}),
   }));
   const transitions = steps.flatMap((step, index) => [
