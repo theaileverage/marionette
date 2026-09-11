@@ -1,3 +1,4 @@
+import { createHerdrAdapter, type HerdrAdapterFactory } from './adapters/herdr.js';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
@@ -12,7 +13,6 @@ import {
   type ResultId,
 } from './model.js';
 import {
-  HerdrNativeAdapter,
   NativeBindingSchema,
   NativeIdentitySchema,
   type NativeEffect,
@@ -44,15 +44,12 @@ const runtimeRow = z.object({
   last_observation_json: z.string().nullable(),
 });
 
-export type NativeAdapterFactory = (journal: NativeJournal) => HerdrNativeAdapter;
-
 export class Runtime {
   constructor(
     private readonly store: Store,
     private readonly actor: SessionIdentity,
     private readonly context: ResolvedContext,
-    private readonly adapterFor: NativeAdapterFactory = (journal) =>
-      new HerdrNativeAdapter(journal),
+    private readonly adapterFor: HerdrAdapterFactory = createHerdrAdapter,
   ) {}
 
   private row(id: AttemptId) {
@@ -93,7 +90,7 @@ export class Runtime {
         reason: 'Registration cannot mutate native execution',
       }),
     });
-    const binding = await adapter.register({
+    const binding = await adapter.invoke('register', {
       hostId: this.store.project.hostId,
       socketPath: input.socketPath,
       workspaceId: input.workspaceId,
@@ -288,14 +285,17 @@ export class Runtime {
     const profile = profileSchema.parse(JSON.parse(row.profile_json));
     const binding = NativeBindingSchema.parse(JSON.parse(row.binding_json));
     const adapter = this.adapterFor(this.journal(id));
-    const launched = await adapter.launch(binding, {
-      cwd: workspace.path,
-      agentKind: profile.kind,
-      agentName: `marionette-${id}`,
-      args: profile.args,
-      env: {
-        MARIONETTE_CONTEXT: row.context_path,
-        MARIONETTE_STATE_HOME: dirname(dirname(this.store.project.stateDirectory)),
+    const launched = await adapter.invoke('launch', {
+      binding,
+      request: {
+        cwd: workspace.path,
+        agentKind: profile.kind,
+        agentName: `marionette-${id}`,
+        args: profile.args,
+        env: {
+          MARIONETTE_CONTEXT: row.context_path,
+          MARIONETTE_STATE_HOME: dirname(dirname(this.store.project.stateDirectory)),
+        },
       },
     });
     if (launched.kind !== 'launched') {
@@ -367,7 +367,10 @@ export class Runtime {
     );
     if (!claimed) return this.inspect(id);
     const identity = NativeIdentitySchema.parse(JSON.parse(row.identity_json));
-    const submitted = await this.adapterFor(this.journal(id)).prompt(identity, prompt);
+    const submitted = await this.adapterFor(this.journal(id)).invoke('prompt', {
+      identity,
+      text: prompt,
+    });
     this.update(id, submitted.kind === 'submitted' ? 'active' : 'unconfirmed');
     if (submitted.kind !== 'submitted')
       this.store.settleAttempt({
@@ -394,7 +397,7 @@ export class Runtime {
         },
       };
     const identity = NativeIdentitySchema.parse(JSON.parse(row.identity_json));
-    const observation = await this.adapterFor(this.journal(id)).observe(identity);
+    const observation = await this.adapterFor(this.journal(id)).invoke('observe', { identity });
     this.store.transaction((db) =>
       db
         .prepare(

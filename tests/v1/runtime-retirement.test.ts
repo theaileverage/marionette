@@ -1,3 +1,4 @@
+import { composeHerdrAdapter } from '../../src/v1/adapters/herdr.js';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -267,7 +268,7 @@ test('runtime retirement cleans only its persisted identity with a settled attem
       actor: fixture.actor,
       workspaceId: fixture.workspaceId,
       idempotencyKey: 'retire-runtime',
-      adapterFor: (journal) => (adapter = new FixtureAdapter(journal)),
+      adapterFor: (journal) => composeHerdrAdapter((adapter = new FixtureAdapter(journal))),
     });
     assert.equal(retired.kind, 'completed');
     assert.equal(adapter?.cleanupCalls, 1);
@@ -311,7 +312,7 @@ test('runtime retirement does not resend a cleanup already claimed before its ou
       actor: fixture.actor,
       workspaceId: fixture.workspaceId,
       idempotencyKey: 'retire-preclaimed-cleanup',
-      adapterFor: (journal) => (adapter = new FixtureAdapter(journal)),
+      adapterFor: (journal) => composeHerdrAdapter((adapter = new FixtureAdapter(journal))),
     });
     assert.equal(retired.kind, 'blocked');
     assert.match(retired.reason, /already claimed/);

@@ -1,12 +1,16 @@
+import { createHerdrAdapter, type HerdrAdapterFactory } from './adapters/herdr.js';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { NativeIdentitySchema, HerdrNativeAdapter } from './native.js';
+import { NativeIdentitySchema } from './native.js';
 import type { Store } from './store.js';
 import type { DeliveryPort, DeliveryReadiness, DeliverySubmission } from './watcher.js';
 import type { BoardRecipient } from './board.js';
 
 export class NativeBoardDelivery implements DeliveryPort {
-  constructor(private readonly store: Store) {}
+  constructor(
+    private readonly store: Store,
+    private readonly adapterFor: HerdrAdapterFactory = createHerdrAdapter,
+  ) {}
 
   private identity(recipient: BoardRecipient) {
     if (recipient.kind !== 'session' || recipient.generation === undefined) return null;
@@ -55,10 +59,10 @@ export class NativeBoardDelivery implements DeliveryPort {
         reason:
           'No active native endpoint is registered for this recipient; read the durable board directly',
       };
-    const adapter = new HerdrNativeAdapter({
+    const adapter = this.adapterFor({
       prepare: async () => ({ kind: 'rejected', reason: 'Readiness checks cannot send messages' }),
     });
-    const observation = await adapter.observe(identity);
+    const observation = await adapter.invoke('observe', { identity });
     switch (observation.kind) {
       case 'settled':
         return { kind: 'ready' };
@@ -78,7 +82,7 @@ export class NativeBoardDelivery implements DeliveryPort {
     const operationId = createHash('sha256')
       .update(JSON.stringify([...input.deliveryIds].sort()))
       .digest('hex');
-    const adapter = new HerdrNativeAdapter({
+    const adapter = this.adapterFor({
       prepare: async () =>
         this.store.read((db) => {
           const current = this.identity(input.recipient);
@@ -105,7 +109,7 @@ export class NativeBoardDelivery implements DeliveryPort {
           return { kind: 'prepared', operationId };
         }),
     });
-    const submitted = await adapter.prompt(identity, input.message);
+    const submitted = await adapter.invoke('prompt', { identity, text: input.message });
     return submitted.kind === 'submitted' ? { kind: 'submitted' } : submitted;
   }
 }

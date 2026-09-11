@@ -1,3 +1,4 @@
+import { composeHerdrAdapter } from '../../src/v1/adapters/herdr.js';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
@@ -169,7 +170,9 @@ function fixture(t: TestContext, crashAt: 'launch' | 'prompt' | null = null) {
         : { kind: 'working', identity };
     }
   }
-  const runtime = new Runtime(store, actor, context, (journal) => new Adapter(journal));
+  const runtime = new Runtime(store, actor, context, (journal) =>
+    composeHerdrAdapter(new Adapter(journal)),
+  );
   const input = {
     jobId: job.id,
     profile: 'test',
@@ -217,7 +220,10 @@ test('native runtime admits idempotently and concurrent starts claim each extern
 test('crash after a claimed launch becomes unconfirmed without replaying launch or prompt', async (t) => {
   const f = fixture(t, 'launch');
   const id = f.runtime.admit(f.input);
-  await assert.rejects(f.runtime.start(id), /Simulated process loss/);
+  await assert.rejects(f.runtime.start(id), {
+    code: 'execution-failed',
+    phase: 'after-invocation',
+  });
   assert.deepEqual(f.runtime.activeAttempts(), [id]);
   await f.runtime.reconcile(id);
   assert.deepEqual(f.counts(), { launches: 1, prompts: 0 });
@@ -235,7 +241,10 @@ test('crash after a claimed launch becomes unconfirmed without replaying launch 
 test('a working prompt claim recovers as active without resending the prompt', async (t) => {
   const f = fixture(t, 'prompt');
   const id = f.runtime.admit(f.input);
-  await assert.rejects(f.runtime.start(id), /Simulated process loss/);
+  await assert.rejects(f.runtime.start(id), {
+    code: 'execution-failed',
+    phase: 'after-invocation',
+  });
   assert.deepEqual(f.runtime.activeAttempts(), [id]);
   await f.runtime.reconcile(id);
   assert.deepEqual(f.counts(), { launches: 1, prompts: 1 });

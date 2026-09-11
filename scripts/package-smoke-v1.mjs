@@ -161,6 +161,16 @@ export function smokePackage(tarball) {
         `import { Marionette } from ${JSON.stringify(pkg.name)};
          import { HERDR_PROTOCOL, HerdrClient } from ${JSON.stringify(`${pkg.name}/herdr-sdk`)};
          import { loadPackage } from ${JSON.stringify(pkg.name)};
+         import { composeAdapter, defineCapability, AdapterRegistry } from ${JSON.stringify(`${pkg.name}/adapters`)};
+         import { createHerdrAdapter } from ${JSON.stringify(`${pkg.name}/adapters/herdr`)};
+         import { createCodexAppServerAdapter } from ${JSON.stringify(`${pkg.name}/adapters/codex-app-server`)};
+         import { z } from 'zod';
+         const adapter = composeAdapter({ id: 'package-fixture', version: 1 }, { echo: defineCapability({ input: z.string(), output: z.string(), effect: 'read', summary: 'Installed fixture.', execute: (text) => text }) });
+         const registry = new AdapterRegistry([adapter]);
+         if (await registry.get({ id: 'package-fixture', version: 1 }).dispatch('echo', 'installed') !== 'installed') process.exit(1);
+         const native = createHerdrAdapter({ prepare: async () => ({ kind: 'rejected', reason: 'Smoke only inspects the schema' }) });
+         if (native.describe().capabilities.length !== 8 || typeof createCodexAppServerAdapter !== 'function') process.exit(1);
+
          const feature = loadPackage('feature');
          if (typeof Marionette.connect !== 'function' || HERDR_PROTOCOL !== 22 || feature.name !== 'feature') process.exit(1);
          new HerdrClient('/tmp/marionette-v1-smoke.sock');`,
@@ -175,7 +185,14 @@ export function smokePackage(tarball) {
        const client = new HerdrClient('/tmp/marionette-v1-smoke.sock');
        const marionette: typeof Marionette = Marionette;
        void client.request('ping');
-       void marionette;\n`,
+       void marionette;
+       import { composeAdapter, defineCapability } from ${JSON.stringify(`${pkg.name}/adapters`)};
+       import { z } from 'zod';
+       const adapter = composeAdapter({ id: 'declaration-fixture', version: 1 }, { echo: defineCapability({ input: z.string(), output: z.string(), effect: 'read', summary: 'Type fixture.', execute: (text) => text }) });
+       const echoed: Promise<string> = adapter.invoke('echo', 'typed');
+       // @ts-expect-error Installed declarations must retain capability input types.
+       void adapter.invoke('echo', 42);
+       void echoed;\n`,
     );
     writeFileSync(
       join(directory, 'tsconfig.json'),

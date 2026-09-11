@@ -23,6 +23,10 @@ Initialization writes `.marionette-v1/project.json` inside the repository. SQLit
 
 Commands discover the binding from the current directory. Use `--project /absolute/path/to/.marionette-v1/project.json` when calling from elsewhere. Managed agents inherit `MARIONETTE_CONTEXT`, which binds their project and session even when their working directory changes. A managed session cannot switch projects or become a local user by supplying another binding.
 
+## Harness adapters
+
+The alpha SDK exports `defineCapability`, `composeAdapter`, and `AdapterRegistry` from `@theaileverage/marionette/adapters`. Capabilities declare typed input/output schemas and effects; composed adapters expose validated invocation, offline descriptions, exact-version lookup, and cooperative cancellation. Herdr execution and Codex app-server messaging use this contract. See [the Adapter API guide](documentation/v1/adapters.md) for composition examples and integration scope.
+
 ## CLI input
 
 Common operations accept flags, for example `marionette board create --title Notes --idempotency-key notes`. Nested requests accept `--input FILE`, `--input -` for stdin, or `--json JSON_OR_FILE`. Request flags and raw JSON cannot be combined. Both paths use the same validation; input files and inline JSON are limited to 1 MiB.

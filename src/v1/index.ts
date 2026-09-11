@@ -15,3 +15,39 @@ export {
   outputContractVersion,
   parseOperationOutput,
 } from './output-contracts.js';
+
+export {
+  adapterApiVersion,
+  adapterReferenceSchema,
+  adapterValueSchema,
+  defineCapability,
+  composeAdapter,
+  AdapterRegistry,
+  AdapterError,
+  type Adapter,
+  type AdapterHandle,
+  type AdapterReference,
+  type AdapterValue,
+  type AdapterCapabilities,
+  type AdapterCapability,
+  type AdapterDescription,
+  type AdapterInput,
+  type AdapterOutput,
+  type AdapterCallOptions,
+  type AdapterEffect,
+  type AdapterFailureCode,
+} from './adapters.js';
+export {
+  createHerdrCapabilities,
+  createHerdrAdapter,
+  composeHerdrAdapter,
+  type HerdrAdapter,
+  type HerdrAdapterFactory,
+  type HerdrAdapterDriver,
+  type HerdrAdapterOptions,
+} from './adapters/herdr.js';
+export {
+  createCodexAppServerCapabilities,
+  createCodexAppServerAdapter,
+  type CodexAppServerAdapter,
+} from './adapters/codex-app-server.js';

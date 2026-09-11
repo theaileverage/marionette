@@ -1,3 +1,4 @@
+import { createHerdrAdapter } from '../../src/v1/adapters/herdr.js';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -169,26 +170,41 @@ test('native adapter registers, launches AGY in an owned tab, prompts, settles, 
   });
   try {
     const recorded = journal();
-    const adapter = new HerdrNativeAdapter(recorded.value, endpointInspector);
-    const binding = await adapter.register({
+    const adapter = createHerdrAdapter(recorded.value, { endpointInspector });
+    const binding = await adapter.invoke('register', {
       hostId: 'host-1',
       socketPath,
       workspaceId: 'workspace-1',
     });
     assert.ok(!('kind' in binding));
     if ('kind' in binding) return;
-    const launched = await adapter.launch(binding, {
-      cwd: '/work/project',
-      env: { MARIONETTE_CONTEXT: '/private/session.json', MARIONETTE_STATE_HOME: '/private/state' },
-      agentKind: 'agy',
-      agentName: 'worker',
+    const launched = await adapter.invoke('launch', {
+      binding,
+      request: {
+        cwd: '/work/project',
+        env: {
+          MARIONETTE_CONTEXT: '/private/session.json',
+          MARIONETTE_STATE_HOME: '/private/state',
+        },
+        agentKind: 'agy',
+        agentName: 'worker',
+      },
     });
     assert.equal(launched.kind, 'launched');
     if (launched.kind !== 'launched') return;
     assert.equal(launched.identity.agentKind, 'agy');
-    assert.equal((await adapter.prompt(launched.identity, 'inspect only')).kind, 'submitted');
-    assert.equal((await adapter.interrupt(launched.identity)).kind, 'submitted');
-    assert.equal((await adapter.cleanup(launched.identity, true)).kind, 'cleaned');
+    assert.equal(
+      (await adapter.invoke('prompt', { identity: launched.identity, text: 'inspect only' })).kind,
+      'submitted',
+    );
+    assert.equal(
+      (await adapter.invoke('interrupt', { identity: launched.identity })).kind,
+      'submitted',
+    );
+    assert.equal(
+      (await adapter.invoke('cleanup', { identity: launched.identity, authorized: true })).kind,
+      'cleaned',
+    );
     assert.deepEqual(
       recorded.effects.map((effect) => effect.kind),
       ['create-tab', 'start-agent', 'prompt', 'interrupt', 'cleanup'],

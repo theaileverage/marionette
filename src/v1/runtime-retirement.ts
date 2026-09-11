@@ -1,3 +1,4 @@
+import { createHerdrAdapter, type HerdrAdapterFactory } from './adapters/herdr.js';
 import { randomUUID } from 'node:crypto';
 
 import type { DatabaseSync } from 'node:sqlite';
@@ -13,7 +14,6 @@ import {
   type WorkspaceId,
 } from './model.js';
 import {
-  HerdrNativeAdapter,
   NativeBindingSchema,
   NativeIdentitySchema,
   type NativeBinding,
@@ -53,14 +53,12 @@ type RuntimeAttemptRow = z.infer<typeof runtimeAttemptRowSchema>;
 
 type RuntimeNativeTarget = NativeRetirementTarget & { attemptId: string };
 
-export type RuntimeRetirementAdapterFactory = (journal: NativeJournal) => HerdrNativeAdapter;
-
 export type RuntimeRetirementInput = {
   store: Store;
   actor: SessionIdentity;
   workspaceId: WorkspaceId;
   idempotencyKey: string;
-  adapterFor?: RuntimeRetirementAdapterFactory;
+  adapterFor?: HerdrAdapterFactory;
   git?: WorkspaceRetirementGit;
 };
 
@@ -322,9 +320,7 @@ export async function retireRuntimeWorkspace(
 ): Promise<RetirementResult> {
   const targets = nativeTargets(input);
   const adapter = targets.length
-    ? (input.adapterFor ?? ((journal) => new HerdrNativeAdapter(journal)))(
-        cleanupJournal(input, targets),
-      )
+    ? (input.adapterFor ?? createHerdrAdapter)(cleanupJournal(input, targets))
     : undefined;
   return retireWorkspace({
     store: input.store,
@@ -332,7 +328,12 @@ export async function retireRuntimeWorkspace(
     workspaceId: input.workspaceId,
     idempotencyKey: input.idempotencyKey,
     nativeTargets: targets,
-    nativeAdapter: adapter,
+    nativeAdapter: adapter
+      ? {
+          observe: (identity) => adapter.invoke('observe', { identity }),
+          cleanup: (identity, authorized) => adapter.invoke('cleanup', { identity, authorized }),
+        }
+      : undefined,
     git: input.git,
   });
 }
