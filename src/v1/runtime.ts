@@ -17,6 +17,7 @@ import {
   NativeIdentitySchema,
   type NativeEffect,
   type NativeJournal,
+  type NativeObservation,
 } from './native.js';
 import { nativeLocatorForRetirement } from './retirement.js';
 import { Settings, profileSchema } from './settings.js';
@@ -388,6 +389,8 @@ export class Runtime {
           kind: 'unconfirmed',
           reason: 'No confirmed native identity is recorded',
           phase: row.phase,
+        } satisfies Extract<NativeObservation, { kind: 'unconfirmed' }> & {
+          phase: z.infer<typeof runtimeRow>['phase'];
         },
       };
     const identity = NativeIdentitySchema.parse(JSON.parse(row.identity_json));
@@ -408,11 +411,26 @@ export class Runtime {
     return { attempt: this.store.getAttempt(id), native: observation };
   }
 
+  private markUnconfirmed(id: AttemptId, reason: string) {
+    this.update(id, 'unconfirmed');
+    return this.store.settleAttempt({
+      actor: this.actor,
+      attemptId: id,
+      observation: { kind: 'unconfirmed', reason },
+      idempotencyKey: `native-unconfirmed/${id}`,
+    });
+  }
+
   async reconcile(id: AttemptId) {
     const observed = await this.inspect(id);
-    if (observed.attempt.phase === 'settled' || observed.attempt.phase === 'closed')
+    if (['settled', 'closed', 'unconfirmed'].includes(observed.attempt.phase))
       return observed;
-    if (observed.native.kind !== 'settled') return observed;
+    if (observed.native.kind === 'working') {
+      if (this.row(id).phase === 'prompt-claimed') this.update(id, 'active');
+      return observed;
+    }
+    if (observed.native.kind !== 'settled')
+      return { ...observed, attempt: this.markUnconfirmed(id, observed.native.reason) };
     const result = this.store
       .listResults(observed.attempt.jobId)
       .find((candidate) => candidate.attemptId === id);
@@ -437,7 +455,7 @@ export class Runtime {
     return this.store.read((db) =>
       db
         .prepare(
-          "SELECT attempt_id FROM native_attempts WHERE project_id=? AND phase IN ('admitted','launched','active')",
+          "SELECT attempt_id FROM native_attempts WHERE project_id=? AND phase IN ('admitted','launch-claimed','launched','prompt-claimed','active')",
         )
         .all(this.store.project.id)
         .map((row) => z.object({ attempt_id: AttemptIdSchema }).parse(row).attempt_id),

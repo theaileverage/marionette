@@ -25,7 +25,7 @@ import { Settings, profileSchema } from '../../src/v1/settings.js';
 import { Store } from '../../src/v1/store.js';
 import { Runtime } from '../../src/v1/runtime.js';
 
-function fixture(t: TestContext, crash: boolean) {
+function fixture(t: TestContext, crashAt: 'launch' | 'prompt' | null = null) {
   const root = mkdtempSync(join(tmpdir(), 'marionette-v1-runtime-'));
   const repo = join(root, 'repo');
   mkdirSync(repo);
@@ -125,6 +125,7 @@ function fixture(t: TestContext, crash: boolean) {
   let launches = 0;
   let prompts = 0;
   let nativeSettled = false;
+  let ambiguous = false;
   class Adapter extends HerdrNativeAdapter {
     constructor(private readonly effects: NativeJournal) {
       super(effects);
@@ -133,7 +134,7 @@ function fixture(t: TestContext, crash: boolean) {
       launches++;
       const prepared = await this.effects.prepare({ kind: 'create-tab', workspaceId: 'w1' });
       assert.equal(prepared.kind, 'prepared');
-      if (crash) throw new Error('Simulated process loss after durable claim');
+      if (crashAt === 'launch') throw new Error('Simulated process loss after durable claim');
       return {
         kind: 'launched',
         identity: {
@@ -158,9 +159,11 @@ function fixture(t: TestContext, crash: boolean) {
         textDigest: createHash('sha256').update(text).digest('hex'),
       });
       if (prepared.kind === 'rejected') throw new Error(prepared.reason);
+      if (crashAt === 'prompt') throw new Error('Simulated process loss after durable claim');
       return { kind: 'submitted', operationId: prepared.operationId };
     }
     override async observe(identity: NativeIdentity): Promise<NativeObservation> {
+      if (ambiguous) return { kind: 'unconfirmed', reason: 'Fixture could not confirm identity' };
       return nativeSettled
         ? { kind: 'settled', identity, slotReady: true }
         : { kind: 'working', identity };
@@ -183,12 +186,15 @@ function fixture(t: TestContext, crash: boolean) {
     settleNative: () => {
       nativeSettled = true;
     },
+    makeObservationAmbiguous: () => {
+      ambiguous = true;
+    },
     counts: () => ({ launches, prompts }),
   };
 }
 
 test('native runtime admits idempotently and concurrent starts claim each external effect once', async (t) => {
-  const f = fixture(t, false);
+  const f = fixture(t);
   const id = f.runtime.admit(f.input);
   assert.equal(f.runtime.admit(f.input), id);
   await Promise.all([f.runtime.start(id), f.runtime.start(id)]);
@@ -205,21 +211,73 @@ test('native runtime admits idempotently and concurrent starts claim each extern
   );
 });
 
-test('native runtime preserves the reservation and never relaunches after losing a claimed launch', async (t) => {
-  const f = fixture(t, true);
+test('crash after a claimed launch becomes unconfirmed without replaying launch or prompt', async (t) => {
+  const f = fixture(t, 'launch');
   const id = f.runtime.admit(f.input);
   await assert.rejects(f.runtime.start(id), /Simulated process loss/);
-  await f.runtime.start(id);
+  assert.deepEqual(f.runtime.activeAttempts(), [id]);
+  await f.runtime.reconcile(id);
   assert.deepEqual(f.counts(), { launches: 1, prompts: 0 });
-  assert.equal(f.store.getAttempt(id).phase, 'launching');
+  assert.equal(f.store.getAttempt(id).phase, 'unconfirmed');
+  const native = f.store.read((db) =>
+    db.prepare('SELECT phase FROM native_attempts WHERE attempt_id=?').get(id),
+  );
+  assert.equal(native?.phase, 'unconfirmed');
   const reservation = f.store.read((db) =>
     db.prepare('SELECT state FROM execution_reservations WHERE attempt_id=?').get(id),
   );
-  assert.equal(reservation?.state, 'held');
+  assert.equal(reservation?.state, 'unconfirmed');
+});
+
+test('a working prompt claim recovers as active without resending the prompt', async (t) => {
+  const f = fixture(t, 'prompt');
+  const id = f.runtime.admit(f.input);
+  await assert.rejects(f.runtime.start(id), /Simulated process loss/);
+  assert.deepEqual(f.runtime.activeAttempts(), [id]);
+  await f.runtime.reconcile(id);
+  assert.deepEqual(f.counts(), { launches: 1, prompts: 1 });
+  assert.equal(f.store.getAttempt(id).phase, 'running');
+  const native = f.store.read((db) =>
+    db.prepare('SELECT phase FROM native_attempts WHERE attempt_id=?').get(id),
+  );
+  assert.equal(native?.phase, 'active');
+  const attempt = f.store.getAttempt(id);
+  assert.doesNotThrow(() =>
+    f.store.recordResult({
+      actor: { id: attempt.sessionId, generation: attempt.sessionGeneration },
+      attemptId: id,
+      content: { kind: 'report', body: 'Worker can still report', artifactDigests: [] },
+      inputDigest: DigestSchema.parse('0'.repeat(64)),
+      workspaceDigest: DigestSchema.parse('1'.repeat(64)),
+      evidenceClaims: [],
+      evidence: [],
+      verification: { kind: 'not-requested' },
+      upstreamResultIds: [],
+      idempotencyKey: 'worker-result',
+    }),
+  );
+});
+
+test('an ambiguous native observation becomes unconfirmed without replaying effects', async (t) => {
+  const f = fixture(t);
+  const id = f.runtime.admit(f.input);
+  await f.runtime.start(id);
+  f.makeObservationAmbiguous();
+  await f.runtime.reconcile(id);
+  assert.deepEqual(f.counts(), { launches: 1, prompts: 1 });
+  assert.equal(f.store.getAttempt(id).phase, 'unconfirmed');
+  const native = f.store.read((db) =>
+    db.prepare('SELECT phase FROM native_attempts WHERE attempt_id=?').get(id),
+  );
+  assert.equal(native?.phase, 'unconfirmed');
+  const reservation = f.store.read((db) =>
+    db.prepare('SELECT state FROM execution_reservations WHERE attempt_id=?').get(id),
+  );
+  assert.equal(reservation?.state, 'unconfirmed');
 });
 
 test('native idle releases execution only after a durable result exists', async (t) => {
-  const f = fixture(t, false);
+  const f = fixture(t);
   const id = f.runtime.admit(f.input);
   await f.runtime.start(id);
   f.settleNative();
