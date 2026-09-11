@@ -1,9 +1,9 @@
-# Workflow package fixtures
+# Bundled workflow packages
 
-The four JSON files capture feature, bug-fix, refactoring, and architect workflows from the local pstack skills. Each contains ordered steps, permitted transitions, output contracts, finite limits, a design stop boundary, and embedded resource text with SHA-256 digests.
+The JSON packages provide feature, bug-fix, refactoring, architect, and direct routes from the local pstack skills. Each package contains ordered steps, permitted transitions, evidence requirements, finite limits, stop boundaries, and embedded resource text with SHA-256 digests.
 
-Run `node workflows/import-local.mjs /path/to/.agents/skills` to regenerate them. The importer follows named local skills, explicit resource paths, and relative JavaScript or TypeScript imports. It records unresolved references. Dynamic references, external dependencies, and native model or tool availability require runtime checks. This snapshot does not declare complete skill support.
+Run `node workflows/import-local.mjs /path/to/.agents/skills` to regenerate the packages. The importer follows named local skills, explicit resource paths, relative JavaScript or TypeScript imports, and referenced directories. It records optional unsupported guidance and captures parameterized reference directories. A package declares classified-incomplete dependencies until every source dependency has a supported runtime interpretation.
 
-The captured pstack license is MIT, copyright 2026 Lauren Tan. The license text is included as `pstack/LICENSE`. Individual resources retain their original text and source paths. Their license fields remain omitted where the source does not identify an individual license.
+The captured pstack license is MIT, copyright 2026 Lauren Tan. The license text is included as `pstack/LICENSE`. Resource provenance uses source-relative paths. The manifests do not carry machine-specific source paths.
 
-Step contracts describe durable gates. The controlling agent interprets the preserved instructions within each step. The runner must enforce inherited stop boundaries, remaining limits, independent review, and successful handoff. A `finish` transition at an earlier step permits terminal failure; it does not waive the successful handoff requirement. Publication still requires the user's authority.
+The direct package gives a managed routine run finite limits and stop controls. A lead using routine direct work without a managed job does not create a workflow run.

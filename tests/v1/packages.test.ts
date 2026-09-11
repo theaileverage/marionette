@@ -14,15 +14,18 @@ import {
 
 const digest = (text: string) => createHash('sha256').update(text).digest('hex');
 
-const fixtureManifest = (text = 'source text'): PackageManifest =>
+const fixtureManifest = (text = 'source text', name = 'feature'): PackageManifest =>
   packageManifestSchema.parse({
-    name: 'feature',
+    name,
     version: '1.0.0',
     source: {
       kind: 'local-snapshot',
       root: '/fixture/skills',
       entry: 'poteto-mode/playbooks/feature.md',
-      licenseStatus: 'unverified',
+      upstream: {
+        name: 'pstack',
+        license: { status: 'verified', spdx: 'MIT', resource: 'pstack/LICENSE' },
+      },
     },
     entryStep: 'ground',
     resources: {
@@ -70,6 +73,7 @@ const fixtureManifest = (text = 'source text'): PackageManifest =>
     stopBoundaries: ['design'],
     constraints: { successRequires: 'handoff' },
     unresolvedReferences: [],
+    dependencyStatus: { status: 'complete', parameterizedReferences: [] },
   });
 
 const writeFixture = (manifest: PackageManifest) => {
@@ -115,21 +119,29 @@ test('routing uses pstack precedence and keeps routine work direct', () => {
     kind: 'direct',
     method: 'direct',
     precedence: 'pstack',
+    packageName: 'pstack/direct',
     reason: 'routine engineering work',
   });
   assert.deepEqual(route({ request: 'fix the regression in workflow admission' }), {
     kind: 'workflow',
     method: 'pstack',
     precedence: 'pstack',
-    packageName: 'bug-fix',
+    packageName: 'pstack/bug-fix',
     reason: 'deterministic request classification',
   });
   assert.deepEqual(route({ request: 'fix the regression', package: 'refactoring' }), {
     kind: 'workflow',
     method: 'pstack',
     precedence: 'pstack',
-    packageName: 'refactoring',
+    packageName: 'pstack/refactoring',
     reason: 'explicit package',
+  });
+  assert.deepEqual(route({ request: 'format the generated JSON', package: 'pstack/direct' }), {
+    kind: 'direct',
+    method: 'direct',
+    precedence: 'pstack',
+    packageName: 'pstack/direct',
+    reason: 'routine engineering work',
   });
 });
 
@@ -139,9 +151,16 @@ test('bundled package names resolve after the caller changes directory', () => {
   try {
     process.chdir(otherDirectory);
     assert.equal(loadPackage('feature').name, 'feature');
+    assert.equal(loadPackage('pstack/feature').name, 'feature');
+    assert.equal(loadPackage('pstack/direct').name, 'direct');
   } finally {
     process.chdir(original);
   }
+});
+
+test('reviewed custom manifests use their own name without joining the bundled registry', () => {
+  const manifest = fixtureManifest('custom source', 'team/custom');
+  assert.equal(loadPackage(writeFixture(manifest)).name, 'team/custom');
 });
 
 test('model imports retain source-line diagnostics without substituting a model', () => {
@@ -193,6 +212,7 @@ test('model imports retain source-line diagnostics without substituting a model'
 test('the captured workflow resources still match their declared source digests', () => {
   const feature = loadPackage('feature');
   const bugFix = loadPackage('bug-fix');
+  const direct = loadPackage('direct');
   const source = feature.manifest.resources['poteto-mode/SKILL.md'];
   assert.equal(digest(source.text), source.sourceDigest);
   assert.equal(feature.manifest.unresolvedReferences.length > 0, true);
@@ -205,4 +225,17 @@ test('the captured workflow resources still match their declared source digests'
   assert.deepEqual(bugFix.steps.find((step) => step.name === 'reproduce')?.requiredEvidence, [
     'failing-reproduction',
   ]);
+  assert.equal(feature.manifest.source.upstream.license.resource, 'pstack/LICENSE');
+  assert.equal(feature.manifest.resources['pstack/LICENSE'].sourcePath, 'pstack/LICENSE');
+  assert.match(feature.manifest.resources['pstack/LICENSE'].text, /MIT License/);
+  assert.equal(feature.manifest.resources['poteto-mode/SKILL.md'].sourcePath.startsWith('/'), false);
+  assert.equal(feature.manifest.dependencyStatus.status, 'classified-incomplete');
+  assert.deepEqual(feature.manifest.dependencyStatus.parameterizedReferences, [
+    { pattern: 'why/references/sources/*.md', directory: 'why/references/sources' },
+    { pattern: 'why/references/sources/<source>.md', directory: 'why/references/sources' },
+  ]);
+  assert.ok(feature.manifest.resources['create-verification-skill/references/feature-map-example/README.md']);
+  assert.ok(feature.manifest.resources['why/references/sources/incident-postmortem.md']);
+  assert.equal(direct.limits.maxAttempts > 0, true);
+  assert.equal(direct.steps[0].name, 'direct');
 });

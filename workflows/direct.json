@@ -1,10 +1,10 @@
 {
-  "name": "bug-fix",
+  "name": "direct",
   "version": "1.0.0",
   "source": {
     "kind": "local-snapshot",
     "root": ".agents/skills",
-    "entry": "poteto-mode/playbooks/bug-fix.md",
+    "entry": "poteto-mode/SKILL.md",
     "upstream": {
       "name": "pstack",
       "license": {
@@ -14,113 +14,25 @@
       }
     }
   },
-  "entryStep": "reproduce",
+  "entryStep": "direct",
   "steps": [
     {
-      "name": "reproduce",
+      "name": "direct",
       "resources": [
         "poteto-mode/SKILL.md",
-        "poteto-mode/playbooks/bug-fix.md",
-        "control-cli/SKILL.md",
-        "control-ui/SKILL.md"
+        "poteto-mode/SKILL.md"
       ],
-      "outputContract": "Observed failing reproduction on the matching runtime.",
-      "permittedMethods": [
-        "control-cli",
-        "control-ui"
-      ],
-      "requiredEvidence": [
-        "failing-reproduction"
-      ]
-    },
-    {
-      "name": "diagnose",
-      "resources": [
-        "poteto-mode/SKILL.md",
-        "poteto-mode/playbooks/bug-fix.md",
-        "how/SKILL.md",
-        "why/SKILL.md"
-      ],
-      "outputContract": "Runtime evidence confirming the causal mechanism.",
-      "permittedMethods": [
-        "how",
-        "why"
-      ],
-      "requiredEvidence": [
-        "root-cause"
-      ]
-    },
-    {
-      "name": "design",
-      "resources": [
-        "poteto-mode/SKILL.md",
-        "poteto-mode/playbooks/bug-fix.md",
-        "architect/SKILL.md"
-      ],
-      "outputContract": "Design artifact with alternatives, selected structure, and rationale.",
-      "permittedMethods": [
-        "architect"
-      ],
-      "requiredEvidence": [
-        "design-artifact"
-      ],
-      "stopBoundary": "design"
-    },
-    {
-      "name": "implement",
-      "resources": [
-        "poteto-mode/SKILL.md",
-        "poteto-mode/playbooks/bug-fix.md",
-        "arena/SKILL.md"
-      ],
-      "outputContract": "Scoped artifact with source state, changed paths, and digests.",
-      "permittedMethods": [
-        "arena"
-      ],
+      "outputContract": "Scoped routine work with artifact evidence.",
+      "permittedMethods": [],
       "requiredEvidence": [
         "artifact-digest"
-      ]
-    },
-    {
-      "name": "review",
-      "resources": [
-        "poteto-mode/SKILL.md",
-        "poteto-mode/playbooks/bug-fix.md",
-        "code-review/SKILL.md",
-        "interrogate/SKILL.md"
-      ],
-      "outputContract": "Independent review verdict tied to the exact implementation artifact.",
-      "permittedMethods": [
-        "code-review",
-        "interrogate"
-      ],
-      "requiredEvidence": [
-        "independent-review"
-      ],
-      "requiresDistinctRole": true
-    },
-    {
-      "name": "verify",
-      "resources": [
-        "poteto-mode/SKILL.md",
-        "poteto-mode/playbooks/bug-fix.md",
-        "control-cli/SKILL.md",
-        "control-ui/SKILL.md"
-      ],
-      "outputContract": "Checks and runtime evidence against the reviewed artifact.",
-      "permittedMethods": [
-        "control-cli",
-        "control-ui"
-      ],
-      "requiredEvidence": [
-        "verification"
       ]
     },
     {
       "name": "handoff",
       "resources": [
         "poteto-mode/SKILL.md",
-        "poteto-mode/playbooks/bug-fix.md"
+        "poteto-mode/SKILL.md"
       ],
       "outputContract": "Resolved delivery with retained or integrated artifact evidence for the requested outcome.",
       "permittedMethods": [],
@@ -131,181 +43,25 @@
   ],
   "transitions": [
     {
-      "from": "reproduce",
-      "kind": "advance",
-      "to": "diagnose"
-    },
-    {
-      "from": "reproduce",
-      "kind": "repeat",
-      "to": "reproduce"
-    },
-    {
-      "from": "reproduce",
-      "kind": "await-decision"
-    },
-    {
-      "from": "reproduce",
-      "kind": "block"
-    },
-    {
-      "from": "reproduce",
-      "kind": "route",
-      "routes": [
-        "control-cli",
-        "control-ui"
-      ]
-    },
-    {
-      "from": "reproduce",
-      "kind": "finish"
-    },
-    {
-      "from": "diagnose",
-      "kind": "advance",
-      "to": "design"
-    },
-    {
-      "from": "diagnose",
-      "kind": "repeat",
-      "to": "diagnose"
-    },
-    {
-      "from": "diagnose",
-      "kind": "await-decision"
-    },
-    {
-      "from": "diagnose",
-      "kind": "block"
-    },
-    {
-      "from": "diagnose",
-      "kind": "route",
-      "routes": [
-        "how",
-        "why"
-      ]
-    },
-    {
-      "from": "diagnose",
-      "kind": "finish"
-    },
-    {
-      "from": "design",
-      "kind": "advance",
-      "to": "implement"
-    },
-    {
-      "from": "design",
-      "kind": "repeat",
-      "to": "design"
-    },
-    {
-      "from": "design",
-      "kind": "await-decision"
-    },
-    {
-      "from": "design",
-      "kind": "block"
-    },
-    {
-      "from": "design",
-      "kind": "route",
-      "routes": [
-        "architect"
-      ]
-    },
-    {
-      "from": "design",
-      "kind": "finish"
-    },
-    {
-      "from": "implement",
-      "kind": "advance",
-      "to": "review"
-    },
-    {
-      "from": "implement",
-      "kind": "repeat",
-      "to": "implement"
-    },
-    {
-      "from": "implement",
-      "kind": "await-decision"
-    },
-    {
-      "from": "implement",
-      "kind": "block"
-    },
-    {
-      "from": "implement",
-      "kind": "route",
-      "routes": [
-        "arena"
-      ]
-    },
-    {
-      "from": "implement",
-      "kind": "finish"
-    },
-    {
-      "from": "review",
-      "kind": "advance",
-      "to": "verify"
-    },
-    {
-      "from": "review",
-      "kind": "repeat",
-      "to": "review"
-    },
-    {
-      "from": "review",
-      "kind": "await-decision"
-    },
-    {
-      "from": "review",
-      "kind": "block"
-    },
-    {
-      "from": "review",
-      "kind": "route",
-      "routes": [
-        "code-review",
-        "interrogate"
-      ]
-    },
-    {
-      "from": "review",
-      "kind": "finish"
-    },
-    {
-      "from": "verify",
+      "from": "direct",
       "kind": "advance",
       "to": "handoff"
     },
     {
-      "from": "verify",
+      "from": "direct",
       "kind": "repeat",
-      "to": "verify"
+      "to": "direct"
     },
     {
-      "from": "verify",
+      "from": "direct",
       "kind": "await-decision"
     },
     {
-      "from": "verify",
+      "from": "direct",
       "kind": "block"
     },
     {
-      "from": "verify",
-      "kind": "route",
-      "routes": [
-        "control-cli",
-        "control-ui"
-      ]
-    },
-    {
-      "from": "verify",
+      "from": "direct",
       "kind": "finish"
     },
     {
@@ -324,21 +80,6 @@
     {
       "from": "handoff",
       "kind": "finish"
-    },
-    {
-      "from": "review",
-      "kind": "repeat",
-      "to": "implement"
-    },
-    {
-      "from": "verify",
-      "kind": "repeat",
-      "to": "implement"
-    },
-    {
-      "from": "implement",
-      "kind": "repeat",
-      "to": "design"
     }
   ],
   "limits": {
@@ -348,11 +89,9 @@
     "deadlineMs": 3600000,
     "innerLoopDeadlineMs": 600000
   },
-  "stopBoundaries": [
-    "design"
-  ],
+  "stopBoundaries": [],
   "constraints": {
-    "independentReview": true,
+    "independentReview": false,
     "successRequires": "handoff",
     "inheritedStopBoundaries": true,
     "inheritedExecutionAllowance": true

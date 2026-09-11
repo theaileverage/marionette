@@ -85,14 +85,25 @@ const limitsSchema = z
 
 export const packageManifestSchema = z
   .object({
-    name: z.enum(['feature', 'bug-fix', 'refactoring', 'architect']),
+    name: z.string().min(1),
     version: z.string().min(1),
     source: z
       .object({
         kind: z.literal('local-snapshot'),
         root: z.string().min(1),
         entry: z.string().min(1),
-        licenseStatus: z.enum(['verified', 'unverified', 'unknown']),
+        upstream: z
+          .object({
+            name: z.string().min(1),
+            license: z
+              .object({
+                status: z.literal('verified'),
+                spdx: z.literal('MIT'),
+                resource: z.string().min(1),
+              })
+              .strict(),
+          })
+          .strict(),
       })
       .strict(),
     entryStep: z.string().min(1),
@@ -106,11 +117,20 @@ export const packageManifestSchema = z
       z
         .object({
           reference: z.string().min(1),
+          classification: z.literal('optional-unsupported'),
           sourcePath: z.string().min(1).optional(),
           reason: z.string().min(1),
         })
         .strict(),
     ),
+    dependencyStatus: z
+      .object({
+        status: z.enum(['complete', 'classified-incomplete']),
+        parameterizedReferences: z.array(
+          z.object({ pattern: z.string().min(1), directory: z.string().min(1) }).strict(),
+        ),
+      })
+      .strict(),
   })
   .strict()
   .superRefine((manifest, context) => {
@@ -162,7 +182,7 @@ export const packageManifestSchema = z
   });
 
 export type PackageManifest = z.infer<typeof packageManifestSchema>;
-export type PackageName = PackageManifest['name'];
+export type PackageName = string;
 export type TransitionKind = z.infer<typeof transitionKindSchema>;
 export type WorkflowMethod = z.infer<typeof methodSchema>;
 
@@ -189,6 +209,7 @@ export type RouteResult =
       readonly kind: 'direct';
       readonly method: 'direct';
       readonly precedence: 'pstack';
+      readonly packageName: 'pstack/direct';
       readonly reason: 'routine engineering work';
     }
   | {
@@ -199,15 +220,20 @@ export type RouteResult =
       readonly reason: 'explicit package' | 'deterministic request classification';
     };
 
-const orderedPackages: readonly PackageName[] = [
+const bundledPackageNames = [
+  'direct',
   'bug-fix',
   'refactoring',
   'architect',
   'feature',
-];
+] as const;
 
-const isPackageName = (value: string): value is PackageName =>
-  orderedPackages.some((packageName) => packageName === value);
+type BundledPackageName = (typeof bundledPackageNames)[number];
+
+const bundledPackageName = (value: string): BundledPackageName | undefined => {
+  const name = value.startsWith('pstack/') ? value.slice('pstack/'.length) : value;
+  return bundledPackageNames.find((candidate) => candidate === name);
+};
 
 const bundledPackageRoot = fileURLToPath(new URL('../../workflows/', import.meta.url));
 const packageRoot = existsSync(bundledPackageRoot)
@@ -240,6 +266,7 @@ const phaseFor = (name: string): WorkflowStepPhase => {
   switch (name) {
     case 'design':
       return 'design';
+    case 'direct':
     case 'implement':
       return 'implementation';
     case 'review':
@@ -354,8 +381,8 @@ const manifestPathFor = (nameOrPath: string): string => {
   try {
     return statSync(requested).isDirectory() ? join(requested, 'manifest.json') : requested;
   } catch {
-    if (isPackageName(nameOrPath))
-      return join(packageRoot, `${nameOrPath}.json`);
+    const bundledName = bundledPackageName(nameOrPath);
+    if (bundledName) return join(packageRoot, `${bundledName}.json`);
     throw new Error(`workflow package ${nameOrPath} does not exist`);
   }
 };
@@ -373,7 +400,7 @@ export function loadPackage(nameOrPath: string): WorkflowPackageSnapshot {
   return snapshotPackage(manifest, manifestBytes);
 }
 
-const classify = (request: string): PackageName | undefined => {
+const classify = (request: string): Exclude<BundledPackageName, 'direct'> | undefined => {
   const normalized = request.toLowerCase();
   if (/\b(bug|fix|broken|regression|defect|crash)\b/.test(normalized)) return 'bug-fix';
   if (/\b(refactor|rename|extract|inline|dedup(?:licate)?|restructure)\b/.test(normalized))
@@ -385,12 +412,22 @@ const classify = (request: string): PackageName | undefined => {
 };
 
 export function route(request: RouteRequest): RouteResult {
+  if (request.package && bundledPackageName(request.package) === 'direct')
+    return immutable({
+      kind: 'direct',
+      method: 'direct',
+      precedence: 'pstack',
+      packageName: 'pstack/direct',
+      reason: 'routine engineering work',
+    });
   if (request.package)
     return immutable({
       kind: 'workflow',
       method: 'pstack',
       precedence: 'pstack',
-      packageName: request.package,
+      packageName: bundledPackageName(request.package)
+        ? `pstack/${bundledPackageName(request.package)}`
+        : request.package,
       reason: 'explicit package',
     });
   const packageName = classify(request.request);
@@ -399,13 +436,14 @@ export function route(request: RouteRequest): RouteResult {
       kind: 'workflow',
       method: 'pstack',
       precedence: 'pstack',
-      packageName,
+      packageName: `pstack/${packageName}`,
       reason: 'deterministic request classification',
     });
   return immutable({
     kind: 'direct',
     method: 'direct',
     precedence: 'pstack',
+    packageName: 'pstack/direct',
     reason: 'routine engineering work',
   });
 }
