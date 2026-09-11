@@ -2,10 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { operationSchema } from '../../src/v1/operations.js';
 import {
+  describeSchema,
   operationDescriptions,
   type OperationDescription,
   type SchemaDescription,
 } from '../../src/v1/schema.js';
+import { z } from 'zod';
 
 function operation(
   descriptions: readonly OperationDescription[],
@@ -54,13 +56,15 @@ test('describes nested job fields and operation defaults', () => {
   const inputSnapshots = request.fields.inputSnapshots;
   assert.equal(inputSnapshots.type, 'array');
   assert.equal(inputSnapshots.items.type, 'object');
-  assert.deepEqual(inputSnapshots.items.fields.digest, { type: 'string', required: true });
-  assert.deepEqual(job.fields.dependencies, {
-    type: 'array',
-    items: { type: 'string', required: true },
-    required: false,
-    default: [],
-  });
+  assert.equal(inputSnapshots.items.fields.digest.type, 'string');
+  assert.equal(inputSnapshots.items.fields.digest.required, true);
+  assert.equal(job.fields.dependencies.type, 'array');
+  assert.equal(job.fields.dependencies.required, false);
+  assert.deepEqual(job.fields.dependencies.default, []);
+  assert.equal(job.fields.dependencies.items.type, 'string');
+
+  const attempt = operation(operationDescriptions(), 'attempt.admit');
+  assert.deepEqual(attempt.fields.inputResultIds.default, []);
 
   const workflow = operation(operationDescriptions(), 'workflow.create');
   assert.deepEqual(workflow.fields.boundary, {
@@ -68,6 +72,15 @@ test('describes nested job fields and operation defaults', () => {
     enum: ['all', 'design-only'],
     required: false,
     default: 'all',
+  });
+
+  const board = operation(operationDescriptions(), 'board.list');
+  assert.deepEqual(board.fields.limit, {
+    type: 'number',
+    integer: true,
+    minimum: { value: 1, inclusive: true },
+    maximum: { value: 200, inclusive: true },
+    required: false,
   });
 });
 
@@ -84,7 +97,7 @@ test('describes nested result variants, tuples, and defaults', () => {
   const command = option(checks.items, 'command');
   const argv = field(command, 'argv');
   assert.equal(argv.type, 'tuple');
-  assert.deepEqual(argv.items, [{ type: 'string', required: true }]);
+  assert.deepEqual(argv.items, [{ type: 'string', minLength: 1, required: true }]);
   assert.deepEqual(argv.rest, { type: 'string', required: true });
 
   const decide = operation(operationDescriptions(), 'result.decide');
@@ -115,4 +128,59 @@ test('keeps nullable, record, and refinement input structures discoverable', () 
   const profile = operation(operationDescriptions(), 'profile.configure').fields.profile;
   assert.equal(profile.type, 'object');
   assert.equal(profile.fields.args.type, 'array');
+  assert.deepEqual(profile.effects, [{ kind: 'refinement', executable: false }]);
+});
+
+test('describes static Zod constraints without executing user functions', () => {
+  assert.deepEqual(describeSchema(z.string().min(1).max(5).regex(/a+b/gi)), {
+    type: 'string',
+    required: true,
+    minLength: 1,
+    maxLength: 5,
+    pattern: { source: 'a+b', flags: 'gi' },
+  });
+  assert.deepEqual(describeSchema(z.number().int().gt(0).lte(12).finite()), {
+    type: 'number',
+    required: true,
+    integer: true,
+    minimum: { value: 0, inclusive: false },
+    maximum: { value: 12, inclusive: true },
+    finite: true,
+  });
+  assert.deepEqual(describeSchema(z.array(z.string()).min(1).max(3).length(2)), {
+    type: 'array',
+    required: true,
+    minItems: 1,
+    maxItems: 3,
+    exactItems: 2,
+    items: { type: 'string', required: true },
+  });
+  assert.deepEqual(describeSchema(z.object({ value: z.string() }).strict()), {
+    type: 'object',
+    required: true,
+    unknownKeys: 'strict',
+    fields: { value: { type: 'string', required: true } },
+  });
+  let refinementCalls = 0;
+  const refined = z.string().superRefine(() => {
+    refinementCalls++;
+  });
+  assert.deepEqual(describeSchema(refined), {
+    type: 'string',
+    required: true,
+    effects: [{ kind: 'refinement', executable: false }],
+  });
+  assert.equal(refinementCalls, 0);
+
+  let defaultCalls = 0;
+  const dynamicDefault = z.string().default(() => {
+    defaultCalls++;
+    return 'computed';
+  });
+  assert.deepEqual(describeSchema(dynamicDefault), {
+    type: 'string',
+    required: false,
+    defaultStatus: 'not-evaluated',
+  });
+  assert.equal(defaultCalls, 0);
 });
