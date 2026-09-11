@@ -4,6 +4,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
+import { z } from 'zod';
 
 import {
   AgentSessionIdSchema,
@@ -374,6 +375,65 @@ test('rejects results whose evidence catalog bytes fail integrity verification',
   );
 });
 
+test('retains evidence-only artifacts and rejects damage before first acceptance', (t) => {
+  const current = fixture(t);
+  const attempt = admitRunningAttempt(current, {
+    jobKey: 'evidence-retention',
+    admissionKey: 'admit-evidence-retention',
+    launchKey: 'launch-evidence-retention',
+    observationKey: 'observe-evidence-retention',
+  });
+  const files = new ArtifactFiles(current.project.stateDirectory);
+  const artifact = files.put(Buffer.from('original command log'));
+  const digest = DigestSchema.parse(artifact.digest);
+  registerArtifact(current.store, files, artifact);
+  const evidence = EvidenceSchema.parse({
+    kind: 'command',
+    argv: ['bun', 'test'],
+    exitCode: 0,
+    log: digest,
+  });
+  const recorded = current.store.recordResult({
+    actor: current.worker,
+    attemptId: attempt.id,
+    content: { kind: 'report', body: 'Tests passed.', artifactDigests: [] },
+    inputDigest: zeroDigest,
+    workspaceDigest: oneDigest,
+    evidenceClaims: ['tests-pass'],
+    evidence: [evidence],
+    verification: { kind: 'passed', checks: [evidence] },
+    upstreamResultIds: [],
+    idempotencyKey: 'record-evidence-retention',
+  });
+  chmodSync(files.path(artifact), 0o600);
+  writeFileSync(files.path(artifact), 'tampered command log');
+
+  assert.throws(
+    () =>
+      current.store.decideResult({
+        actor: current.controller,
+        resultId: recorded.id,
+        expectedBriefRevision: 1,
+        decision: { kind: 'accepted' },
+        idempotencyKey: 'accept-damaged-evidence',
+      }),
+    hasCode('invalid-state'),
+  );
+  assert.deepEqual(
+    current.store.read((database) =>
+      database
+        .prepare(
+          `SELECT a.digest FROM result_artifacts ra
+           JOIN artifacts a ON a.id = ra.artifact_id
+           WHERE ra.result_id = ?`,
+        )
+        .all(recorded.id)
+        .map((row) => ({ digest: z.object({ digest: DigestSchema }).parse(row).digest })),
+    ),
+    [{ digest }],
+  );
+});
+
 test('rejects new worker results after settlement but replays an already recorded result', (t) => {
   const current = fixture(t);
   const attempt = admitRunningAttempt(current, {
@@ -518,6 +578,16 @@ test('fences attempt launch, persists immutable results, and releases settled re
       idempotencyKey: 'admit-next-attempt',
     });
   assert.throws(admitNext, hasCode('invalid-state'));
+  const acceptance = current.store.decideResult({
+    actor: current.controller,
+    resultId: result.id,
+    expectedBriefRevision: 1,
+    decision: { kind: 'accepted' },
+    idempotencyKey: 'accept-result',
+  });
+  assert.equal(acceptance.decision, 'accepted');
+  chmodSync(files.path(artifact), 0o600);
+  writeFileSync(files.path(artifact), 'tampered command output');
   assert.equal(
     current.store.decideResult({
       actor: current.controller,
@@ -525,8 +595,8 @@ test('fences attempt launch, persists immutable results, and releases settled re
       expectedBriefRevision: 1,
       decision: { kind: 'accepted' },
       idempotencyKey: 'accept-result',
-    }).decision,
-    'accepted',
+    }).id,
+    acceptance.id,
   );
   assert.throws(() => {
     current.store.transaction((database) => {

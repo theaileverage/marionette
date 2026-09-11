@@ -1843,43 +1843,12 @@ export class Store {
         ];
         const files = new ArtifactFiles(this.project.stateDirectory);
         const validatedArtifacts = new Map<Digest, z.infer<typeof artifactReferenceRowSchema>>();
-        for (const digest of new Set([...artifactDigests, ...evidenceDigests])) {
-          const row = requireValue(
-            database
-              .prepare(
-                'SELECT id, host_id, path, byte_length FROM artifacts WHERE project_id = ? AND digest = ?',
-              )
-              .get(this.project.id, digest),
-            'not-found',
-            `Artifact ${digest} was not found`,
-          );
-          const artifact = artifactReferenceRowSchema.parse(row);
-          if (artifact.host_id !== attempt.hostId) {
-            throw new StoreError('invalid-state', `Artifact ${digest} belongs to another host`);
-          }
-          const durable = {
+        for (const digest of new Set([...artifactDigests, ...evidenceDigests]))
+          validatedArtifacts.set(
             digest,
-            byteLength: artifact.byte_length,
-            mediaType: 'application/octet-stream',
-          };
-          if (artifact.path !== files.path(durable))
-            throw new StoreError('invalid-state', `Artifact ${digest} catalog path is not durable`);
-          try {
-            files.verify(durable);
-          } catch (error) {
-            throw new StoreError('invalid-state', `Artifact ${digest} failed its integrity check`, {
-              cause: error,
-            });
-          }
-          validatedArtifacts.set(digest, artifact);
-        }
-        const artifacts = artifactDigests.map((digest) =>
-          requireValue(
-            validatedArtifacts.get(digest),
-            'invalid-state',
-            `Artifact ${digest} did not pass validation`,
-          ),
-        );
+            this.#verifyArtifact(database, { digest, hostId: attempt.hostId, files }),
+          );
+        const artifacts = [...validatedArtifacts.values()];
         database
           .prepare(
             `INSERT INTO results
@@ -2038,6 +2007,65 @@ export class Store {
     );
   }
 
+  #verifyArtifact(
+    database: DatabaseSync,
+    input: { digest: Digest; hostId: HostId; files: ArtifactFiles },
+  ): z.infer<typeof artifactReferenceRowSchema> {
+    const row = requireValue(
+      database
+        .prepare(
+          'SELECT id, host_id, path, byte_length FROM artifacts WHERE project_id = ? AND digest = ?',
+        )
+        .get(this.project.id, input.digest),
+      'not-found',
+      `Artifact ${input.digest} was not found`,
+    );
+    const artifact = artifactReferenceRowSchema.parse(row);
+    if (artifact.host_id !== input.hostId)
+      throw new StoreError('invalid-state', `Artifact ${input.digest} belongs to another host`);
+    const durable = {
+      digest: input.digest,
+      byteLength: artifact.byte_length,
+      mediaType: 'application/octet-stream',
+    };
+    if (artifact.path !== input.files.path(durable))
+      throw new StoreError('invalid-state', `Artifact ${input.digest} catalog path is not durable`);
+    try {
+      input.files.verify(durable);
+    } catch (error) {
+      throw new StoreError('invalid-state', `Artifact ${input.digest} failed its integrity check`, {
+        cause: error,
+      });
+    }
+    return artifact;
+  }
+
+  #verifyResultArtifacts(database: DatabaseSync, result: Result): void {
+    const files = new ArtifactFiles(this.project.stateDirectory);
+    const stored = database
+      .prepare(
+        `SELECT a.digest FROM result_artifacts ra
+         JOIN artifacts a ON a.id = ra.artifact_id
+         WHERE ra.result_id = ? AND a.project_id = ?`,
+      )
+      .all(result.id, this.project.id)
+      .map((row) => z.object({ digest: DigestSchema }).parse(row).digest);
+    const retained = new Set(stored);
+    const required = new Set([
+      ...result.content.artifactDigests,
+      ...evidenceArtifactDigests(result.evidence),
+      ...(result.verification.kind === 'not-requested'
+        ? []
+        : evidenceArtifactDigests(result.verification.checks)),
+    ]);
+    for (const digest of required) {
+      if (!retained.has(digest))
+        throw new StoreError('invalid-state', `Artifact ${digest} is not retained with its result`);
+    }
+    for (const digest of stored)
+      this.#verifyArtifact(database, { digest, hostId: result.hostId, files });
+  }
+
   #requireEligibleResult(database: DatabaseSync, id: ResultId): Result {
     const result = this.#requireResult(database, id);
     const state = database
@@ -2082,6 +2110,7 @@ export class Store {
         }
         if (input.decision.kind === 'accepted') {
           this.#assertRequiredEvidence(database, recorded);
+          this.#verifyResultArtifacts(database, recorded);
         }
         const id = this.#newId('acceptance', z.string().min(1));
         const createdAt = this.#now();
