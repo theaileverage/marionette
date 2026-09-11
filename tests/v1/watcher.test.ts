@@ -149,3 +149,43 @@ test('watcher takeover needs proven former absence and never replays an uncertai
     rmSync(f.root, { recursive: true, force: true });
   }
 });
+
+test('watcher records an unconfirmed outcome when delivery throws after a durable claim', async () => {
+  const f = fixture();
+  try {
+    const watcher = await Watcher.start({
+      store: f.store,
+      deliveryPort: {
+        async checkReady() {
+          return { kind: 'ready' };
+        },
+        async deliver() {
+          throw new Error('transport disconnected');
+        },
+      },
+      livenessPort: {
+        async confirmAbsent() {
+          return false;
+        },
+      },
+      processIdentity: 'failing-watcher',
+      pollIntervalMs: 60_000,
+    });
+    try {
+      assert.equal(await watcher.pollOnce(), 0);
+      assert.equal(
+        f.store.read((db) =>
+          db
+            .prepare('SELECT state,last_error FROM notification_deliveries WHERE id=?')
+            .get(f.deliveryId),
+        )?.state,
+        'unconfirmed',
+      );
+    } finally {
+      watcher.stop();
+    }
+  } finally {
+    f.store.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});

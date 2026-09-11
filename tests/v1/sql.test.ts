@@ -151,23 +151,32 @@ test('SQL query timeout kills the isolated Node worker', async () => {
     }),
   });
   try {
+    const board = Board.create({ store });
+    const thread = board.createThread({
+      title: 'SQL visible post',
+      author: { kind: 'system', id: 'controller' },
+      idempotencyKey: 'sql-thread',
+    });
+    board.post({
+      threadId: thread.id,
+      author: { kind: 'system', id: 'controller' },
+      body: 'visible',
+      kind: 'finding',
+      idempotencyKey: 'sql-post',
+    });
     const service = new SqlQueryService({
-      board: Board.create({ store }),
+      board,
       workerPath: join(process.cwd(), 'src/v1/sql-worker.ts'),
     });
     const complete = await service.read({
-      databasePath: f.databasePath,
-      projectId: 'project-a',
-      sql: 'SELECT id,body FROM public_board_posts',
+      sql: 'SELECT body FROM public_board_posts',
       timeoutMs: 2_000,
       maxRows: 10,
       maxBytes: 1000,
     });
-    assert.deepEqual(complete.rows, [{ id: 'a1', body: 'visible' }]);
+    assert.deepEqual(complete.rows, [{ body: 'visible' }]);
     await assert.rejects(
       service.read({
-        databasePath: f.databasePath,
-        projectId: 'project-a',
         sql: 'SELECT id,body FROM public_board_posts',
         timeoutMs: 1,
         maxRows: 10,

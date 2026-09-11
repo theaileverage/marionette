@@ -9,8 +9,6 @@ const SqlRowSchema = z.record(z.union([z.string(), z.number().finite(), z.boolea
 export type SqlRow = z.infer<typeof SqlRowSchema>;
 
 export interface SqlRead {
-  readonly databasePath: string;
-  readonly projectId: string;
   readonly sql: string;
   readonly parameters?: Readonly<Record<string, SqlValue>>;
   readonly timeoutMs?: number;
@@ -111,8 +109,8 @@ export class SqlQueryService {
     const maxBytes = bounded('maxBytes', input.maxBytes, DEFAULT_MAX_BYTES, MAX_BYTES);
     if (input.sql.trim().length === 0) throw new Error('sql must not be empty');
     const request = JSON.stringify({
-      databasePath: input.databasePath,
-      projectId: input.projectId,
+      databasePath: this.#board.databasePath,
+      projectId: this.#board.project.id,
       sql: input.sql,
       parameters: input.parameters ?? {},
       maxRows,

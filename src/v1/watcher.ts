@@ -296,12 +296,24 @@ export class Watcher {
       const summary = posts
         .map((post) => `thread ${post.threadId}, post ${post.postId}`)
         .join('; ');
-      const result = await this.#deliveryPort.deliver({
-        deliveryIds: rows.map((row) => row.id),
-        project: this.project,
-        recipient,
-        message: `Board updates are available: ${summary}`,
-      });
+      let result: DeliverySubmission;
+      try {
+        result = await this.#deliveryPort.deliver({
+          deliveryIds: rows.map((row) => row.id),
+          project: this.project,
+          recipient,
+          message: `Board updates are available: ${summary}`,
+        });
+      } catch (error) {
+        this.settle(
+          rows,
+          'unconfirmed',
+          error instanceof Error
+            ? error.message
+            : 'delivery submission threw before acknowledgement',
+        );
+        return 0;
+      }
       if (result.kind === 'submitted') this.settle(rows, 'acknowledged');
       else this.settle(rows, 'unconfirmed', result.reason);
       return rows.length;

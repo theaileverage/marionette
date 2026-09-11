@@ -234,6 +234,16 @@ function sameAuthor(left: BoardAuthor, right: BoardAuthor) {
   return left.kind === right.kind && left.id === right.id && left.generation === right.generation;
 }
 
+function sameReferences(left: readonly BoardReference[], right: readonly BoardReference[]) {
+  return (
+    left.length === right.length &&
+    left.every(
+      (reference, index) =>
+        reference.kind === right[index]?.kind && reference.value === right[index]?.value,
+    )
+  );
+}
+
 export class Board {
   readonly #store: Store;
 
@@ -245,8 +255,16 @@ export class Board {
     return new Board(options);
   }
 
+  get project() {
+    return this.#store.project;
+  }
+
+  get databasePath() {
+    return this.#store.databasePath;
+  }
+
   private get projectId() {
-    return this.#store.project.id;
+    return this.project.id;
   }
 
   private assertAuthor(db: DatabaseSync, author: BoardAuthor) {
@@ -351,6 +369,9 @@ export class Board {
           post.threadId !== threadId ||
           post.body !== body ||
           post.kind !== input.kind ||
+          post.replyToPostId !== (input.replyToPostId ?? null) ||
+          post.replacesPostId !== (input.replacesPostId ?? null) ||
+          !sameReferences(post.references, references) ||
           !sameAuthor(post.author, input.author)
         )
           throw new Error('idempotency key was already used for a different post');
