@@ -1128,9 +1128,9 @@ export class Store {
       WorkflowIdSchema,
       (database) => {
         const firstStep = requireValue(
-          workflowPackage.steps[0],
+          workflowPackage.steps.find((step) => step.name === workflowPackage.entryStep),
           'invalid-transition',
-          `Workflow package ${workflowPackage.name} has no steps`,
+          `Workflow package ${workflowPackage.name} has no entry step`,
         );
         if (input.boundary === 'design-only' && firstStep.phase === 'implementation') {
           throw new StoreError(

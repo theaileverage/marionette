@@ -129,13 +129,14 @@ function registerWorker(
   fixtureValue: Fixture,
   name: string,
   parentWorkflowId: AgentSession['parentWorkflowId'] = null,
+  executionRole = 'implementation',
 ): AgentSession {
   return fixtureValue.store.registerSession({
     id: AgentSessionIdSchema.parse(name),
     generation: 1,
     workspaceId: fixtureValue.workspaceId,
     role: 'worker',
-    executionRole: 'implementation',
+    executionRole,
     tokenHash: tokenHash(`${name}-token`),
     parentWorkflowId,
     attemptId: null,
@@ -421,7 +422,17 @@ test('fences managed admission by workflow and control revision', (t) => {
     version: '1',
     digest: oneDigest,
     sourceDigests: [zeroDigest],
+    entryStep: 'implement',
     steps: [
+      {
+        name: 'not-the-entry',
+        phase: 'design',
+        resources: [],
+        outputContract: 'Unused test step',
+        permittedMethods: ['direct'],
+        requiredEvidence: [],
+        requiresDistinctRole: false,
+      },
       {
         name: 'implement',
         phase: 'implementation',
@@ -452,6 +463,7 @@ test('fences managed admission by workflow and control revision', (t) => {
     boundary: 'all',
     idempotencyKey: 'create-managed-workflow',
   });
+  assert.equal(current.store.getStepRun(workflow.currentStepRunId).stepName, 'implement');
   const managedWorker = registerWorker(current, 'managed-worker', workflow.id);
   assert.throws(
     () =>
@@ -491,6 +503,27 @@ test('fences managed admission by workflow and control revision', (t) => {
   });
   assert.equal(admitted.workflowRevision, 2);
   assert.equal(current.store.getStepRun(workflow.currentStepRunId).phase, 'active');
+  const parallelWorker = registerWorker(current, 'parallel-worker', workflow.id);
+  assert.throws(
+    () =>
+      current.store.admitAttempt({
+        actor: current.controller,
+        jobId: workflow.rootJobId,
+        session: parallelWorker,
+        resourceKey: 'workflow:parallel',
+        inputResultIds: [],
+        expectedBriefRevision: 1,
+        workflow: {
+          kind: 'managed',
+          workflowId: workflow.id,
+          stepRunId: workflow.currentStepRunId,
+          expectedWorkflowRevision: 2,
+          expectedControlRevision: 1,
+        },
+        idempotencyKey: 'parallel-managed-admission',
+      }),
+    hasCode('limit-exhausted'),
+  );
   assert.throws(
     () =>
       current.store.claimAttemptLaunch({
@@ -540,6 +573,132 @@ test('fences managed admission by workflow and control revision', (t) => {
       }),
     hasCode('invalid-state'),
   );
+});
+
+test('requires review sessions to have a distinct identity and execution role', (t) => {
+  const current = fixture(t);
+  const workflowPackage = WorkflowPackageSnapshotSchema.parse({
+    name: 'separated-review',
+    version: '1',
+    digest: DigestSchema.parse('2'.repeat(64)),
+    sourceDigests: [],
+    entryStep: 'implement',
+    steps: [
+      {
+        name: 'implement',
+        phase: 'implementation',
+        resources: ['workspace'],
+        outputContract: 'Implementation result',
+        permittedMethods: ['direct'],
+        requiredEvidence: [],
+        requiresDistinctRole: false,
+      },
+      {
+        name: 'review',
+        phase: 'review',
+        resources: ['workspace'],
+        outputContract: 'Review result',
+        permittedMethods: ['direct'],
+        requiredEvidence: [],
+        requiresDistinctRole: true,
+      },
+    ],
+    transitions: [
+      { kind: 'advance', from: 'implement', to: 'review' },
+      { kind: 'finish', from: 'review' },
+    ],
+    limits: {
+      maxAttempts: 3,
+      maxRepeats: 1,
+      deadlineMs: 60_000,
+      parallelism: 1,
+      innerLoopDeadlineMs: 30_000,
+    },
+  });
+  const workflow = current.store.createWorkflow({
+    actor: current.controller,
+    stableKey: 'separated-review',
+    package: workflowPackage,
+    request,
+    brief,
+    workspaceId: current.workspaceId,
+    delivery: 'report',
+    boundary: 'all',
+    idempotencyKey: 'create-separated-review',
+  });
+  const implementer = registerWorker(current, 'separation-implementer', workflow.id);
+  const implementation = current.store.admitAttempt({
+    actor: current.controller,
+    jobId: workflow.rootJobId,
+    session: implementer,
+    resourceKey: 'separation:implementation',
+    inputResultIds: [],
+    expectedBriefRevision: 1,
+    workflow: {
+      kind: 'managed',
+      workflowId: workflow.id,
+      stepRunId: workflow.currentStepRunId,
+      expectedWorkflowRevision: 1,
+      expectedControlRevision: 1,
+    },
+    idempotencyKey: 'admit-separation-implementation',
+  });
+  current.store.settleAttempt({
+    actor: current.controller,
+    attemptId: implementation.attempt.id,
+    observation: { kind: 'settled', outcome: 'succeeded', reason: 'Implementation complete' },
+    idempotencyKey: 'settle-separation-implementation',
+  });
+
+  const reviewStepId = 'step_review';
+  current.store.transaction((database) => {
+    const now = new Date().toISOString();
+    database
+      .prepare("UPDATE step_runs SET phase = 'succeeded', updated_at = ? WHERE id = ?")
+      .run(now, workflow.currentStepRunId);
+    database
+      .prepare(
+        `INSERT INTO step_runs
+           (id, project_id, workflow_id, job_id, step_name, step_phase, ordinal,
+            phase, input_workflow_revision, input_brief_revision,
+            source_transition_request_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'review', 'review', 2, 'pending', 3, 1, NULL, ?, ?)`,
+      )
+      .run(reviewStepId, current.project.id, workflow.id, workflow.rootJobId, now, now);
+    database
+      .prepare('UPDATE workflow_runs SET current_step_run_id = ?, revision = 3 WHERE id = ?')
+      .run(reviewStepId, workflow.id);
+  });
+
+  const sameRoleReviewer = registerWorker(
+    current,
+    'same-role-reviewer',
+    workflow.id,
+    'implementation',
+  );
+  const reviewAdmission = (session: AgentSession, idempotencyKey: string) =>
+    current.store.admitAttempt({
+      actor: current.controller,
+      jobId: workflow.rootJobId,
+      session,
+      resourceKey: 'separation:review',
+      inputResultIds: [],
+      expectedBriefRevision: 1,
+      workflow: {
+        kind: 'managed',
+        workflowId: workflow.id,
+        stepRunId: current.store.getWorkflow(workflow.id).currentStepRunId,
+        expectedWorkflowRevision: 3,
+        expectedControlRevision: 1,
+      },
+      idempotencyKey,
+    });
+  assert.throws(
+    () => reviewAdmission(sameRoleReviewer, 'reject-same-role-reviewer'),
+    hasCode('permission-denied'),
+  );
+  const distinctReviewer = registerWorker(current, 'distinct-reviewer', workflow.id, 'review');
+  assert.equal(reviewAdmission(distinctReviewer, 'admit-distinct-reviewer').workflowRevision, 4);
 });
 
 test('reports gated workflow mutations as unavailable', (t) => {

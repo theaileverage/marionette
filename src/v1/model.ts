@@ -140,15 +140,37 @@ export const WorkflowLimitsSchema = z.object({
 });
 export type WorkflowLimits = z.infer<typeof WorkflowLimitsSchema>;
 
-export const WorkflowPackageSnapshotSchema = z.object({
-  name: z.string().min(1),
-  version: z.string().min(1),
-  digest: DigestSchema,
-  sourceDigests: z.array(DigestSchema),
-  steps: z.array(WorkflowStepSchema).min(1),
-  transitions: z.array(WorkflowTransitionRuleSchema),
-  limits: WorkflowLimitsSchema,
-});
+export const WorkflowPackageSnapshotSchema = z
+  .object({
+    name: z.string().min(1),
+    version: z.string().min(1),
+    digest: DigestSchema,
+    sourceDigests: z.array(DigestSchema),
+    entryStep: z.string().min(1),
+    steps: z.array(WorkflowStepSchema).min(1),
+    transitions: z.array(WorkflowTransitionRuleSchema),
+    limits: WorkflowLimitsSchema,
+  })
+  .superRefine((snapshot, context) => {
+    const stepNames = new Set<string>();
+    for (const [index, step] of snapshot.steps.entries()) {
+      if (stepNames.has(step.name)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Duplicate workflow step ${step.name}`,
+          path: ['steps', index, 'name'],
+        });
+      }
+      stepNames.add(step.name);
+    }
+    if (!stepNames.has(snapshot.entryStep)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Entry step ${snapshot.entryStep} is not defined`,
+        path: ['entryStep'],
+      });
+    }
+  });
 export type WorkflowPackageSnapshot = z.infer<typeof WorkflowPackageSnapshotSchema>;
 export type WorkflowPackage = WorkflowPackageSnapshot;
 
