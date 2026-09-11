@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -56,6 +56,34 @@ if (!isMainThread) {
   if (parentPort === null) throw new Error('Migration worker has no parent port');
   parentPort.postMessage('opened');
 } else {
+  test('read-only opens reject pending migrations and cannot write current state', () => {
+    const { directory, databasePath } = fixture();
+    try {
+      openDatabase({
+        path: databasePath,
+        projectId,
+        migrationSet: migrations.slice(0, -1),
+      }).close();
+      const previous = readFileSync(databasePath);
+      assert.throws(
+        () => openDatabase({ path: databasePath, projectId, readOnly: true }),
+        /current schema/,
+      );
+      assert.deepEqual(readFileSync(databasePath), previous);
+      openDatabase({ path: databasePath, projectId }).close();
+      const current = readFileSync(databasePath);
+      const preview = openDatabase({ path: databasePath, projectId, readOnly: true });
+      try {
+        assert.equal(schemaVersion(preview), migrations.length);
+        assert.throws(() => preview.exec('CREATE TABLE forbidden (id TEXT)'), /readonly/i);
+      } finally {
+        preview.close();
+      }
+      assert.deepEqual(readFileSync(databasePath), current);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
   test('applies numbered migrations once on a real database file', () => {
     const { directory, databasePath } = fixture();
     try {
