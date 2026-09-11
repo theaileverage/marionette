@@ -2,6 +2,8 @@ node_modules/
 dist/
 public/
 .marionette/
+.marionette-v1/
+.v1-test/
 .runtime/
 .DS_Store
 *.log
