@@ -176,6 +176,28 @@ export const VerificationSchema = z.discriminatedUnion('kind', [
 ]);
 export type Verification = z.infer<typeof VerificationSchema>;
 
+export const ResultContentSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('report') }),
+  z.object({
+    kind: z.literal('patch'),
+    sourceRepository: z.string().min(1),
+    baseCommit: z.string().min(1),
+    resultingTree: z.string().min(1),
+    changedPaths: z.array(z.string().min(1)),
+    artifactDigests: z.array(DigestSchema),
+  }),
+  z.object({
+    kind: z.literal('commit'),
+    sourceRepository: z.string().min(1),
+    baseCommit: z.string().min(1),
+    resultingTree: z.string().min(1),
+    resultingCommit: z.string().min(1),
+    changedPaths: z.array(z.string().min(1)),
+    artifactDigests: z.array(DigestSchema),
+  }),
+]);
+export type ResultContent = z.infer<typeof ResultContentSchema>;
+
 export const AttemptPhaseSchema = z.enum([
   'pending',
   'launching',
@@ -301,6 +323,7 @@ export type WorkflowRun = {
 export type StepRun = {
   id: StepRunId;
   workflowId: WorkflowId;
+  jobId: JobId;
   stepName: string;
   ordinal: Revision;
   phase: StepRunPhase;
@@ -338,6 +361,8 @@ export type Result = {
   workspaceId: WorkspaceId;
   inputDigest: Digest;
   workspaceDigest: Digest;
+  content: ResultContent;
+  evidenceClaims: string[];
   evidence: Evidence[];
   verification: Verification;
   createdAt: Timestamp;

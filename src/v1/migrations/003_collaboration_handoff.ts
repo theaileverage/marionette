@@ -7,7 +7,9 @@ CREATE TABLE board_threads (
   source_author_kind TEXT NOT NULL CHECK (source_author_kind IN ('user', 'session', 'system')),
   source_author_id TEXT NOT NULL,
   source_author_generation INTEGER,
+  idempotency_key TEXT NOT NULL,
   created_at TEXT NOT NULL,
+  UNIQUE (project_id, source_author_kind, source_author_id, idempotency_key),
   UNIQUE (project_id, id)
 ) STRICT;
 
@@ -19,6 +21,7 @@ CREATE TABLE board_posts (
   source_author_kind TEXT NOT NULL CHECK (source_author_kind IN ('user', 'session', 'system')),
   source_author_id TEXT NOT NULL,
   source_author_generation INTEGER,
+  kind TEXT NOT NULL CHECK (kind IN ('question', 'blocker', 'result', 'finding', 'decision', 'progress')),
   body TEXT NOT NULL,
   reply_to_post_id TEXT REFERENCES board_posts(id),
   replaces_post_id TEXT REFERENCES board_posts(id),
@@ -152,8 +155,30 @@ CREATE UNIQUE INDEX one_held_writer_reservation
 ON writer_reservations(project_id, target_workspace_id)
 WHERE state IN ('held', 'unconfirmed');
 
+CREATE TABLE workspace_retirements (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+  expected_host_id TEXT NOT NULL REFERENCES hosts(id),
+  expected_path TEXT NOT NULL,
+  expected_workspace_created_at TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('pending', 'native-closing', 'worktree-removing', 'completed', 'unconfirmed', 'blocked')),
+  revision INTEGER NOT NULL CHECK (revision >= 1),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  completed_at TEXT,
+  last_error TEXT,
+  UNIQUE (project_id, workspace_id, idempotency_key),
+  UNIQUE (project_id, id)
+) STRICT;
+
+CREATE UNIQUE INDEX one_active_workspace_retirement
+ON workspace_retirements(project_id, workspace_id)
+WHERE state <> 'completed';
+
 CREATE VIEW public_agent_sessions AS
-SELECT id, generation, project_id, host_id, workspace_id, role, native_kind,
+SELECT id, generation, project_id, host_id, workspace_id, role, execution_role, native_kind,
        native_server_generation, native_locator, state, created_at, settled_at
 FROM agent_sessions
 WHERE project_id = marionette_project_id();
@@ -166,7 +191,7 @@ WHERE project_id = marionette_project_id();
 
 CREATE VIEW public_board_posts AS
 SELECT id, project_id, thread_id, sequence, source_author_kind, source_author_id,
-       source_author_generation, body, reply_to_post_id, replaces_post_id, created_at
+       source_author_generation, kind, body, reply_to_post_id, replaces_post_id, created_at
 FROM board_posts
 WHERE project_id = marionette_project_id();
 
@@ -181,7 +206,7 @@ CREATE VIEW public_results AS
 SELECT id, project_id, job_id, attempt_id, brief_revision, host_id, workspace_id,
        result_kind, input_digest, workspace_digest, source_repository, base_commit,
        resulting_tree, resulting_commit, changed_paths_json, artifact_digests_json,
-       evidence_json, verification_json, created_at
+       evidence_claims_json, evidence_json, verification_json, created_at
 FROM results
 WHERE project_id = marionette_project_id();
 

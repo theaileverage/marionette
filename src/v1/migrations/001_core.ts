@@ -18,6 +18,15 @@ CREATE TABLE store_binding (
   host_id TEXT NOT NULL REFERENCES hosts(id)
 ) STRICT;
 
+CREATE TABLE project_settings (
+  project_id TEXT NOT NULL REFERENCES projects(id),
+  key TEXT NOT NULL,
+  revision INTEGER NOT NULL CHECK (revision >= 1),
+  value_json TEXT NOT NULL CHECK (json_valid(value_json)),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (project_id, key)
+) STRICT;
+
 CREATE TABLE workspaces (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id),
@@ -87,6 +96,7 @@ CREATE TABLE agent_sessions (
   host_id TEXT NOT NULL REFERENCES hosts(id),
   workspace_id TEXT REFERENCES workspaces(id),
   role TEXT NOT NULL CHECK (role IN ('user', 'controller', 'worker')),
+  execution_role TEXT NOT NULL,
   token_hash TEXT NOT NULL CHECK (length(token_hash) = 64 AND token_hash NOT GLOB '*[^0-9a-f]*'),
   parent_workflow_id TEXT REFERENCES workflow_runs(id) DEFERRABLE INITIALLY DEFERRED,
   attempt_id TEXT REFERENCES attempts(id) DEFERRABLE INITIALLY DEFERRED,
@@ -167,6 +177,7 @@ CREATE TABLE results (
   resulting_commit TEXT,
   changed_paths_json TEXT NOT NULL CHECK (json_valid(changed_paths_json)),
   artifact_digests_json TEXT NOT NULL CHECK (json_valid(artifact_digests_json)),
+  evidence_claims_json TEXT NOT NULL CHECK (json_valid(evidence_claims_json)),
   evidence_json TEXT NOT NULL CHECK (json_valid(evidence_json)),
   verification_json TEXT NOT NULL CHECK (json_valid(verification_json)),
   created_at TEXT NOT NULL,
