@@ -446,6 +446,7 @@ const resultRowSchema = z.object({
   host_id: HostIdSchema,
   workspace_id: WorkspaceIdSchema,
   result_kind: z.enum(['report', 'patch', 'commit']),
+  report_text: z.string().nullable(),
   input_digest: DigestSchema,
   workspace_digest: DigestSchema,
   source_repository: z.string().nullable(),
@@ -498,6 +499,10 @@ const controlledWorkflowRowSchema = z.object({
 const countRowSchema = z.object({ count: z.number().int().nonnegative() });
 const evidenceClaimsSchema = z.array(z.string().min(1));
 const acceptedResultRowSchema = z.object({ decision: z.literal('accepted') });
+const artifactReferenceRowSchema = z.object({
+  id: z.string().min(1),
+  host_id: HostIdSchema,
+});
 const sessionIdentitySchema = z.object({
   id: AgentSessionIdSchema,
   generation: SessionGenerationSchema,
@@ -1792,6 +1797,7 @@ export class Store {
           this.#requireAcceptedResult(database, upstream);
         const resultId = this.#newId('result', ResultIdSchema);
         const now = this.#now();
+        const reportText = command.content.kind === 'report' ? command.content.body : null;
         const sourceRepository =
           command.content.kind === 'report' ? null : command.content.sourceRepository;
         const baseCommit = command.content.kind === 'report' ? null : command.content.baseCommit;
@@ -1800,17 +1806,33 @@ export class Store {
         const resultingCommit =
           command.content.kind === 'commit' ? command.content.resultingCommit : null;
         const changedPaths = command.content.kind === 'report' ? [] : command.content.changedPaths;
-        const artifactDigests =
-          command.content.kind === 'report' ? [] : command.content.artifactDigests;
+        const artifactDigests = command.content.artifactDigests;
+        if (new Set(artifactDigests).size !== artifactDigests.length) {
+          throw new StoreError('invalid-state', 'Result artifact digests must be unique');
+        }
+        const artifacts = artifactDigests.map((digest) => {
+          const row = requireValue(
+            database
+              .prepare('SELECT id, host_id FROM artifacts WHERE project_id = ? AND digest = ?')
+              .get(this.project.id, digest),
+            'not-found',
+            `Artifact ${digest} was not found`,
+          );
+          const artifact = artifactReferenceRowSchema.parse(row);
+          if (artifact.host_id !== attempt.hostId) {
+            throw new StoreError('invalid-state', `Artifact ${digest} belongs to another host`);
+          }
+          return artifact;
+        });
         database
           .prepare(
             `INSERT INTO results
                (id, project_id, job_id, attempt_id, brief_id, brief_revision, host_id,
-                workspace_id, result_kind, input_digest, workspace_digest,
+                workspace_id, result_kind, report_text, input_digest, workspace_digest,
                 source_repository, base_commit, resulting_tree, resulting_commit,
                 changed_paths_json, artifact_digests_json, evidence_claims_json,
                 evidence_json, verification_json, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             resultId,
@@ -1822,6 +1844,7 @@ export class Store {
             attempt.hostId,
             attempt.workspaceId,
             command.content.kind,
+            reportText,
             command.inputDigest,
             command.workspaceDigest,
             sourceRepository,
@@ -1835,6 +1858,13 @@ export class Store {
             canonicalJson(command.verification),
             now,
           );
+        const artifactInsert = database.prepare(
+          `INSERT INTO result_artifacts (result_id, artifact_id, ordinal)
+           VALUES (?, ?, ?)`,
+        );
+        artifacts.forEach((artifact, ordinal) =>
+          artifactInsert.run(resultId, artifact.id, ordinal),
+        );
         const eligible =
           job.currentBriefId === attempt.briefId &&
           job.currentBriefRevision === attempt.briefRevision &&
@@ -1888,8 +1918,18 @@ export class Store {
     const row = resultRowSchema.parse(raw);
     let content: ResultContent;
     if (row.result_kind === 'report') {
-      content = { kind: 'report' };
+      if (row.report_text === null) {
+        throw new StoreError('invalid-state', `Report result ${row.id} has no body`);
+      }
+      content = {
+        kind: 'report',
+        body: row.report_text,
+        artifactDigests: parseJson(z.array(DigestSchema), row.artifact_digests_json),
+      };
     } else {
+      if (row.report_text !== null) {
+        throw new StoreError('invalid-state', `Git result ${row.id} has report text`);
+      }
       if (
         row.source_repository === null ||
         row.base_commit === null ||

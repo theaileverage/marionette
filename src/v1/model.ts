@@ -199,7 +199,11 @@ export const VerificationSchema = z.discriminatedUnion('kind', [
 export type Verification = z.infer<typeof VerificationSchema>;
 
 export const ResultContentSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('report') }),
+  z.object({
+    kind: z.literal('report'),
+    body: z.string().min(1),
+    artifactDigests: z.array(DigestSchema),
+  }),
   z.object({
     kind: z.literal('patch'),
     sourceRepository: z.string().min(1),

@@ -129,7 +129,7 @@ if (!isMainThread) {
         ...migrations,
         {
           version: migrations.length + 1,
-          name: 'next_broken',
+          name: `${String(migrations.length + 1).padStart(3, '0')}_broken`,
           sql: 'CREATE TABLE should_rollback (id TEXT PRIMARY KEY) STRICT; SELECT * FROM missing_table;',
         },
       ];

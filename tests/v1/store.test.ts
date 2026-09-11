@@ -314,10 +314,31 @@ test('fences attempt launch, persists immutable results, and releases settled re
     exitCode: 0,
     log: oneDigest,
   });
+  current.store.transaction((database) => {
+    database
+      .prepare(
+        `INSERT INTO artifacts
+           (id, project_id, host_id, digest, path, byte_length, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        'artifact_report_attachment',
+        current.project.id,
+        current.project.hostId,
+        oneDigest,
+        '/repo/.marionette/artifacts/report.log',
+        12,
+        new Date().toISOString(),
+      );
+  });
   const result = current.store.recordResult({
     actor: current.worker,
     attemptId: admission.attempt.id,
-    content: { kind: 'report' },
+    content: {
+      kind: 'report',
+      body: 'Implementation completed.',
+      artifactDigests: [oneDigest],
+    },
     inputDigest: zeroDigest,
     workspaceDigest: oneDigest,
     evidenceClaims: ['tests-pass'],
@@ -327,6 +348,15 @@ test('fences attempt launch, persists immutable results, and releases settled re
     idempotencyKey: 'record-result',
   });
   assert.deepEqual(current.store.getResult(result.id), result);
+  assert.equal(
+    current.store.read(
+      (database) =>
+        database
+          .prepare('SELECT count(*) AS count FROM result_artifacts WHERE result_id = ?')
+          .get(result.id)?.count,
+    ),
+    1,
+  );
   const nextWorker = registerWorker(current, 'next-worker');
   const nextJob = current.store.createJob(directJobInput(current, 'next-job', 'create-next-job'));
   const admitNext = () =>
@@ -366,6 +396,17 @@ test('fences attempt launch, persists immutable results, and releases settled re
     idempotencyKey: 'settle-result-attempt',
   });
   assert.doesNotThrow(admitNext);
+  current.store.close();
+  const reopened = Store.open({
+    databasePath: current.store.databasePath,
+    project: current.project,
+  });
+  t.after(() => reopened.close());
+  assert.deepEqual(reopened.getResult(result.id).content, {
+    kind: 'report',
+    body: 'Implementation completed.',
+    artifactDigests: [oneDigest],
+  });
 });
 
 test('keeps uncertain resources reserved until later native settlement', (t) => {
@@ -553,7 +594,7 @@ test('fences managed admission by workflow and control revision', (t) => {
   const incompleteResult = current.store.recordResult({
     actor: managedWorker,
     attemptId: admitted.attempt.id,
-    content: { kind: 'report' },
+    content: { kind: 'report', body: 'Implementation result.', artifactDigests: [] },
     inputDigest: zeroDigest,
     workspaceDigest: oneDigest,
     evidenceClaims: [],
