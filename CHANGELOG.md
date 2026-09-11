@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.0-alpha.1 Unreleased
+
+- Introduce a Node 24.10+ CLI and importable SDK with a shared operation boundary.
+- Store project, session, job, input, result, board, and execution records in versioned SQLite migrations.
+- Pin workflow packages, entry steps, source resources, and explicit model profiles.
+- Journal native launch and prompt claims before external effects. Keep uncertain reservations and verify exact Herdr process identities during recovery.
+- Add bounded SQL reads, controlled board contributions, durable report content, and protected workspace retirement.
+- This alpha is under implementation. Workflow corrections and transitions remain gated, and the current Codex desktop does not expose a compatible notification endpoint.
+
 ## 0.5.3 — 2026-09-10
 
 - Reconnect existing terminal leads across runtime updates, including pre-0.5.2 launch receipts, without changing the native conversation, replaying startup prompts, or rewriting live guard files. Continue checking project, lease, workspace, pane, terminal, and native session identity.

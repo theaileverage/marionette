@@ -12,6 +12,8 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
+import { ArtifactIdSchema, type ArtifactId } from './model.js';
+import type { Store } from './store.js';
 
 export const artifactSchema = z
   .object({
@@ -87,4 +89,38 @@ export class ArtifactFiles {
   verify(artifact: Artifact): void {
     this.read(artifact);
   }
+}
+
+export function registerArtifact(
+  store: Store,
+  files: ArtifactFiles,
+  artifact: Artifact,
+): ArtifactId {
+  files.verify(artifact);
+  return store.transaction((db) => {
+    const previous = db
+      .prepare('SELECT id, path, byte_length FROM artifacts WHERE project_id = ? AND digest = ?')
+      .get(store.project.id, artifact.digest);
+    if (previous) {
+      const row = z
+        .object({ id: ArtifactIdSchema, path: z.string(), byte_length: z.number() })
+        .parse(previous);
+      if (row.path !== files.path(artifact) || row.byte_length !== artifact.byteLength)
+        throw new Error('Artifact catalog does not match durable bytes');
+      return row.id;
+    }
+    const id = ArtifactIdSchema.parse(randomUUID());
+    db.prepare(
+      'INSERT INTO artifacts(id, project_id, host_id, digest, path, byte_length, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run(
+      id,
+      store.project.id,
+      store.project.hostId,
+      artifact.digest,
+      files.path(artifact),
+      artifact.byteLength,
+      new Date().toISOString(),
+    );
+    return id;
+  });
 }

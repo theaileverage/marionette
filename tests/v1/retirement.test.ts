@@ -347,9 +347,9 @@ test('preserves a worktree when a required verification log is not durable', asy
              (id, project_id, job_id, attempt_id, brief_id, brief_revision, host_id,
               workspace_id, result_kind, input_digest, workspace_digest, changed_paths_json,
               artifact_digests_json, evidence_claims_json, evidence_json,
-              verification_json, created_at)
+              verification_json, created_at, report_text)
            VALUES ('result_artifact', ?, 'job_artifact', 'attempt_artifact', 'brief_artifact',
-                   1, ?, ?, 'report', ?, ?, '[]', '[]', '[]', '[]', ?, ?)`,
+                   1, ?, ?, 'report', ?, ?, '[]', '[]', '[]', '[]', ?, ?, 'Verification report')`,
         )
         .run(
           fixture.store.project.id,

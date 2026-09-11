@@ -3,7 +3,7 @@ import { lstatSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { z } from 'zod';
-import { ArtifactFiles, type Artifact } from './artifacts.js';
+import { ArtifactFiles } from './artifacts.js';
 
 const revision = z.string().regex(/^[a-f0-9]{40,64}$/);
 export const gitStateSchema = z
@@ -97,14 +97,7 @@ export function exportCommit(options: {
   base: string;
   commit: string;
   artifacts: ArtifactFiles;
-}): {
-  repositoryRoot: string;
-  base: string;
-  commit: string;
-  tree: string;
-  changedPaths: string[];
-  patch: Artifact;
-} {
+}) {
   const base = revision.parse(options.base);
   const commit = revision.parse(options.commit);
   const repositoryRoot = realpathSync(

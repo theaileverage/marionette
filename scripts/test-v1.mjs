@@ -3,6 +3,8 @@ import { readdirSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
+if (process.versions.bun) throw new Error('Run v1 tests with node scripts/test-v1.mjs');
+
 const requested = process.argv.slice(2);
 const files = readdirSync('tests/v1').filter(
   (file) =>

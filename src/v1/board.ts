@@ -17,9 +17,9 @@ const BoardRecipientSchema = z.object({
 });
 export type BoardRecipient = z.infer<typeof BoardRecipientSchema>;
 
-const BoardReferenceSchema = z.object({ kind: z.string().min(1), value: z.string().min(1) });
+export const BoardReferenceSchema = z.object({ kind: z.string().min(1), value: z.string().min(1) });
 export type BoardReference = z.infer<typeof BoardReferenceSchema>;
-const BoardPostKindSchema = z.enum([
+export const BoardPostKindSchema = z.enum([
   'question',
   'blocker',
   'result',

@@ -220,13 +220,7 @@ export type RouteResult =
       readonly reason: 'explicit package' | 'deterministic request classification';
     };
 
-const bundledPackageNames = [
-  'direct',
-  'bug-fix',
-  'refactoring',
-  'architect',
-  'feature',
-] as const;
+const bundledPackageNames = ['direct', 'bug-fix', 'refactoring', 'architect', 'feature'] as const;
 
 type BundledPackageName = (typeof bundledPackageNames)[number];
 
@@ -285,7 +279,10 @@ const freezeManifest = (manifest: PackageManifest): PackageManifest =>
     ...manifest,
     resources: immutable(
       Object.fromEntries(
-        Object.entries(manifest.resources).map(([path, resource]) => [path, immutable({ ...resource })]),
+        Object.entries(manifest.resources).map(([path, resource]) => [
+          path,
+          immutable({ ...resource }),
+        ]),
       ),
     ),
     steps: immutable(
@@ -299,7 +296,10 @@ const freezeManifest = (manifest: PackageManifest): PackageManifest =>
     ),
     transitions: immutable(
       manifest.transitions.map((transition) =>
-        immutable({ ...transition, routes: transition.routes && immutable([...transition.routes]) }),
+        immutable({
+          ...transition,
+          routes: transition.routes && immutable([...transition.routes]),
+        }),
       ),
     ),
     limits: immutable({ ...manifest.limits }),
@@ -330,10 +330,18 @@ export function snapshotPackage(
   const parsedSnapshot = WorkflowPackageSnapshotSchema.parse({
     name: immutableManifest.name,
     version: immutableManifest.version,
+    entryStep: immutableManifest.entryStep,
     digest: stableDigest(manifestBytes, immutableResources),
     sourceDigests: immutableResources.map((resource) => resource.sha256),
     steps: immutableManifest.steps.map(
-      ({ name, resources, outputContract, permittedMethods, requiredEvidence, requiresDistinctRole }) => ({
+      ({
+        name,
+        resources,
+        outputContract,
+        permittedMethods,
+        requiredEvidence,
+        requiresDistinctRole,
+      }) => ({
         name,
         phase: phaseFor(name),
         resources,
@@ -369,7 +377,9 @@ export function snapshotPackage(
         }),
       ),
     ),
-    transitions: immutable(parsedSnapshot.transitions.map((transition) => immutable({ ...transition }))),
+    transitions: immutable(
+      parsedSnapshot.transitions.map((transition) => immutable({ ...transition })),
+    ),
     limits: immutable({ ...parsedSnapshot.limits }),
     manifest: immutableManifest,
     resources: immutableResources,
@@ -405,7 +415,9 @@ const classify = (request: string): Exclude<BundledPackageName, 'direct'> | unde
   if (/\b(bug|fix|broken|regression|defect|crash)\b/.test(normalized)) return 'bug-fix';
   if (/\b(refactor|rename|extract|inline|dedup(?:licate)?|restructure)\b/.test(normalized))
     return 'refactoring';
-  if (/\b(architect|architecture|module boundary|interface design|design a module)\b/.test(normalized))
+  if (
+    /\b(architect|architecture|module boundary|interface design|design a module)\b/.test(normalized)
+  )
     return 'architect';
   if (/\b(feature|implement|build|add)\b/.test(normalized)) return 'feature';
   return undefined;
@@ -491,7 +503,10 @@ export function importModelConfig(
       continue;
     }
     const role = match[1].trim();
-    const models = match[2].split(',').map((model) => model.trim()).filter(Boolean);
+    const models = match[2]
+      .split(',')
+      .map((model) => model.trim())
+      .filter(Boolean);
     const duplicate = role in roles;
     if (duplicate) {
       diagnostics.push({

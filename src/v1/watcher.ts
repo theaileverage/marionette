@@ -36,6 +36,7 @@ export interface OwnerLivenessPort {
 }
 
 export interface WatcherOptions {
+  readonly automaticPolling?: boolean;
   readonly store: Store;
   readonly deliveryPort: DeliveryPort;
   readonly livenessPort: OwnerLivenessPort;
@@ -113,8 +114,10 @@ export class Watcher {
     const interval = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     if (!Number.isInteger(interval) || interval < 10)
       throw new Error('pollIntervalMs must be an integer of at least 10');
-    watcher.#timer = setInterval(() => void watcher.pollOnce(), interval);
-    watcher.#timer.unref();
+    if (options.automaticPolling !== false) {
+      watcher.#timer = setInterval(() => void watcher.pollOnce(), interval);
+      watcher.#timer.unref();
+    }
     return watcher;
   }
 

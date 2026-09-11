@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import {
   linkSync,
   mkdirSync,
@@ -46,15 +46,15 @@ export type ResolvedContext = {
 
 const hostSchema = z.object({ version: z.literal(1), hostId: z.string().uuid() }).strict();
 
-function readJson(path: string): unknown {
-  return JSON.parse(readFileSync(path, 'utf8'));
+function readJson<T>(path: string, schema: z.ZodType<T>): T {
+  return schema.parse(JSON.parse(readFileSync(path, 'utf8')));
 }
 
-function missing(error: unknown): boolean {
+function missing<T>(error: T): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT';
 }
 
-function createJson(path: string, value: object): void {
+function createJson<T>(path: string, value: T): void {
   const temporary = `${path}.${randomUUID()}.tmp`;
   writeFileSync(temporary, JSON.stringify(value, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
   try {
@@ -75,7 +75,7 @@ export function localHostId(root: string): string {
   mkdirSync(root, { recursive: true, mode: 0o700 });
   const path = join(root, 'host.json');
   try {
-    return hostSchema.parse(readJson(path)).hostId;
+    return readJson(path, hostSchema).hostId;
   } catch (error) {
     if (!missing(error)) throw error;
   }
@@ -85,7 +85,7 @@ export function localHostId(root: string): string {
     return host.hostId;
   } catch (error) {
     if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
-    return hostSchema.parse(readJson(path)).hostId;
+    return readJson(path, hostSchema).hostId;
   }
 }
 
@@ -97,7 +97,7 @@ export function createBinding(options: {
   const bindingPath = join(repositoryRoot, '.marionette-v1', 'project.json');
   const hostId = localHostId(options.stateRoot);
   try {
-    const binding = bindingSchema.parse(readJson(bindingPath));
+    const binding = readJson(bindingPath, bindingSchema);
     if (binding.hostId !== hostId) throw new Error('Project belongs to another execution host');
     return { binding, bindingPath, session: null };
   } catch (error) {
@@ -123,9 +123,7 @@ export function resolveContext(
   options: { cwd?: string; bindingPath?: string; env?: NodeJS.ProcessEnv } = {},
 ): ResolvedContext {
   const env = options.env ?? process.env;
-  const session = env.MARIONETTE_CONTEXT
-    ? contextSchema.parse(readJson(env.MARIONETTE_CONTEXT))
-    : null;
+  const session = env.MARIONETTE_CONTEXT ? readJson(env.MARIONETTE_CONTEXT, contextSchema) : null;
   let bindingPath = session?.bindingPath ?? options.bindingPath;
   if (!bindingPath) {
     let directory = realpathSync(options.cwd ?? process.cwd());
@@ -144,7 +142,7 @@ export function resolveContext(
       directory = parent;
     }
   }
-  const binding = bindingSchema.parse(readJson(bindingPath));
+  const binding = readJson(bindingPath, bindingSchema);
   if (binding.hostId !== localHostId(stateRoot(env)))
     throw new Error('Project belongs to another execution host');
   if (session && (session.hostId !== binding.hostId || session.projectId !== binding.projectId)) {
@@ -170,4 +168,30 @@ export function writeSessionContext(options: {
   const path = join(directory, `${randomUUID()}.json`);
   createJson(path, context);
   return path;
+}
+
+export function localSessionContext(resolved: ResolvedContext): SessionContext {
+  if (resolved.session) return resolved.session;
+  const path = join(resolved.binding.stateDirectory, 'local-user.json');
+  try {
+    return readJson(path, contextSchema);
+  } catch (error) {
+    if (!missing(error)) throw error;
+  }
+  const session: SessionContext = {
+    version: 1,
+    bindingPath: resolved.bindingPath,
+    projectId: resolved.binding.projectId,
+    hostId: resolved.binding.hostId,
+    sessionId: `user-${randomUUID()}`,
+    generation: 1,
+    token: randomBytes(32).toString('hex'),
+  };
+  try {
+    createJson(path, session);
+    return session;
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+    return readJson(path, contextSchema);
+  }
 }
