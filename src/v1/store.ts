@@ -1928,6 +1928,9 @@ export class Store {
             'Result does not match the current brief revision',
           );
         }
+        if (input.decision.kind === 'accepted') {
+          this.#assertRequiredEvidence(database, recorded);
+        }
         const id = this.#newId('acceptance', z.string().min(1));
         const createdAt = this.#now();
         database
@@ -1962,6 +1965,26 @@ export class Store {
       },
     );
     return { ...result.value, replayed: result.replayed };
+  }
+
+  #assertRequiredEvidence(database: DatabaseSync, result: Result): void {
+    const attempt = this.#requireAttempt(database, result.attemptId);
+    if (attempt.workflowId === null || attempt.stepRunId === null) return;
+    const workflow = this.#requireWorkflow(database, attempt.workflowId);
+    const step = this.#requireStepRun(database, attempt.stepRunId);
+    const packageStep = requireValue(
+      workflow.package.steps.find((candidate) => candidate.name === step.stepName),
+      'invalid-state',
+      `Step ${step.stepName} is missing from its pinned package`,
+    );
+    const claims = new Set(result.evidenceClaims);
+    const missing = packageStep.requiredEvidence.filter((claim) => !claims.has(claim));
+    if (missing.length > 0) {
+      throw new StoreError(
+        'invalid-state',
+        `Result ${result.id} is missing required evidence: ${missing.join(', ')}`,
+      );
+    }
   }
 
   claimAttemptLaunch(input: ClaimAttemptInput): Attempt {

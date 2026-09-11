@@ -483,6 +483,44 @@ test('fences managed admission by workflow and control revision', (t) => {
       }),
     hasCode('stale-revision'),
   );
+  current.store.claimAttemptLaunch({
+    actor: current.controller,
+    attemptId: admitted.attempt.id,
+    expectedBriefRevision: 1,
+    expectedControlRevision: 1,
+    idempotencyKey: 'launch-managed-attempt',
+  });
+  current.store.observeAttemptRunning({
+    actor: current.controller,
+    attemptId: admitted.attempt.id,
+    nativeKind: 'herdr-pane',
+    nativeServerGeneration: 'server-1',
+    nativeLocator: 'managed-pane',
+    idempotencyKey: 'observe-managed-attempt',
+  });
+  const incompleteResult = current.store.recordResult({
+    actor: managedWorker,
+    attemptId: admitted.attempt.id,
+    content: { kind: 'report' },
+    inputDigest: zeroDigest,
+    workspaceDigest: oneDigest,
+    evidenceClaims: [],
+    evidence: [],
+    verification: { kind: 'not-requested' },
+    upstreamResultIds: [],
+    idempotencyKey: 'record-managed-result',
+  });
+  assert.throws(
+    () =>
+      current.store.decideResult({
+        actor: current.controller,
+        resultId: incompleteResult.id,
+        expectedBriefRevision: 1,
+        decision: { kind: 'accepted' },
+        idempotencyKey: 'accept-incomplete-managed-result',
+      }),
+    hasCode('invalid-state'),
+  );
 });
 
 test('reports gated workflow mutations as unavailable', (t) => {
