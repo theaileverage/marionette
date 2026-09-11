@@ -9,6 +9,7 @@ import {
   LocalEndpointInspector,
   type LocalCommandRunner,
   type NativeEffect,
+  type NativeFixtureRecoveryAuthorization,
   type NativeIdentity,
   type NativeJournal,
   type NativeLaunchLocator,
@@ -458,6 +459,83 @@ test('native recovery reopens only an unchanged session locator', async () => {
         .kind,
       'unconfirmed',
     );
+    assert.equal(methods.includes('tab.create'), false);
+    assert.equal(methods.includes('agent.start'), false);
+    assert.equal(methods.includes('agent.prompt'), false);
+    assert.equal(methods.includes('agent.send_keys'), false);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('native fixture adoption pins an observed AGY process after exact caller authorization', async () => {
+  const root = mkdtempSync('/private/tmp/marionette-v1-native-');
+  const socketPath = join(root, 'herdr.sock');
+  const methods: string[] = [];
+  const server = await fakeHerdr(socketPath, (request) => {
+    methods.push(request.method);
+    if (request.method === 'ping')
+      return { type: 'pong', protocol: 22, version: '0.9.0', capabilities: {} };
+    if (request.method === 'workspace.get')
+      return { type: 'workspace_info', workspace: { workspace_id: 'workspace-1' } };
+    if (request.method === 'agent.get') return { type: 'agent_info', agent: agentWithoutSession() };
+    if (request.method === 'pane.process_info')
+      return {
+        type: 'pane_process_info',
+        process_info: {
+          pane_id: 'pane-1',
+          foreground_processes: [{ name: 'agy', argv0: 'agy', pid: 19937 }],
+        },
+      };
+    if (request.method === 'pane.read')
+      return {
+        type: 'pane_read',
+        read: { pane_id: 'pane-1', tab_id: 'tab-1', workspace_id: 'workspace-1', text: '' },
+      };
+    throw new Error(`unexpected ${request.method}`);
+  });
+  try {
+    const processInspector = { async startToken() { return 'process-start-1'; } };
+    const adapter = new HerdrNativeAdapter(
+      journal().value,
+      endpointInspector,
+      undefined,
+      processInspector,
+    );
+    const binding = await adapter.register({
+      hostId: 'host-1',
+      socketPath,
+      workspaceId: 'workspace-1',
+    });
+    assert.ok(!('kind' in binding));
+    if ('kind' in binding) return;
+    const locator: NativeLaunchLocator = {
+      binding,
+      tabId: 'tab-1',
+      paneId: 'pane-1',
+      terminalId: 'terminal-1',
+      agentKind: 'agy',
+      agentName: 'worker',
+      ownedTabId: 'tab-1',
+    };
+    const authorization: NativeFixtureRecoveryAuthorization = {
+      kind: 'explicit-fixture-recovery',
+      ...locator,
+    };
+    const adopted = await adapter.adopt(binding, locator, authorization);
+    assert.equal(adopted.kind, 'settled');
+    if (adopted.kind === 'settled')
+      assert.deepEqual(adopted.identity.foregroundProcess, {
+        pid: 19937,
+        startToken: 'process-start-1',
+      });
+    const requestsBeforeMismatch = methods.length;
+    assert.equal(
+      (await adapter.adopt(binding, locator, { ...authorization, paneId: 'pane-2' })).kind,
+      'unconfirmed',
+    );
+    assert.equal(methods.length, requestsBeforeMismatch);
     assert.equal(methods.includes('tab.create'), false);
     assert.equal(methods.includes('agent.start'), false);
     assert.equal(methods.includes('agent.prompt'), false);

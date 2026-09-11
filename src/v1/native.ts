@@ -117,6 +117,48 @@ export const NativeLaunchLocatorSchema = z
       });
   });
 
+export const NativeAdoptionLocatorSchema = z
+  .object({
+    binding: NativeBindingSchema,
+    tabId: z.string().min(1),
+    paneId: z.string().min(1),
+    terminalId: z.string().min(1),
+    agentKind: z.string().min(1),
+    agentName: z.string().min(1),
+    ownedTabId: z.string().min(1),
+    nativeSession: z.string().min(1).optional(),
+    foregroundProcess: z
+      .object({ pid: z.number().int().positive(), startToken: z.string().min(1) })
+      .strict()
+      .optional(),
+    identityRevision: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+
+export type NativeFixtureRecoveryAuthorization = {
+  kind: 'explicit-fixture-recovery';
+  binding: NativeBinding;
+  tabId: string;
+  paneId: string;
+  terminalId: string;
+  agentKind: string;
+  agentName: string;
+  ownedTabId: string;
+};
+
+export const NativeFixtureRecoveryAuthorizationSchema = z
+  .object({
+    kind: z.literal('explicit-fixture-recovery'),
+    binding: NativeBindingSchema,
+    tabId: z.string().min(1),
+    paneId: z.string().min(1),
+    terminalId: z.string().min(1),
+    agentKind: z.string().min(1),
+    agentName: z.string().min(1),
+    ownedTabId: z.string().min(1),
+  })
+  .strict();
+
 export type NativeEffect =
   | { kind: 'create-tab'; workspaceId: string }
   | { kind: 'start-agent'; paneId: string; agentKind: string }
@@ -321,6 +363,21 @@ function sameBinding(a: NativeBinding, b: NativeBinding) {
   );
 }
 
+function sameFixtureAuthorization(
+  locator: NativeLaunchLocator,
+  authorization: NativeFixtureRecoveryAuthorization,
+) {
+  return (
+    sameBinding(locator.binding, authorization.binding) &&
+    locator.tabId === authorization.tabId &&
+    locator.paneId === authorization.paneId &&
+    locator.terminalId === authorization.terminalId &&
+    locator.agentKind === authorization.agentKind &&
+    locator.agentName === authorization.agentName &&
+    locator.ownedTabId === authorization.ownedTabId
+  );
+}
+
 function manualRequirement(text: string) {
   if (
     /do you trust the contents of this project\?/i.test(text) ||
@@ -469,6 +526,49 @@ export class HerdrNativeAdapter {
       return {
         kind: 'unconfirmed',
         reason: error instanceof Error ? errorText(error) : 'Native recovery failed',
+      };
+    }
+  }
+
+  /**
+   * Adopts a disposable fixture only when its caller has explicitly scoped the target.
+   * It observes the existing pane and never creates or controls it.
+   */
+  async adopt(
+    binding: NativeBinding,
+    locator: NativeLaunchLocator,
+    authorization: NativeFixtureRecoveryAuthorization,
+  ): Promise<NativeObservation> {
+    if (!NativeAdoptionLocatorSchema.safeParse(locator).success)
+      return { kind: 'unconfirmed', reason: 'Native fixture adoption locator is invalid' };
+    if (!NativeFixtureRecoveryAuthorizationSchema.safeParse(authorization).success)
+      return { kind: 'unconfirmed', reason: 'Native fixture adoption authorization is invalid' };
+    if (
+      !sameBinding(binding, locator.binding) ||
+      !sameBinding(binding, authorization.binding) ||
+      locator.ownedTabId !== locator.tabId ||
+      !sameFixtureAuthorization(locator, authorization)
+    )
+      return { kind: 'unconfirmed', reason: 'Native fixture adoption target changed' };
+    try {
+      const client = await this.client(binding);
+      const current = await client.request('agent.get', { target: locator.paneId });
+      if (current.type !== 'agent_info' || !sameAgent(locator, current.agent))
+        return { kind: 'unconfirmed', reason: 'Native fixture agent locator no longer matches' };
+      const identity = await this.identity(
+        client,
+        binding,
+        current.agent,
+        locator,
+        locator.ownedTabId,
+      );
+      if (!identity)
+        return { kind: 'unconfirmed', reason: 'Native fixture agent identity is unavailable' };
+      return this.observe(identity);
+    } catch (error) {
+      return {
+        kind: 'unconfirmed',
+        reason: error instanceof Error ? errorText(error) : 'Native fixture adoption failed',
       };
     }
   }
