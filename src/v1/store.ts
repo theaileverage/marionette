@@ -3,6 +3,7 @@ import { DatabaseSync, type SQLOutputValue } from 'node:sqlite';
 
 import { z } from 'zod';
 
+import { ArtifactFiles } from './artifacts.js';
 import { canonicalJson, openDatabase, payloadDigest } from './database.js';
 import {
   AgentSessionIdSchema,
@@ -502,6 +503,8 @@ const acceptedResultRowSchema = z.object({ decision: z.literal('accepted') });
 const artifactReferenceRowSchema = z.object({
   id: z.string().min(1),
   host_id: HostIdSchema,
+  path: z.string().min(1),
+  byte_length: z.number().int().nonnegative(),
 });
 const sessionIdentitySchema = z.object({
   id: AgentSessionIdSchema,
@@ -555,6 +558,23 @@ function attemptFromRow(raw: SqliteRow): Attempt {
     createdAt: row.created_at,
     settledAt: row.settled_at,
   };
+}
+
+function evidenceArtifactDigests(evidence: readonly Evidence[]): Digest[] {
+  const digests: Digest[] = [];
+  for (const item of evidence) {
+    switch (item.kind) {
+      case 'file':
+        digests.push(item.digest);
+        break;
+      case 'command':
+        digests.push(item.log);
+        break;
+      case 'git-commit':
+        break;
+    }
+  }
+  return digests;
 }
 
 export class Store {
@@ -1783,12 +1803,17 @@ export class Store {
         ) {
           throw new StoreError('permission-denied', 'A worker can record only its assigned result');
         }
-        if (actor.role === 'worker' && actor.state === 'unconfirmed') {
+        if (actor.state !== 'active') {
           throw new StoreError(
             'permission-denied',
-            'An unconfirmed session cannot record a result',
+            'Only an active session can record a new result',
           );
         }
+        if (!['running', 'stopping'].includes(attempt.phase))
+          throw new StoreError(
+            'invalid-state',
+            `Attempt ${attempt.id} is ${attempt.phase} and cannot record a new result`,
+          );
         const job = this.#requireJob(database, attempt.jobId);
         if (job.delivery !== command.content.kind) {
           throw new StoreError('invalid-state', `Job ${job.id} requires a ${job.delivery} result`);
@@ -1810,10 +1835,20 @@ export class Store {
         if (new Set(artifactDigests).size !== artifactDigests.length) {
           throw new StoreError('invalid-state', 'Result artifact digests must be unique');
         }
-        const artifacts = artifactDigests.map((digest) => {
+        const evidenceDigests = [
+          ...evidenceArtifactDigests(command.evidence),
+          ...(command.verification.kind === 'not-requested'
+            ? []
+            : evidenceArtifactDigests(command.verification.checks)),
+        ];
+        const files = new ArtifactFiles(this.project.stateDirectory);
+        const validatedArtifacts = new Map<Digest, z.infer<typeof artifactReferenceRowSchema>>();
+        for (const digest of new Set([...artifactDigests, ...evidenceDigests])) {
           const row = requireValue(
             database
-              .prepare('SELECT id, host_id FROM artifacts WHERE project_id = ? AND digest = ?')
+              .prepare(
+                'SELECT id, host_id, path, byte_length FROM artifacts WHERE project_id = ? AND digest = ?',
+              )
               .get(this.project.id, digest),
             'not-found',
             `Artifact ${digest} was not found`,
@@ -1822,8 +1857,29 @@ export class Store {
           if (artifact.host_id !== attempt.hostId) {
             throw new StoreError('invalid-state', `Artifact ${digest} belongs to another host`);
           }
-          return artifact;
-        });
+          const durable = {
+            digest,
+            byteLength: artifact.byte_length,
+            mediaType: 'application/octet-stream',
+          };
+          if (artifact.path !== files.path(durable))
+            throw new StoreError('invalid-state', `Artifact ${digest} catalog path is not durable`);
+          try {
+            files.verify(durable);
+          } catch (error) {
+            throw new StoreError('invalid-state', `Artifact ${digest} failed its integrity check`, {
+              cause: error,
+            });
+          }
+          validatedArtifacts.set(digest, artifact);
+        }
+        const artifacts = artifactDigests.map((digest) =>
+          requireValue(
+            validatedArtifacts.get(digest),
+            'invalid-state',
+            `Artifact ${digest} did not pass validation`,
+          ),
+        );
         database
           .prepare(
             `INSERT INTO results

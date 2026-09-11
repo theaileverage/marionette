@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
@@ -15,6 +15,7 @@ import {
   WorkflowPackageSnapshotSchema,
   type ProjectBinding,
 } from '../../src/v1/model.js';
+import { ArtifactFiles, registerArtifact } from '../../src/v1/artifacts.js';
 import { Store, StoreError, type AgentSession, type SessionIdentity } from '../../src/v1/store.js';
 
 const zeroDigest = DigestSchema.parse('0'.repeat(64));
@@ -43,7 +44,7 @@ function fixture(t: TestContext): Fixture {
     id: ProjectIdSchema.parse('project_store'),
     hostId: HostIdSchema.parse('host_store'),
     repositoryRoot: '/repo',
-    stateDirectory: '/repo/.marionette',
+    stateDirectory: join(directory, 'state'),
   };
   const store = Store.open({
     databasePath: join(directory, 'state.sqlite'),
@@ -144,6 +145,41 @@ function registerWorker(
     nativeServerGeneration: null,
     nativeLocator: null,
   });
+}
+
+function admitRunningAttempt(
+  current: Fixture,
+  input: { jobKey: string; admissionKey: string; launchKey: string; observationKey: string },
+) {
+  const job = current.store.createJob(
+    directJobInput(current, input.jobKey, `create-${input.jobKey}`),
+  );
+  const admission = current.store.admitAttempt({
+    actor: current.controller,
+    jobId: job.id,
+    session: current.worker,
+    resourceKey: `workspace:${input.jobKey}`,
+    inputResultIds: [],
+    expectedBriefRevision: 1,
+    workflow: { kind: 'direct' },
+    idempotencyKey: input.admissionKey,
+  });
+  current.store.claimAttemptLaunch({
+    actor: current.controller,
+    attemptId: admission.attempt.id,
+    expectedBriefRevision: 1,
+    expectedControlRevision: null,
+    idempotencyKey: input.launchKey,
+  });
+  current.store.observeAttemptRunning({
+    actor: current.controller,
+    attemptId: admission.attempt.id,
+    nativeKind: 'herdr-pane',
+    nativeServerGeneration: 'server-1',
+    nativeLocator: `pane-${input.jobKey}`,
+    idempotencyKey: input.observationKey,
+  });
+  return admission.attempt;
 }
 
 test('binds a database to one project and authenticates immutable session generations', (t) => {
@@ -249,6 +285,130 @@ test('creates jobs idempotently and fences active workspace retirement', (t) => 
   );
 });
 
+test('rejects results whose file or command evidence has no durable artifact', (t) => {
+  const current = fixture(t);
+  const attempt = admitRunningAttempt(current, {
+    jobKey: 'unverified-evidence',
+    admissionKey: 'admit-unverified-evidence',
+    launchKey: 'launch-unverified-evidence',
+    observationKey: 'observe-unverified-evidence',
+  });
+  const missingLog = EvidenceSchema.parse({
+    kind: 'command',
+    argv: ['bun', 'test'],
+    exitCode: 0,
+    log: oneDigest,
+  });
+
+  assert.throws(
+    () =>
+      current.store.recordResult({
+        actor: current.worker,
+        attemptId: attempt.id,
+        content: { kind: 'report', body: 'Tests passed.', artifactDigests: [] },
+        inputDigest: zeroDigest,
+        workspaceDigest: oneDigest,
+        evidenceClaims: ['tests-pass'],
+        evidence: [missingLog],
+        verification: { kind: 'passed', checks: [missingLog] },
+        upstreamResultIds: [],
+        idempotencyKey: 'record-unverified-evidence',
+      }),
+    hasCode('not-found'),
+  );
+  const missingFile = EvidenceSchema.parse({ kind: 'file', path: 'report.md', digest: zeroDigest });
+  assert.throws(
+    () =>
+      current.store.recordResult({
+        actor: current.worker,
+        attemptId: attempt.id,
+        content: { kind: 'report', body: 'Verified report.', artifactDigests: [] },
+        inputDigest: zeroDigest,
+        workspaceDigest: oneDigest,
+        evidenceClaims: ['report-present'],
+        evidence: [],
+        verification: { kind: 'passed', checks: [missingFile] },
+        upstreamResultIds: [],
+        idempotencyKey: 'record-unverified-check',
+      }),
+    hasCode('not-found'),
+  );
+});
+
+test('rejects results whose evidence catalog bytes fail integrity verification', (t) => {
+  const current = fixture(t);
+  const attempt = admitRunningAttempt(current, {
+    jobKey: 'damaged-evidence',
+    admissionKey: 'admit-damaged-evidence',
+    launchKey: 'launch-damaged-evidence',
+    observationKey: 'observe-damaged-evidence',
+  });
+  const files = new ArtifactFiles(current.project.stateDirectory);
+  const artifact = files.put(Buffer.from('original test log'));
+  const digest = DigestSchema.parse(artifact.digest);
+  registerArtifact(current.store, files, artifact);
+  chmodSync(files.path(artifact), 0o600);
+  writeFileSync(files.path(artifact), 'tampered log');
+  const damagedLog = EvidenceSchema.parse({
+    kind: 'command',
+    argv: ['bun', 'test'],
+    exitCode: 0,
+    log: digest,
+  });
+
+  assert.throws(
+    () =>
+      current.store.recordResult({
+        actor: current.worker,
+        attemptId: attempt.id,
+        content: { kind: 'report', body: 'Tests passed.', artifactDigests: [] },
+        inputDigest: zeroDigest,
+        workspaceDigest: oneDigest,
+        evidenceClaims: ['tests-pass'],
+        evidence: [damagedLog],
+        verification: { kind: 'not-requested' },
+        upstreamResultIds: [],
+        idempotencyKey: 'record-damaged-evidence',
+      }),
+    hasCode('invalid-state'),
+  );
+});
+
+test('rejects new worker results after settlement but replays an already recorded result', (t) => {
+  const current = fixture(t);
+  const attempt = admitRunningAttempt(current, {
+    jobKey: 'settled-result',
+    admissionKey: 'admit-settled-result',
+    launchKey: 'launch-settled-result',
+    observationKey: 'observe-settled-result',
+  });
+  const command = {
+    actor: current.worker,
+    attemptId: attempt.id,
+    content: { kind: 'report' as const, body: 'Recorded while running.', artifactDigests: [] },
+    inputDigest: zeroDigest,
+    workspaceDigest: oneDigest,
+    evidenceClaims: [],
+    evidence: [],
+    verification: { kind: 'not-requested' as const },
+    upstreamResultIds: [],
+    idempotencyKey: 'record-before-settlement',
+  };
+  const recorded = current.store.recordResult(command);
+  current.store.settleAttempt({
+    actor: current.controller,
+    attemptId: attempt.id,
+    observation: { kind: 'settled', outcome: 'succeeded', reason: 'Native process exited' },
+    idempotencyKey: 'settle-recorded-result',
+  });
+
+  assert.equal(current.store.recordResult(command).id, recorded.id);
+  assert.throws(
+    () => current.store.recordResult({ ...command, idempotencyKey: 'record-after-settlement' }),
+    hasCode('permission-denied'),
+  );
+});
+
 test('fences attempt launch, persists immutable results, and releases settled resources', (t) => {
   const current = fixture(t);
   const job = current.store.createJob(directJobInput(current, 'job-result', 'create-result-job'));
@@ -308,28 +468,15 @@ test('fences attempt launch, persists immutable results, and releases settled re
     nativeLocator: 'pane-1',
     idempotencyKey: 'observe-result-attempt',
   });
+  const files = new ArtifactFiles(current.project.stateDirectory);
+  const artifact = files.put(Buffer.from('verified command output'));
+  const artifactDigest = DigestSchema.parse(artifact.digest);
+  registerArtifact(current.store, files, artifact);
   const evidence = EvidenceSchema.parse({
     kind: 'command',
     argv: ['bun', 'test'],
     exitCode: 0,
-    log: oneDigest,
-  });
-  current.store.transaction((database) => {
-    database
-      .prepare(
-        `INSERT INTO artifacts
-           (id, project_id, host_id, digest, path, byte_length, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        'artifact_report_attachment',
-        current.project.id,
-        current.project.hostId,
-        oneDigest,
-        '/repo/.marionette/artifacts/report.log',
-        12,
-        new Date().toISOString(),
-      );
+    log: artifactDigest,
   });
   const result = current.store.recordResult({
     actor: current.worker,
@@ -337,10 +484,10 @@ test('fences attempt launch, persists immutable results, and releases settled re
     content: {
       kind: 'report',
       body: 'Implementation completed.',
-      artifactDigests: [oneDigest],
+      artifactDigests: [artifactDigest],
     },
     inputDigest: zeroDigest,
-    workspaceDigest: oneDigest,
+    workspaceDigest: artifactDigest,
     evidenceClaims: ['tests-pass'],
     evidence: [evidence],
     verification: { kind: 'passed', checks: [evidence] },
@@ -405,7 +552,7 @@ test('fences attempt launch, persists immutable results, and releases settled re
   assert.deepEqual(reopened.getResult(result.id).content, {
     kind: 'report',
     body: 'Implementation completed.',
-    artifactDigests: [oneDigest],
+    artifactDigests: [artifactDigest],
   });
 });
 
