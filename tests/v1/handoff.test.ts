@@ -299,6 +299,31 @@ function acceptSourceResult(fixture: Fixture): void {
   });
 }
 
+function supersedeSourceBrief(fixture: Fixture): () => void {
+  const sourceResult = fixture.store.getResult(fixture.resultId);
+  const supersedingBriefId = 'brief_superseding_fixture';
+  fixture.store.transaction((database) => {
+    database
+      .prepare(
+        `INSERT INTO brief_revisions
+           (id, project_id, job_id, revision, prior_brief_id, content_json, change_reason, created_at)
+         SELECT ?, project_id, job_id, 2, id, content_json, 'Fixture supersession', ?
+         FROM brief_revisions WHERE id = ?`,
+      )
+      .run(supersedingBriefId, new Date().toISOString(), sourceResult.briefId);
+    database
+      .prepare('UPDATE jobs SET current_brief_id = ?, current_brief_revision = 2 WHERE id = ?')
+      .run(supersedingBriefId, sourceResult.jobId);
+  });
+  return () => {
+    fixture.store.transaction((database) => {
+      database
+        .prepare('UPDATE jobs SET current_brief_id = ?, current_brief_revision = 1 WHERE id = ?')
+        .run(sourceResult.briefId, sourceResult.jobId);
+    });
+  };
+}
+
 function reservationState(
   fixture: Fixture,
   handoffId: string,
@@ -327,21 +352,7 @@ test('claims only an accepted current result through an attempt on the target wr
     /accepted for the current brief/,
   );
   acceptSourceResult(fixture);
-  const sourceResult = fixture.store.getResult(fixture.resultId);
-  const supersedingBriefId = 'brief_superseding_fixture';
-  fixture.store.transaction((database) => {
-    database
-      .prepare(
-        `INSERT INTO brief_revisions
-           (id, project_id, job_id, revision, prior_brief_id, content_json, change_reason, created_at)
-         SELECT ?, project_id, job_id, 2, id, content_json, 'Fixture supersession', ?
-         FROM brief_revisions WHERE id = ?`,
-      )
-      .run(supersedingBriefId, new Date().toISOString(), sourceResult.briefId);
-    database
-      .prepare('UPDATE jobs SET current_brief_id = ?, current_brief_revision = 2 WHERE id = ?')
-      .run(supersedingBriefId, sourceResult.jobId);
-  });
+  const restoreSourceBrief = supersedeSourceBrief(fixture);
   assert.throws(
     () =>
       fixture.handoffs.claim({
@@ -352,11 +363,7 @@ test('claims only an accepted current result through an attempt on the target wr
       }),
     /accepted for the current brief/,
   );
-  fixture.store.transaction((database) => {
-    database
-      .prepare('UPDATE jobs SET current_brief_id = ?, current_brief_revision = 1 WHERE id = ?')
-      .run(sourceResult.briefId, sourceResult.jobId);
-  });
+  restoreSourceBrief();
   assert.throws(
     () =>
       fixture.handoffs.claim({
@@ -417,6 +424,87 @@ test('claims only an accepted current result through an attempt on the target wr
   assert.equal(claimed.claim_revision, 1);
   assert.equal(claimed.claimed_attempt_id, fixture.targetAttemptId);
   assert.equal(reservationState(fixture, handoff.id), 'held');
+});
+
+test('completes only after the accepted source patch is present in the checked target', (t) => {
+  const fixture = createFixture(t);
+  acceptSourceResult(fixture);
+  const handoff = createHandoff(fixture, 'source-content');
+  fixture.handoffs.claim({
+    handoffId: handoff.id,
+    attemptId: fixture.targetAttemptId,
+    expectedClaimRevision: 0,
+    idempotencyKey: 'claim-source-content',
+  });
+  const checkedWithoutResult = fixture.handoffs.check({
+    handoffId: handoff.id,
+    attemptId: fixture.targetAttemptId,
+    expectedClaimRevision: 1,
+    argv: ['true'],
+    timeoutMs: 30_000,
+    idempotencyKey: 'check-without-source-content',
+  });
+  const emptyTargetCheck = completedCheckSchema.parse(
+    JSON.parse(checkedWithoutResult.checks_json ?? 'null'),
+  );
+  assert.equal(emptyTargetCheck.kind, 'passed');
+  assert.deepEqual(emptyTargetCheck.target, fixture.expectedTarget);
+  assert.throws(
+    () =>
+      fixture.handoffs.complete({
+        handoffId: handoff.id,
+        attemptId: fixture.targetAttemptId,
+        expectedClaimRevision: 1,
+        state: 'integrated',
+        reason: 'The command passed without applying the source result',
+        idempotencyKey: 'reject-absent-source-content',
+      }),
+    /Target does not contain the accepted source patch/,
+  );
+  assert.equal(fixture.handoffs.get(handoff.id).state, 'integrating');
+  assert.equal(reservationState(fixture, handoff.id), 'held');
+
+  git(fixture.repositoryRoot, ['cherry-pick', git(fixture.sourcePath, ['rev-parse', 'HEAD'])]);
+  const integratedTarget = captureGitState(fixture.repositoryRoot);
+  const checkedWithResult = fixture.handoffs.check({
+    handoffId: handoff.id,
+    attemptId: fixture.targetAttemptId,
+    expectedClaimRevision: 1,
+    argv: ['true'],
+    timeoutMs: 30_000,
+    idempotencyKey: 'check-with-source-content',
+  });
+  const integratedCheck = completedCheckSchema.parse(
+    JSON.parse(checkedWithResult.checks_json ?? 'null'),
+  );
+  assert.equal(integratedCheck.kind, 'passed');
+  assert.deepEqual(integratedCheck.target, integratedTarget);
+
+  const restoreSourceBrief = supersedeSourceBrief(fixture);
+  assert.throws(
+    () =>
+      fixture.handoffs.complete({
+        handoffId: handoff.id,
+        attemptId: fixture.targetAttemptId,
+        expectedClaimRevision: 1,
+        state: 'integrated',
+        reason: 'The accepted source revision is no longer current',
+        idempotencyKey: 'reject-stale-source-acceptance',
+      }),
+    /accepted for the current brief/,
+  );
+  restoreSourceBrief();
+  const completed = fixture.handoffs.complete({
+    handoffId: handoff.id,
+    attemptId: fixture.targetAttemptId,
+    expectedClaimRevision: 1,
+    state: 'integrated',
+    reason: 'Accepted source patch is present and target checks passed',
+    idempotencyKey: 'complete-with-source-content',
+  });
+  assert.equal(completed.state, 'integrated');
+  assert.deepEqual(JSON.parse(completed.actual_target_state_json ?? 'null'), integratedTarget);
+  assert.equal(reservationState(fixture, handoff.id), 'released');
 });
 
 test('runs checks on the integrated target and rejects drift during or after a passing check', (t) => {
