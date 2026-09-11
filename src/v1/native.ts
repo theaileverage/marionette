@@ -109,7 +109,11 @@ const execFileAsync = promisify(execFile);
 const localCommandRunner: LocalCommandRunner = {
   async run(command, args) {
     try {
-      const result = await execFileAsync(command, [...args], { encoding: 'utf8' });
+      const result = await execFileAsync(command, [...args], {
+        encoding: 'utf8',
+        timeout: 5_000,
+        maxBuffer: 64 * 1024,
+      });
       return { stdout: result.stdout };
     } catch {
       return undefined;
