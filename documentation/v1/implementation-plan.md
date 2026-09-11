@@ -43,7 +43,7 @@ Report: source-based findings before code delegation.
 
 The isolated rewrite branch targets `1.0.0-alpha.1`. It contains the CLI and SDK, five SQLite migrations, board and SQL operations, pinned workflow packages, native execution journal, background watcher, handoff checks, and protected retirement. Legacy runtime source and its MCP/HTTP/dashboard dependencies have been removed from this branch. Existing main and live state are preserved.
 
-The integrated suite passes 85 tests after review corrections. The actual installed alpha tarball passed SDK/CLI board reads, the SQL worker from an unrelated directory, bundled workflow loading, and declaration checks. The final candidate is verified again through the installed tarball smoke test.
+The integrated suite passes 99 tests after review corrections and CLI contract verification. The actual installed alpha tarball passed SDK/CLI board reads, the SQL worker from an unrelated directory, bundled workflow loading, and declaration checks. The final candidate is verified again through the installed tarball smoke test.
 
 A live AGY fixture accepted one journaled prompt through the Herdr adapter and returned `V1_NATIVE_SMOKE_OK`. Its trust prompt and adoption were explicitly authorized for that fixture. This proves the native prompt path, not the full assignment/revision/control/handoff lifecycle. The fixture was left idle.
 

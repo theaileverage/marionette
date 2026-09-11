@@ -18,13 +18,13 @@ The comment review found no actionable comment or suppression changes. The retai
 
 ## CLI contract
 
-The command registry derives scalar flags from the operation schemas and supplies help and offline introspection metadata. The installed CLI exposes input constraints and output contracts, supports flags or bounded raw JSON without merging them, and keeps machine stdout separate from diagnostics. Human output escapes controls and reports abbreviation. Process validation precedes project connection. Workspace retirement has a local preview that shares retirement checks while skipping native effects and persistent mutation.
+The command registry derives scalar flags from the operation schemas and supplies help and offline introspection metadata. The installed CLI exposes input constraints and output contracts, supports flags or bounded raw JSON without merging them, and keeps machine stdout separate from diagnostics. Human output escapes controls and reports abbreviation. Process validation precedes project connection. Workspace retirement has a local preview that shares retirement checks while skipping native effects and persistent mutation. Its connection opens existing credentials and SQLite read-only; pending migrations or missing setup fail without initialization.
 
 Review corrected explicit machine output being ignored on parser errors, human watcher warnings using JSON, and malformed credential JSON leaking parser excerpts. Context reports credential source and effective scope without exposing the bearer. Non-board list pagination remains a follow-up to preserve the existing complete JSON results.
 
 ## Verification
 
-The integrated Node suite passes 85 tests against temporary SQLite databases, Git worktrees, local Unix sockets, and native protocol fixtures. Type checking, lint, formatting, release metadata, and production build pass. The installed tarball smoke checks CLI/SDK collaboration, an isolated SQL worker from an unrelated directory, workflow resource loading, and public TypeScript declarations.
+The integrated Node suite passes 99 tests against temporary SQLite databases, Git worktrees, local Unix sockets, native protocol fixtures, and real CLI subprocesses/PTYs. The process suite proves flag/JSON parity, pre-connection errors, credential redaction, terminal rendering, and non-mutating retirement previews. Type checking, lint, formatting, release metadata, and production build pass. The installed tarball smoke checks CLI/SDK collaboration, an isolated SQL worker from an unrelated directory, workflow resource loading, and public TypeScript declarations.
 
 A separate live Herdr/AGY fixture returned the requested marker after one adapter prompt. It was left idle. That probe does not prove the complete assignment/revision/control/handoff lifecycle.
 
