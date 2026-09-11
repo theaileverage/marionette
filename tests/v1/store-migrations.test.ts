@@ -71,6 +71,7 @@ if (!isMainThread) {
           [2, '002_workflows'],
           [3, '003_collaboration_handoff'],
           [4, '004_native_runtime'],
+          [5, '005_artifact_media_type'],
         ],
       );
       first.close();
@@ -82,6 +83,39 @@ if (!isMainThread) {
         migrations.length,
       );
       second.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('adds artifact media type without rewriting existing artifact records', () => {
+    const { directory, databasePath } = fixture();
+    try {
+      const previous = openDatabase({
+        path: databasePath,
+        projectId,
+        migrationSet: migrations.slice(0, 4),
+      });
+      previous.prepare('INSERT INTO hosts VALUES (?,?)').run('host', 'now');
+      previous
+        .prepare('INSERT INTO projects VALUES (?,?,?,?,?)')
+        .run(projectId, 'host', directory, directory, 'now');
+      previous
+        .prepare('INSERT INTO artifacts VALUES (?,?,?,?,?,?,?)')
+        .run('artifact', projectId, 'host', 'a'.repeat(64), '/durable/path', 7, 'now');
+      previous.close();
+      const current = openDatabase({ path: databasePath, projectId });
+      try {
+        const artifact = current
+          .prepare('SELECT digest,path,byte_length,media_type FROM artifacts WHERE id=?')
+          .get('artifact');
+        assert.equal(artifact?.digest, 'a'.repeat(64));
+        assert.equal(artifact?.path, '/durable/path');
+        assert.equal(artifact?.byte_length, 7);
+        assert.equal(artifact?.media_type, 'application/octet-stream');
+      } finally {
+        current.close();
+      }
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

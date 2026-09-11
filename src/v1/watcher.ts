@@ -36,12 +36,10 @@ export interface OwnerLivenessPort {
 }
 
 export interface WatcherOptions {
-  readonly automaticPolling?: boolean;
   readonly store: Store;
   readonly deliveryPort: DeliveryPort;
   readonly livenessPort: OwnerLivenessPort;
   readonly processIdentity: string;
-  readonly pollIntervalMs?: number;
   readonly maxDigestSize?: number;
 }
 
@@ -65,7 +63,6 @@ const DeliveryPayloadSchema = z.object({
   sequence: z.number().int().positive(),
 });
 
-const DEFAULT_POLL_INTERVAL_MS = 500;
 const DEFAULT_MAX_DIGEST_SIZE = 10;
 
 function now() {
@@ -94,7 +91,6 @@ export class Watcher {
   readonly #processIdentity: string;
   readonly #maxDigestSize: number;
   #generation: string | null = null;
-  #timer: ReturnType<typeof setInterval> | null = null;
   #polling = false;
 
   private constructor(options: WatcherOptions) {
@@ -111,13 +107,6 @@ export class Watcher {
   static async start(options: WatcherOptions) {
     const watcher = new Watcher(options);
     await watcher.claimOwnership();
-    const interval = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
-    if (!Number.isInteger(interval) || interval < 10)
-      throw new Error('pollIntervalMs must be an integer of at least 10');
-    if (options.automaticPolling !== false) {
-      watcher.#timer = setInterval(() => void watcher.pollOnce(), interval);
-      watcher.#timer.unref();
-    }
     return watcher;
   }
 
@@ -328,8 +317,6 @@ export class Watcher {
   }
 
   stop() {
-    if (this.#timer !== null) clearInterval(this.#timer);
-    this.#timer = null;
     if (this.#generation === null) return;
     this.#store.transaction((db) => {
       const result = db

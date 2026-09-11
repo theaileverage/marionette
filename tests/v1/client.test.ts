@@ -100,6 +100,21 @@ test('managed SDK connection cannot promote a supplied context to a local user',
       }),
     /Invalid session token/,
   );
+  const inherited = process.env.MARIONETTE_CONTEXT;
+  process.env.MARIONETTE_CONTEXT = forged;
+  try {
+    assert.throws(
+      () => Marionette.connect({ cwd: repo, env: { MARIONETTE_STATE_HOME: stateHome } }),
+      /Invalid session token/,
+    );
+    assert.throws(
+      () => Marionette.init({ repositoryRoot: repo, stateHome }),
+      /Managed sessions cannot initialize another project/,
+    );
+  } finally {
+    if (inherited === undefined) delete process.env.MARIONETTE_CONTEXT;
+    else process.env.MARIONETTE_CONTEXT = inherited;
+  }
 });
 
 test('the real watcher settles its ownership before closing on abort', async (t) => {

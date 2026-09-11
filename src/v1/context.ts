@@ -123,7 +123,8 @@ export function resolveContext(
   options: { cwd?: string; bindingPath?: string; env?: NodeJS.ProcessEnv } = {},
 ): ResolvedContext {
   const env = options.env ?? process.env;
-  const session = env.MARIONETTE_CONTEXT ? readJson(env.MARIONETTE_CONTEXT, contextSchema) : null;
+  const inheritedContext = process.env.MARIONETTE_CONTEXT || env.MARIONETTE_CONTEXT;
+  const session = inheritedContext ? readJson(inheritedContext, contextSchema) : null;
   let bindingPath = session?.bindingPath ?? options.bindingPath;
   if (!bindingPath) {
     let directory = realpathSync(options.cwd ?? process.cwd());

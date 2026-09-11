@@ -55,6 +55,13 @@ export const operationSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('workspace.get'), id: WorkspaceIdSchema }).strict(),
   z
     .object({
+      operation: z.literal('workspace.retire'),
+      workspaceId: WorkspaceIdSchema,
+      idempotencyKey: key,
+    })
+    .strict(),
+  z
+    .object({
       operation: z.literal('input.snapshot'),
       path: z.string().min(1),
       name: key,
@@ -251,6 +258,8 @@ export async function execute(client: Marionette, raw: Operation) {
       return client.context();
     case 'workspace.register':
       return client.registerWorkspace(payload(input));
+    case 'workspace.retire':
+      return client.retireWorkspace(payload(input));
     case 'workspace.get':
       return client.workspace(input.id);
     case 'input.snapshot':

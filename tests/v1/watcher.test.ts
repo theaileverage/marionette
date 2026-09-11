@@ -68,7 +68,6 @@ test('watcher checks readiness then acknowledges a durable claimed delivery', as
         },
       },
       processIdentity: 'watcher-one',
-      pollIntervalMs: 60_000,
     });
     try {
       assert.equal(await watcher.pollOnce(), 1);
@@ -116,7 +115,6 @@ test('watcher takeover needs proven former absence and never replays an uncertai
           },
         },
         processIdentity: 'replacement',
-        pollIntervalMs: 60_000,
       }),
       /confirmed former process absence/,
     );
@@ -129,7 +127,6 @@ test('watcher takeover needs proven former absence and never replays an uncertai
         },
       },
       processIdentity: 'replacement',
-      pollIntervalMs: 60_000,
     });
     try {
       assert.equal(
@@ -169,7 +166,6 @@ test('watcher records an unconfirmed outcome when delivery throws after a durabl
         },
       },
       processIdentity: 'failing-watcher',
-      pollIntervalMs: 60_000,
     });
     try {
       assert.equal(await watcher.pollOnce(), 0);

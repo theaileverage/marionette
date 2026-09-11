@@ -5,6 +5,7 @@ import { errorMessage, parseCommand, positiveInteger, printJson, readInput } fro
 import { Marionette } from './client.js';
 import { execute, operationSchema } from './operations.js';
 import { VERSION } from './version.js';
+import { operationDescriptions } from './schema.js';
 
 const help = `Marionette v1
 
@@ -12,7 +13,7 @@ const help = `Marionette v1
   marionette context [--project BINDING_FILE]
   marionette <group> <action> --input FILE
   marionette exec --input FILE
-  marionette schema
+  marionette schema [OPERATION]
   marionette watch [--stop-after MILLISECONDS]
 
 Input is JSON. Use --input - for stdin. All results are JSON.
@@ -20,7 +21,7 @@ For group/action commands, omit the operation field from input.
 For exec, include an operation such as "board.post" or "job.create".
 Managed agents inherit their project and session from MARIONETTE_CONTEXT.
 
-Groups: workspace, input, job, workflow, attempt, brief, result, board, sql, profile
+Groups: workspace, input, job, workflow, attempt, brief, result, handoff, board, sql, profile, native
 Use marionette schema to list supported operations.
 `;
 
@@ -36,9 +37,12 @@ async function main() {
     return;
   }
   if (command === 'schema') {
-    printJson({
-      operations: operationSchema.options.map((option) => option.shape.operation.value),
-    });
+    const descriptions = operationDescriptions();
+    const selected = action
+      ? descriptions.filter((item) => item.operation === action)
+      : descriptions;
+    if (selected.length === 0) throw new Error(`Unknown operation: ${action}`);
+    printJson({ operations: selected });
     return;
   }
   if (command === 'init') {

@@ -227,7 +227,26 @@ export function openDatabase(options: OpenDatabaseOptions): DatabaseSync {
   });
   try {
     database.function('marionette_project_id', { deterministic: true }, () => options.projectId);
-    database.exec('PRAGMA journal_mode = WAL');
+    const deadline = performance.now() + (options.busyTimeoutMs ?? 5_000);
+    const pause = new Int32Array(new SharedArrayBuffer(4));
+    for (;;) {
+      try {
+        database.exec('PRAGMA journal_mode = WAL');
+        break;
+      } catch (error) {
+        if (
+          !(
+            error instanceof Error &&
+            'errcode' in error &&
+            typeof error.errcode === 'number' &&
+            (error.errcode & 255) === 5
+          ) ||
+          performance.now() >= deadline
+        )
+          throw error;
+        Atomics.wait(pause, 0, 0, Math.min(10, Math.max(0, deadline - performance.now())));
+      }
+    }
     database.exec('PRAGMA synchronous = FULL');
     database.exec('PRAGMA foreign_keys = ON');
     applyMigrations(database, options.migrationSet ?? migrations);

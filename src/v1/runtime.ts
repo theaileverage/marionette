@@ -423,8 +423,7 @@ export class Runtime {
 
   async reconcile(id: AttemptId) {
     const observed = await this.inspect(id);
-    if (['settled', 'closed', 'unconfirmed'].includes(observed.attempt.phase))
-      return observed;
+    if (['settled', 'closed', 'unconfirmed'].includes(observed.attempt.phase)) return observed;
     if (observed.native.kind === 'working') {
       if (this.row(id).phase === 'prompt-claimed') this.update(id, 'active');
       return observed;

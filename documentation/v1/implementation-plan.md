@@ -1,15 +1,15 @@
 # Marionette v1 implementation
 
 - [x] Read the Principles section of poteto-mode in full.
-- [ ] Phase A: Frame.
-- [ ] Phase B: Design the workflow.
+- [x] Phase A: Frame.
+- [x] Phase B: Design the workflow.
 - [ ] Phase C: Run the loop.
-- [ ] Unit 1: Transactional SQLite migrations, identities, immutable inputs and real database verification.
-- [ ] Unit 2: Shared CLI/SDK operations, project binding, board and controlled SQL.
+- [x] Unit 1: Transactional SQLite migrations, identities, immutable inputs and real database verification.
+- [x] Unit 2: Shared CLI/SDK operations, project binding, board and controlled SQL.
 - [ ] Unit 3: Herdr worker launch, observation, control and recovery; verify real adapter behavior.
 - [ ] Unit 4: Pinned pstack workflow transitions, instruction revisions and descendant controls.
 - [ ] Unit 5: Watcher, native delivery, result handoff and protected cleanup.
-- [ ] Unit 6: Remove legacy runtime, build and package v1.0, complete actual CLI and native acceptance checks.
+- [ ] Unit 6: Remove legacy runtime, build and package 1.0.0-alpha.1, complete actual CLI and native acceptance checks.
 - [ ] Phase D: Keep the audit trail throughout every unit.
 - [ ] Phase E: Verify and hand back.
 
@@ -38,3 +38,17 @@ Frame: identify reusable native SDK and constraints on migrations/packaging.
 Fan out: two read-only source explorers on the available configured model.
 Aggregate: record interfaces and risk probes in the implementation contract.
 Report: source-based findings before code delegation.
+
+## Alpha integration status
+
+The isolated rewrite branch targets `1.0.0-alpha.1`. It contains the CLI and SDK, five SQLite migrations, board and SQL operations, pinned workflow packages, native execution journal, background watcher, handoff checks, and protected retirement. Legacy runtime source and its MCP/HTTP/dashboard dependencies have been removed from this branch. Existing main and live state are preserved.
+
+The integrated suite passed 74 tests before final review corrections. The actual installed alpha tarball passed SDK/CLI board reads, the SQL worker from an unrelated directory, bundled workflow loading, and declaration checks. These checks will be rerun after final review fixes.
+
+A live AGY fixture accepted one journaled prompt through the Herdr adapter and returned `V1_NATIVE_SMOKE_OK`. Its trust prompt and adoption were explicitly authorized for that fixture. This proves the native prompt path, not the full assignment/revision/control/handoff lifecycle. The fixture was left idle.
+
+The current desktop-owned Codex app-server has private stdio and no reachable registered endpoint. Desktop notifications are unavailable in this environment. No substitute app-server was used as evidence.
+
+Unit 4 remains blocked on the pending source-implementation authorization following automatic approval review rejection. Its stubs reject brief revisions, workflow transitions, pause/cancel/resume, and limit changes. Automatic workflow scheduling depends on those operations. Alpha naming does not count as completing that scope.
+
+Remaining acceptance work includes the complete native assignment lifecycle, automatic workflow progression and controls, and final integration review. No version tag, npm publication, or stable-release claim has been made.

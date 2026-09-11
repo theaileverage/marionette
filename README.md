@@ -16,6 +16,7 @@ This branch prepares **1.0.0-alpha.1**. It is a breaking rewrite. Existing Mario
 marionette init --project /absolute/path/to/repository
 marionette context
 marionette schema
+marionette schema board.post
 ```
 
 Initialization writes `.marionette-v1/project.json` inside the repository. SQLite and durable artifacts live under the configured state home. Set `MARIONETTE_STATE_HOME` or pass `--state-home` during initialization to choose it.
@@ -91,6 +92,14 @@ The runtime journals launch and prompt claims. A crash after a claim leaves the 
 The CLI starts a local background watcher after relevant runtime and board operations. SDK callers can call `ensureWatcher()` explicitly. `marionette watch --stop-after 5000` runs a bounded foreground watcher. Uncertain delivery is retained for reconciliation rather than automatically repeated.
 
 Desktop notification support requires a reachable endpoint for the actual desktop-owned Codex app-server. The current local desktop uses private stdio, so delivery to it is unavailable. The board remains readable. A separately started app-server would not establish access to that desktop task.
+
+## Handoff and retirement
+
+A controller creates a handoff for an accepted patch or commit result, then assigns its claim to a running integrator on the exact target write workspace. The integrator uses native Git. Handoff checks capture the resulting target state and reject drift during checks or before completion.
+
+Integration completion requires a durable `text/x-diff` artifact whose changes are present in the target. If conflict resolution changes those edits, record and accept the revised result before completion. A passing command alone does not prove that a source patch was applied.
+
+`workspace.retire` checks consumers, unresolved handoffs, Git state, and durable evidence before removal. Uncertain native cleanup claims are retained without resending. Sessions already recorded as settled are released consumers; this alpha can leave their idle native tabs open.
 
 ## Workflow packages
 

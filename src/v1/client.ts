@@ -25,6 +25,7 @@ import { Settings, profileSchema } from './settings.js';
 import { SqlQueryService, type SqlRead } from './sql.js';
 import { Runtime } from './runtime.js';
 import { Handoffs } from './handoff.js';
+import { retireRuntimeWorkspace } from './runtime-retirement.js';
 import { Watcher } from './watcher.js';
 import { NativeBoardDelivery } from './delivery.js';
 import {
@@ -113,6 +114,8 @@ export class Marionette {
   }
 
   static init(options: { repositoryRoot: string; stateHome?: string }): Marionette {
+    if (process.env.MARIONETTE_CONTEXT)
+      throw new Error('Managed sessions cannot initialize another project');
     return new Marionette(
       createBinding({
         repositoryRoot: options.repositoryRoot,
@@ -155,6 +158,14 @@ export class Marionette {
   registerWorkspace(input: Omit<RegisterWorkspaceInput, 'actor'>) {
     this.#authenticate();
     return this.#store.registerWorkspace({ ...input, actor: this.#identity });
+  }
+
+  retireWorkspace(input: {
+    workspaceId: z.infer<typeof WorkspaceIdSchema>;
+    idempotencyKey: string;
+  }) {
+    this.#authenticate();
+    return retireRuntimeWorkspace({ ...input, store: this.#store, actor: this.#identity });
   }
 
   workspace(id: string) {
@@ -333,7 +344,6 @@ export class Marionette {
       deliveryPort: new NativeBoardDelivery(this.#store),
       livenessPort: localOwnerLiveness,
       processIdentity: await currentProcessIdentity(),
-      automaticPolling: false,
     });
     const generation = watcher.generation;
     let polling = false;
@@ -412,7 +422,7 @@ export class Marionette {
   }
 
   claimHandoff(input: Parameters<Handoffs['claim']>[0]) {
-    return this.#handoffs(input.attemptId).claim(input);
+    return this.#handoffs().claim(input);
   }
 
   checkHandoff(input: Parameters<Handoffs['check']>[0]) {

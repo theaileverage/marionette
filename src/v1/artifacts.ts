@@ -99,19 +99,32 @@ export function registerArtifact(
   files.verify(artifact);
   return store.transaction((db) => {
     const previous = db
-      .prepare('SELECT id, path, byte_length FROM artifacts WHERE project_id = ? AND digest = ?')
+      .prepare(
+        'SELECT id, path, byte_length, media_type FROM artifacts WHERE project_id = ? AND digest = ?',
+      )
       .get(store.project.id, artifact.digest);
     if (previous) {
       const row = z
-        .object({ id: ArtifactIdSchema, path: z.string(), byte_length: z.number() })
+        .object({
+          id: ArtifactIdSchema,
+          path: z.string(),
+          byte_length: z.number(),
+          media_type: z.string(),
+        })
         .parse(previous);
       if (row.path !== files.path(artifact) || row.byte_length !== artifact.byteLength)
         throw new Error('Artifact catalog does not match durable bytes');
+      if (row.media_type === 'application/octet-stream' && artifact.mediaType !== row.media_type)
+        db.prepare('UPDATE artifacts SET media_type=? WHERE id=? AND project_id=?').run(
+          artifact.mediaType,
+          row.id,
+          store.project.id,
+        );
       return row.id;
     }
     const id = ArtifactIdSchema.parse(randomUUID());
     db.prepare(
-      'INSERT INTO artifacts(id, project_id, host_id, digest, path, byte_length, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO artifacts(id, project_id, host_id, digest, path, byte_length, media_type, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     ).run(
       id,
       store.project.id,
@@ -119,6 +132,7 @@ export function registerArtifact(
       artifact.digest,
       files.path(artifact),
       artifact.byteLength,
+      artifact.mediaType,
       new Date().toISOString(),
     );
     return id;

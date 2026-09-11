@@ -163,8 +163,8 @@ test('graphics streams preserve bytes and correlate immutable file-frame acknowl
           file.resolve(header);
           reply(socket, `${request.id}:file:${header.sequence}`, {
             type: 'pane_graphics_frame_ack',
-            sequence: header.sequence,
-            revision: header.revision,
+            sequence: z.number().parse(header.sequence),
+            revision: z.number().parse(header.revision),
           });
         } else {
           if (header.data_length === undefined || input.length < header.data_length) return;

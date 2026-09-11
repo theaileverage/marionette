@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { Store } from './store.js';
 import { ArtifactFiles, artifactSchema } from './artifacts.js';
 import { assertGitState, captureGitState, gitStateSchema } from './git.js';
+import { ResultIdSchema } from './model.js';
 
 const handoffRow = z.object({
   id: z.string(),
@@ -193,15 +194,7 @@ export class Handoffs {
       if (handoff.claim_revision !== input.expectedClaimRevision || handoff.state !== 'pending')
         throw new Error('Handoff claim is stale or needs reconciliation');
       this.assertIntegrator(db, input.attemptId, handoff.target_workspace_id);
-      const accepted = db
-        .prepare(
-          `SELECT 1 FROM result_acceptances a JOIN result_validity v ON v.result_id = a.result_id
-        JOIN results r ON r.id = a.result_id JOIN jobs j ON j.id = r.job_id
-        WHERE a.project_id = ? AND a.result_id = ? AND a.decision = 'accepted' AND v.state = 'eligible' AND a.brief_id = j.current_brief_id`,
-        )
-        .get(this.store.project.id, handoff.result_id);
-      if (!accepted)
-        throw new Error('Source result must be accepted for the current brief before integration');
+      this.assertAccepted(db, handoff.result_id);
       this.verifyArtifacts(db, handoff.result_id);
       assertGitState(gitStateSchema.parse(JSON.parse(handoff.expected_target_state_json)));
       const revision = handoff.claim_revision + 1;
@@ -226,6 +219,62 @@ export class Handoffs {
       ).run(revision, input.attemptId, claimId, now, handoff.id);
       return this.getIn(db, handoff.id);
     });
+  }
+
+  private assertAccepted(db: DatabaseSync, resultId: string): void {
+    const accepted = db
+      .prepare(
+        `SELECT 1 FROM result_acceptances a JOIN result_validity v ON v.result_id = a.result_id
+        JOIN results r ON r.id = a.result_id JOIN jobs j ON j.id = r.job_id
+        WHERE a.project_id = ? AND a.result_id = ? AND a.decision = 'accepted' AND v.state = 'eligible' AND a.brief_id = j.current_brief_id`,
+      )
+      .get(this.store.project.id, resultId);
+    if (!accepted)
+      throw new Error('Source result must be accepted for the current brief before integration');
+  }
+
+  private assertApplied(db: DatabaseSync, handoff: Handoff, targetPath: string): void {
+    const result = this.store.getResult(ResultIdSchema.parse(handoff.result_id));
+    const rows = db
+      .prepare(
+        'SELECT a.digest,a.byte_length,a.media_type FROM artifacts a JOIN result_artifacts r ON r.artifact_id=a.id WHERE a.project_id=? AND r.result_id=?',
+      )
+      .all(this.store.project.id, handoff.result_id);
+    const patches = rows
+      .map((row) =>
+        z
+          .object({ digest: z.string(), byte_length: z.number(), media_type: z.string() })
+          .parse(row),
+      )
+      .filter(
+        (artifact) =>
+          artifact.media_type === 'text/x-diff' &&
+          result.content.artifactDigests.some((digest) => digest === artifact.digest),
+      );
+    if (patches.length === 0)
+      throw new Error(
+        'Integration requires a durable source patch artifact with media type text/x-diff',
+      );
+    for (const patch of patches) {
+      const applied = spawnSync(
+        'git',
+        ['-C', targetPath, 'apply', '--reverse', '--check', '--whitespace=nowarn', '-'],
+        {
+          input: this.artifacts.read({
+            digest: patch.digest,
+            byteLength: patch.byte_length,
+            mediaType: patch.media_type,
+          }),
+          env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
+          timeout: 30_000,
+          maxBuffer: 1024 * 1024,
+        },
+      );
+      if (applied.error || applied.status !== 0)
+        throw new Error(
+          'Target does not contain the accepted source patch; reconcile the integration before completion',
+        );
+    }
   }
 
   private assertIntegrator(db: DatabaseSync, attemptId: string, targetWorkspaceId: string): void {
@@ -343,10 +392,13 @@ export class Handoffs {
       if (input.state === 'integrated')
         this.assertIntegrator(db, input.attemptId, handoff.target_workspace_id);
       if (input.state === 'integrated') {
+        this.assertAccepted(db, handoff.result_id);
         const check = checkRecord.parse(JSON.parse(handoff.checks_json ?? 'null'));
         if (check.kind !== 'passed' || check.exitCode !== 0 || !check.log)
           throw new Error('Integrated handoffs require successful target checks');
         this.artifacts.verify(check.log);
+        assertGitState(check.target);
+        this.assertApplied(db, handoff, check.target.repositoryRoot);
         assertGitState(check.target);
       }
       const expected = gitStateSchema.parse(JSON.parse(handoff.expected_target_state_json));
