@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,7 +43,7 @@ export function smokePackage(tarball) {
   const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
   const archive = resolve(tarball);
   assert.ok(existsSync(archive), `Package tarball does not exist: ${archive}`);
-  const directory = mkdtempSync(join(tmpdir(), 'marionette-v1-package-'));
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'marionette-v1-package-')));
   try {
     writeFileSync(
       join(directory, 'package.json'),

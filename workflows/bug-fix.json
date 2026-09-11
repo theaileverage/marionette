@@ -25,13 +25,8 @@
         "control-ui/SKILL.md"
       ],
       "outputContract": "Observed failing reproduction on the matching runtime.",
-      "permittedMethods": [
-        "control-cli",
-        "control-ui"
-      ],
-      "requiredEvidence": [
-        "failing-reproduction"
-      ]
+      "permittedMethods": ["control-cli", "control-ui"],
+      "requiredEvidence": ["failing-reproduction"]
     },
     {
       "name": "diagnose",
@@ -42,13 +37,8 @@
         "why/SKILL.md"
       ],
       "outputContract": "Runtime evidence confirming the causal mechanism.",
-      "permittedMethods": [
-        "how",
-        "why"
-      ],
-      "requiredEvidence": [
-        "root-cause"
-      ]
+      "permittedMethods": ["how", "why"],
+      "requiredEvidence": ["root-cause"]
     },
     {
       "name": "design",
@@ -58,28 +48,16 @@
         "architect/SKILL.md"
       ],
       "outputContract": "Design artifact with alternatives, selected structure, and rationale.",
-      "permittedMethods": [
-        "architect"
-      ],
-      "requiredEvidence": [
-        "design-artifact"
-      ],
+      "permittedMethods": ["architect"],
+      "requiredEvidence": ["design-artifact"],
       "stopBoundary": "design"
     },
     {
       "name": "implement",
-      "resources": [
-        "poteto-mode/SKILL.md",
-        "poteto-mode/playbooks/bug-fix.md",
-        "arena/SKILL.md"
-      ],
+      "resources": ["poteto-mode/SKILL.md", "poteto-mode/playbooks/bug-fix.md", "arena/SKILL.md"],
       "outputContract": "Scoped artifact with source state, changed paths, and digests.",
-      "permittedMethods": [
-        "arena"
-      ],
-      "requiredEvidence": [
-        "artifact-digest"
-      ]
+      "permittedMethods": ["arena"],
+      "requiredEvidence": ["artifact-digest"]
     },
     {
       "name": "review",
@@ -90,13 +68,8 @@
         "interrogate/SKILL.md"
       ],
       "outputContract": "Independent review verdict tied to the exact implementation artifact.",
-      "permittedMethods": [
-        "code-review",
-        "interrogate"
-      ],
-      "requiredEvidence": [
-        "independent-review"
-      ],
+      "permittedMethods": ["code-review", "interrogate"],
+      "requiredEvidence": ["independent-review"],
       "requiresDistinctRole": true
     },
     {
@@ -108,25 +81,15 @@
         "control-ui/SKILL.md"
       ],
       "outputContract": "Checks and runtime evidence against the reviewed artifact.",
-      "permittedMethods": [
-        "control-cli",
-        "control-ui"
-      ],
-      "requiredEvidence": [
-        "verification"
-      ]
+      "permittedMethods": ["control-cli", "control-ui"],
+      "requiredEvidence": ["verification"]
     },
     {
       "name": "handoff",
-      "resources": [
-        "poteto-mode/SKILL.md",
-        "poteto-mode/playbooks/bug-fix.md"
-      ],
+      "resources": ["poteto-mode/SKILL.md", "poteto-mode/playbooks/bug-fix.md"],
       "outputContract": "Resolved delivery with retained or integrated artifact evidence for the requested outcome.",
       "permittedMethods": [],
-      "requiredEvidence": [
-        "handoff"
-      ]
+      "requiredEvidence": ["handoff"]
     }
   ],
   "transitions": [
@@ -151,10 +114,7 @@
     {
       "from": "reproduce",
       "kind": "route",
-      "routes": [
-        "control-cli",
-        "control-ui"
-      ]
+      "routes": ["control-cli", "control-ui"]
     },
     {
       "from": "reproduce",
@@ -181,10 +141,7 @@
     {
       "from": "diagnose",
       "kind": "route",
-      "routes": [
-        "how",
-        "why"
-      ]
+      "routes": ["how", "why"]
     },
     {
       "from": "diagnose",
@@ -211,9 +168,7 @@
     {
       "from": "design",
       "kind": "route",
-      "routes": [
-        "architect"
-      ]
+      "routes": ["architect"]
     },
     {
       "from": "design",
@@ -240,9 +195,7 @@
     {
       "from": "implement",
       "kind": "route",
-      "routes": [
-        "arena"
-      ]
+      "routes": ["arena"]
     },
     {
       "from": "implement",
@@ -269,10 +222,7 @@
     {
       "from": "review",
       "kind": "route",
-      "routes": [
-        "code-review",
-        "interrogate"
-      ]
+      "routes": ["code-review", "interrogate"]
     },
     {
       "from": "review",
@@ -299,10 +249,7 @@
     {
       "from": "verify",
       "kind": "route",
-      "routes": [
-        "control-cli",
-        "control-ui"
-      ]
+      "routes": ["control-cli", "control-ui"]
     },
     {
       "from": "verify",
@@ -348,9 +295,7 @@
     "deadlineMs": 3600000,
     "innerLoopDeadlineMs": 600000
   },
-  "stopBoundaries": [
-    "design"
-  ],
+  "stopBoundaries": ["design"],
   "constraints": {
     "independentReview": true,
     "successRequires": "handoff",

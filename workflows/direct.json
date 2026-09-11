@@ -18,27 +18,17 @@
   "steps": [
     {
       "name": "direct",
-      "resources": [
-        "poteto-mode/SKILL.md",
-        "poteto-mode/SKILL.md"
-      ],
+      "resources": ["poteto-mode/SKILL.md", "poteto-mode/SKILL.md"],
       "outputContract": "Scoped routine work with artifact evidence.",
       "permittedMethods": [],
-      "requiredEvidence": [
-        "artifact-digest"
-      ]
+      "requiredEvidence": ["artifact-digest"]
     },
     {
       "name": "handoff",
-      "resources": [
-        "poteto-mode/SKILL.md",
-        "poteto-mode/SKILL.md"
-      ],
+      "resources": ["poteto-mode/SKILL.md", "poteto-mode/SKILL.md"],
       "outputContract": "Resolved delivery with retained or integrated artifact evidence for the requested outcome.",
       "permittedMethods": [],
-      "requiredEvidence": [
-        "handoff"
-      ]
+      "requiredEvidence": ["handoff"]
     }
   ],
   "transitions": [

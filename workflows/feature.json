@@ -18,18 +18,10 @@
   "steps": [
     {
       "name": "ground",
-      "resources": [
-        "poteto-mode/SKILL.md",
-        "poteto-mode/playbooks/feature.md",
-        "how/SKILL.md"
-      ],
+      "resources": ["poteto-mode/SKILL.md", "poteto-mode/playbooks/feature.md", "how/SKILL.md"],
       "outputContract": "Traced subsystem model and relevant constraints.",
-      "permittedMethods": [
-        "how"
-      ],
-      "requiredEvidence": [
-        "subsystem-trace"
-      ]
+      "permittedMethods": ["how"],
+      "requiredEvidence": ["subsystem-trace"]
     },
     {
       "name": "design",
@@ -39,28 +31,16 @@
         "architect/SKILL.md"
       ],
       "outputContract": "Design artifact with alternatives, selected structure, and rationale.",
-      "permittedMethods": [
-        "architect"
-      ],
-      "requiredEvidence": [
-        "design-artifact"
-      ],
+      "permittedMethods": ["architect"],
+      "requiredEvidence": ["design-artifact"],
       "stopBoundary": "design"
     },
     {
       "name": "implement",
-      "resources": [
-        "poteto-mode/SKILL.md",
-        "poteto-mode/playbooks/feature.md",
-        "arena/SKILL.md"
-      ],
+      "resources": ["poteto-mode/SKILL.md", "poteto-mode/playbooks/feature.md", "arena/SKILL.md"],
       "outputContract": "Scoped artifact with source state, changed paths, and digests.",
-      "permittedMethods": [
-        "arena"
-      ],
-      "requiredEvidence": [
-        "artifact-digest"
-      ]
+      "permittedMethods": ["arena"],
+      "requiredEvidence": ["artifact-digest"]
     },
     {
       "name": "review",
@@ -71,13 +51,8 @@
         "interrogate/SKILL.md"
       ],
       "outputContract": "Independent review verdict tied to the exact implementation artifact.",
-      "permittedMethods": [
-        "code-review",
-        "interrogate"
-      ],
-      "requiredEvidence": [
-        "independent-review"
-      ],
+      "permittedMethods": ["code-review", "interrogate"],
+      "requiredEvidence": ["independent-review"],
       "requiresDistinctRole": true
     },
     {
@@ -89,25 +64,15 @@
         "control-ui/SKILL.md"
       ],
       "outputContract": "Checks and runtime evidence against the reviewed artifact.",
-      "permittedMethods": [
-        "control-cli",
-        "control-ui"
-      ],
-      "requiredEvidence": [
-        "verification"
-      ]
+      "permittedMethods": ["control-cli", "control-ui"],
+      "requiredEvidence": ["verification"]
     },
     {
       "name": "handoff",
-      "resources": [
-        "poteto-mode/SKILL.md",
-        "poteto-mode/playbooks/feature.md"
-      ],
+      "resources": ["poteto-mode/SKILL.md", "poteto-mode/playbooks/feature.md"],
       "outputContract": "Resolved delivery with retained or integrated artifact evidence for the requested outcome.",
       "permittedMethods": [],
-      "requiredEvidence": [
-        "handoff"
-      ]
+      "requiredEvidence": ["handoff"]
     }
   ],
   "transitions": [
@@ -132,9 +97,7 @@
     {
       "from": "ground",
       "kind": "route",
-      "routes": [
-        "how"
-      ]
+      "routes": ["how"]
     },
     {
       "from": "ground",
@@ -161,9 +124,7 @@
     {
       "from": "design",
       "kind": "route",
-      "routes": [
-        "architect"
-      ]
+      "routes": ["architect"]
     },
     {
       "from": "design",
@@ -190,9 +151,7 @@
     {
       "from": "implement",
       "kind": "route",
-      "routes": [
-        "arena"
-      ]
+      "routes": ["arena"]
     },
     {
       "from": "implement",
@@ -219,10 +178,7 @@
     {
       "from": "review",
       "kind": "route",
-      "routes": [
-        "code-review",
-        "interrogate"
-      ]
+      "routes": ["code-review", "interrogate"]
     },
     {
       "from": "review",
@@ -249,10 +205,7 @@
     {
       "from": "verify",
       "kind": "route",
-      "routes": [
-        "control-cli",
-        "control-ui"
-      ]
+      "routes": ["control-cli", "control-ui"]
     },
     {
       "from": "verify",
@@ -298,9 +251,7 @@
     "deadlineMs": 3600000,
     "innerLoopDeadlineMs": 600000
   },
-  "stopBoundaries": [
-    "design"
-  ],
+  "stopBoundaries": ["design"],
   "constraints": {
     "independentReview": true,
     "successRequires": "handoff",

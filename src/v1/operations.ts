@@ -16,6 +16,7 @@ import {
   WorkspaceIdSchema,
 } from './model.js';
 import { profileSchema } from './settings.js';
+import { handoffSchemas } from './handoff.js';
 
 const key = z.string().min(1);
 const page = { cursor: z.string().optional(), limit: z.number().int().min(1).max(200).optional() };
@@ -30,6 +31,14 @@ const jobInput = {
 
 export const operationSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('context') }).strict(),
+  z.object({ operation: z.literal('handoff.get'), id: key }).strict(),
+  handoffSchemas.create.extend({ operation: z.literal('handoff.create') }),
+  handoffSchemas.claim.extend({ operation: z.literal('handoff.claim') }),
+  handoffSchemas.check.extend({ operation: z.literal('handoff.check') }),
+  handoffSchemas.complete.extend({ operation: z.literal('handoff.complete') }),
+  handoffSchemas.resolve.extend({ operation: z.literal('handoff.resolve') }),
+  handoffSchemas.replan.extend({ operation: z.literal('handoff.replan') }),
+
   z
     .object({
       operation: z.literal('workspace.register'),
@@ -224,6 +233,20 @@ function payload<T extends { operation: string }>(input: T): Omit<T, 'operation'
 export async function execute(client: Marionette, raw: Operation) {
   const input = operationSchema.parse(raw);
   switch (input.operation) {
+    case 'handoff.get':
+      return client.handoff(input.id);
+    case 'handoff.create':
+      return client.createHandoff(payload(input));
+    case 'handoff.claim':
+      return client.claimHandoff(payload(input));
+    case 'handoff.check':
+      return client.checkHandoff(payload(input));
+    case 'handoff.complete':
+      return client.completeHandoff(payload(input));
+    case 'handoff.resolve':
+      return client.resolveHandoff(payload(input));
+    case 'handoff.replan':
+      return client.replanHandoff(payload(input));
     case 'context':
       return client.context();
     case 'workspace.register':

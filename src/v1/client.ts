@@ -24,6 +24,7 @@ import { loadPackage, route } from './packages.js';
 import { Settings, profileSchema } from './settings.js';
 import { SqlQueryService, type SqlRead } from './sql.js';
 import { Runtime } from './runtime.js';
+import { Handoffs } from './handoff.js';
 import { Watcher } from './watcher.js';
 import { NativeBoardDelivery } from './delivery.js';
 import {
@@ -392,6 +393,42 @@ export class Marionette {
       if (options.signal.aborted) requestStop();
     });
     return { stopped: true, generation };
+  }
+
+  #handoffs(attemptId?: string) {
+    const session = this.#authenticate();
+    if (session.role === 'worker' && (!attemptId || session.attemptId !== attemptId))
+      throw new Error('Workers may only act on their own integrator attempt');
+    return new Handoffs(this.#store, this.#files);
+  }
+
+  handoff(id: string) {
+    this.#authenticate();
+    return new Handoffs(this.#store, this.#files).get(id);
+  }
+
+  createHandoff(input: Parameters<Handoffs['create']>[0]) {
+    return this.#handoffs().create(input);
+  }
+
+  claimHandoff(input: Parameters<Handoffs['claim']>[0]) {
+    return this.#handoffs(input.attemptId).claim(input);
+  }
+
+  checkHandoff(input: Parameters<Handoffs['check']>[0]) {
+    return this.#handoffs(input.attemptId).check(input);
+  }
+
+  completeHandoff(input: Parameters<Handoffs['complete']>[0]) {
+    return this.#handoffs(input.attemptId).complete(input);
+  }
+
+  resolveHandoff(input: Parameters<Handoffs['resolve']>[0]) {
+    return this.#handoffs().resolve(input);
+  }
+
+  replanHandoff(input: Parameters<Handoffs['replan']>[0]) {
+    return this.#handoffs().replan(input);
   }
 
   profiles() {

@@ -6,14 +6,32 @@ import { fileURLToPath } from 'node:url';
 const destination = dirname(fileURLToPath(import.meta.url));
 const sourceRoot = resolve(process.argv[2] ?? '.agents/skills');
 const licensePath = resolve(sourceRoot, '../../.claude/pstack/LICENSE');
-const skillNames = readdirSync(sourceRoot).filter((name) => existsSync(join(sourceRoot, name, 'SKILL.md'))).sort();
+const skillNames = readdirSync(sourceRoot)
+  .filter((name) => existsSync(join(sourceRoot, name, 'SKILL.md')))
+  .sort();
 const digest = (text) => createHash('sha256').update(text).digest('hex');
 const common = ['poteto-mode/SKILL.md'];
 const packages = [
-  { name: 'feature', entry: 'poteto-mode/playbooks/feature.md', steps: ['ground', 'design', 'implement', 'review', 'verify', 'handoff'] },
-  { name: 'bug-fix', entry: 'poteto-mode/playbooks/bug-fix.md', steps: ['reproduce', 'diagnose', 'design', 'implement', 'review', 'verify', 'handoff'] },
-  { name: 'refactoring', entry: 'poteto-mode/playbooks/refactoring.md', steps: ['pin-behavior', 'design', 'implement', 'review', 'verify', 'handoff'] },
-  { name: 'architect', entry: 'architect/SKILL.md', steps: ['ground', 'design', 'implement', 'review', 'verify', 'handoff'] },
+  {
+    name: 'feature',
+    entry: 'poteto-mode/playbooks/feature.md',
+    steps: ['ground', 'design', 'implement', 'review', 'verify', 'handoff'],
+  },
+  {
+    name: 'bug-fix',
+    entry: 'poteto-mode/playbooks/bug-fix.md',
+    steps: ['reproduce', 'diagnose', 'design', 'implement', 'review', 'verify', 'handoff'],
+  },
+  {
+    name: 'refactoring',
+    entry: 'poteto-mode/playbooks/refactoring.md',
+    steps: ['pin-behavior', 'design', 'implement', 'review', 'verify', 'handoff'],
+  },
+  {
+    name: 'architect',
+    entry: 'architect/SKILL.md',
+    steps: ['ground', 'design', 'implement', 'review', 'verify', 'handoff'],
+  },
   { name: 'direct', entry: 'poteto-mode/SKILL.md', steps: ['direct', 'handoff'] },
 ];
 const contracts = {
@@ -26,13 +44,20 @@ const contracts = {
   implement: 'Scoped artifact with source state, changed paths, and digests.',
   review: 'Independent review verdict tied to the exact implementation artifact.',
   verify: 'Checks and runtime evidence against the reviewed artifact.',
-  handoff: 'Resolved delivery with retained or integrated artifact evidence for the requested outcome.',
+  handoff:
+    'Resolved delivery with retained or integrated artifact evidence for the requested outcome.',
 };
 const methods = {
   direct: [],
-  ground: ['how'], reproduce: ['control-cli', 'control-ui'], diagnose: ['how', 'why'],
-  'pin-behavior': ['how'], design: ['architect'], implement: ['arena'],
-  review: ['code-review', 'interrogate'], verify: ['control-cli', 'control-ui'], handoff: [],
+  ground: ['how'],
+  reproduce: ['control-cli', 'control-ui'],
+  diagnose: ['how', 'why'],
+  'pin-behavior': ['how'],
+  design: ['architect'],
+  implement: ['arena'],
+  review: ['code-review', 'interrogate'],
+  verify: ['control-cli', 'control-ui'],
+  handoff: [],
 };
 const evidence = {
   direct: ['artifact-digest'],
@@ -63,7 +88,11 @@ function closure(entries) {
     if (resources[path]) continue;
     const absolute = resolve(sourceRoot, path);
     if (!absolute.startsWith(`${sourceRoot}/`) || !existsSync(absolute)) {
-      unresolved.set(path, { reference: path, classification: 'optional-unsupported', reason: 'Local resource unavailable.' });
+      unresolved.set(path, {
+        reference: path,
+        classification: 'optional-unsupported',
+        reason: 'Local resource unavailable.',
+      });
       continue;
     }
     if (statSync(absolute).isDirectory()) {
@@ -71,16 +100,27 @@ function closure(entries) {
       continue;
     }
     if (!statSync(absolute).isFile()) {
-      unresolved.set(path, { reference: path, classification: 'optional-unsupported', reason: 'Local resource is not a file.' });
+      unresolved.set(path, {
+        reference: path,
+        classification: 'optional-unsupported',
+        reason: 'Local resource is not a file.',
+      });
       continue;
     }
     const text = readFileSync(absolute, 'utf8');
     resources[path] = { sourcePath: path, sourceDigest: digest(text), text };
-    const refs = [...text.matchAll(/(?:\]\(|`)((?:\.\.\/|references\/|scripts\/|playbooks\/)[^\s`)#]+)(?:#[^\s`)]*)?[`)]/g)];
+    const refs = [
+      ...text.matchAll(
+        /(?:\]\(|`)((?:\.\.\/|references\/|scripts\/|playbooks\/)[^\s`)#]+)(?:#[^\s`)]*)?[`)]/g,
+      ),
+    ];
     for (const [, ref] of refs) {
       const adjacent = resolve(dirname(absolute), ref);
       const skillRelative = resolve(sourceRoot, path.split('/')[0], ref);
-      const target = relative(sourceRoot, existsSync(adjacent) ? adjacent : existsSync(skillRelative) ? skillRelative : adjacent);
+      const target = relative(
+        sourceRoot,
+        existsSync(adjacent) ? adjacent : existsSync(skillRelative) ? skillRelative : adjacent,
+      );
       if (target.includes('*') || target.includes('<source>')) {
         const directory = relative(sourceRoot, dirname(resolve(sourceRoot, target)));
         const absoluteDirectory = resolve(sourceRoot, directory);
@@ -88,41 +128,86 @@ function closure(entries) {
           for (const file of filesIn(absoluteDirectory)) queue.push(relative(sourceRoot, file));
           parameterized.set(target, { pattern: target, directory });
         } else {
-          unresolved.set(target, { reference: target, classification: 'optional-unsupported', sourcePath: path, reason: 'Referenced directory is unavailable.' });
+          unresolved.set(target, {
+            reference: target,
+            classification: 'optional-unsupported',
+            sourcePath: path,
+            reason: 'Referenced directory is unavailable.',
+          });
         }
       } else queue.push(target);
     }
     for (const [, ref] of text.matchAll(/(?:from\s+|import\s*)['"](\.\.?\/[^'"]+)['"]/g)) {
       const adjacent = resolve(dirname(absolute), ref);
-      const resolved = [adjacent, `${adjacent}.ts`, `${adjacent}.js`, adjacent.replace(/\.js$/, '.ts')].find((candidate) => existsSync(candidate));
+      const resolved = [
+        adjacent,
+        `${adjacent}.ts`,
+        `${adjacent}.js`,
+        adjacent.replace(/\.js$/, '.ts'),
+      ].find((candidate) => existsSync(candidate));
       queue.push(relative(sourceRoot, resolved ?? adjacent));
     }
     for (const name of skillNames) {
-      if (text.includes(`**${name}**`) || text.includes(`\`${name}\``) || text.includes(`/${name}\``)) queue.push(`${name}/SKILL.md`);
+      if (
+        text.includes(`**${name}**`) ||
+        text.includes(`\`${name}\``) ||
+        text.includes(`/${name}\``)
+      )
+        queue.push(`${name}/SKILL.md`);
     }
     for (const [, name] of text.matchAll(/\*\*([a-z][a-z-]+)\*\* skill/g)) {
-      if (!skillNames.includes(name)) unresolved.set(name, { reference: name, classification: 'optional-unsupported', sourcePath: path, reason: 'Named optional source guidance is unavailable in the captured source root.' });
+      if (!skillNames.includes(name))
+        unresolved.set(name, {
+          reference: name,
+          classification: 'optional-unsupported',
+          sourcePath: path,
+          reason: 'Named optional source guidance is unavailable in the captured source root.',
+        });
     }
   }
   return {
     resources: Object.fromEntries(Object.entries(resources).sort(([a], [b]) => a.localeCompare(b))),
-    unresolvedReferences: [...unresolved.values()].sort((a, b) => a.reference.localeCompare(b.reference)),
-    parameterizedReferences: [...parameterized.values()].sort((a, b) => a.pattern.localeCompare(b.pattern)),
+    unresolvedReferences: [...unresolved.values()].sort((a, b) =>
+      a.reference.localeCompare(b.reference),
+    ),
+    parameterizedReferences: [...parameterized.values()].sort((a, b) =>
+      a.pattern.localeCompare(b.pattern),
+    ),
   };
 }
 
 for (const definition of packages) {
-  const captured = closure([...common, definition.entry, ...new Set(Object.values(methods).flat().map((name) => `${name}/SKILL.md`))]);
+  const captured = closure([
+    ...common,
+    definition.entry,
+    ...new Set(
+      Object.values(methods)
+        .flat()
+        .map((name) => `${name}/SKILL.md`),
+    ),
+  ]);
   const { parameterizedReferences, ...capturedPackage } = captured;
   if (existsSync(licensePath)) {
     const text = readFileSync(licensePath, 'utf8');
-    capturedPackage.resources['pstack/LICENSE'] = { sourcePath: 'pstack/LICENSE', sourceDigest: digest(text), text };
+    capturedPackage.resources['pstack/LICENSE'] = {
+      sourcePath: 'pstack/LICENSE',
+      sourceDigest: digest(text),
+      text,
+    };
   } else {
-    capturedPackage.unresolvedReferences.push({ reference: 'pstack/LICENSE', classification: 'optional-unsupported', reason: 'Pstack license resource unavailable.' });
+    capturedPackage.unresolvedReferences.push({
+      reference: 'pstack/LICENSE',
+      classification: 'optional-unsupported',
+      reason: 'Pstack license resource unavailable.',
+    });
   }
   const steps = definition.steps.map((name) => ({
     name,
-    resources: [...common, definition.entry, ...(methods[name] ?? []).map((method) => `${method}/SKILL.md`)],
+    resources: [
+      ...common,
+      definition.entry,
+      ...(methods[name] ?? []).map((method) => `${method}/SKILL.md`),
+    ],
     outputContract: contracts[name],
     permittedMethods: methods[name] ?? [],
     requiredEvidence: evidence[name],
@@ -130,16 +215,23 @@ for (const definition of packages) {
     ...(name === 'design' ? { stopBoundary: 'design' } : {}),
   }));
   const transitions = steps.flatMap((step, index) => [
-    ...(index < steps.length - 1 ? [{ from: step.name, kind: 'advance', to: steps[index + 1].name }] : []),
+    ...(index < steps.length - 1
+      ? [{ from: step.name, kind: 'advance', to: steps[index + 1].name }]
+      : []),
     { from: step.name, kind: 'repeat', to: step.name },
     { from: step.name, kind: 'await-decision' },
     { from: step.name, kind: 'block' },
-    ...(step.permittedMethods.length ? [{ from: step.name, kind: 'route', routes: step.permittedMethods }] : []),
+    ...(step.permittedMethods.length
+      ? [{ from: step.name, kind: 'route', routes: step.permittedMethods }]
+      : []),
     { from: step.name, kind: 'finish' },
   ]);
-  if (definition.steps.includes('review')) transitions.push({ from: 'review', kind: 'repeat', to: 'implement' });
-  if (definition.steps.includes('verify')) transitions.push({ from: 'verify', kind: 'repeat', to: 'implement' });
-  if (definition.steps.includes('implement')) transitions.push({ from: 'implement', kind: 'repeat', to: 'design' });
+  if (definition.steps.includes('review'))
+    transitions.push({ from: 'review', kind: 'repeat', to: 'implement' });
+  if (definition.steps.includes('verify'))
+    transitions.push({ from: 'verify', kind: 'repeat', to: 'implement' });
+  if (definition.steps.includes('implement'))
+    transitions.push({ from: 'implement', kind: 'repeat', to: 'design' });
   const manifest = {
     name: definition.name,
     version: '1.0.0',
@@ -147,17 +239,39 @@ for (const definition of packages) {
       kind: 'local-snapshot',
       root: '.agents/skills',
       entry: definition.entry,
-      upstream: { name: 'pstack', license: { status: 'verified', spdx: 'MIT', resource: 'pstack/LICENSE' } },
+      upstream: {
+        name: 'pstack',
+        license: { status: 'verified', spdx: 'MIT', resource: 'pstack/LICENSE' },
+      },
     },
     entryStep: steps[0].name,
     steps,
     transitions,
-    limits: { maxAttempts: 20, maxRepeats: 5, parallelism: 4, deadlineMs: 3600000, innerLoopDeadlineMs: 600000 },
+    limits: {
+      maxAttempts: 20,
+      maxRepeats: 5,
+      parallelism: 4,
+      deadlineMs: 3600000,
+      innerLoopDeadlineMs: 600000,
+    },
     stopBoundaries: definition.steps.includes('design') ? ['design'] : [],
-    constraints: { independentReview: definition.steps.includes('review'), successRequires: 'handoff', inheritedStopBoundaries: true, inheritedExecutionAllowance: true },
-    dependencyStatus: { status: capturedPackage.unresolvedReferences.length ? 'classified-incomplete' : 'complete', parameterizedReferences },
+    constraints: {
+      independentReview: definition.steps.includes('review'),
+      successRequires: 'handoff',
+      inheritedStopBoundaries: true,
+      inheritedExecutionAllowance: true,
+    },
+    dependencyStatus: {
+      status: capturedPackage.unresolvedReferences.length ? 'classified-incomplete' : 'complete',
+      parameterizedReferences,
+    },
     ...capturedPackage,
   };
-  writeFileSync(join(destination, `${definition.name}.json`), `${JSON.stringify(manifest, null, 2)}\n`);
-  console.log(`${definition.name}: ${Object.keys(capturedPackage.resources).length} resources, ${capturedPackage.unresolvedReferences.length} unresolved references`);
+  writeFileSync(
+    join(destination, `${definition.name}.json`),
+    `${JSON.stringify(manifest, null, 2)}\n`,
+  );
+  console.log(
+    `${definition.name}: ${Object.keys(capturedPackage.resources).length} resources, ${capturedPackage.unresolvedReferences.length} unresolved references`,
+  );
 }

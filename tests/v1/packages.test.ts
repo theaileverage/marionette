@@ -195,10 +195,10 @@ test('model imports retain source-line diagnostics without substituting a model'
       message: 'Model gpt-5.6-terraform:high is not available',
     },
   ]);
-  const unavailable = importModelConfig(
-    '---\nname: pstack\n---\nfeature: gpt-5.6-terraform:high',
-    { sourcePath, availableModels: new Set() },
-  );
+  const unavailable = importModelConfig('---\nname: pstack\n---\nfeature: gpt-5.6-terraform:high', {
+    sourcePath,
+    availableModels: new Set(),
+  });
   assert.deepEqual(unavailable.diagnostics, [
     {
       code: 'model_unavailable',
@@ -217,7 +217,10 @@ test('the captured workflow resources still match their declared source digests'
   assert.equal(digest(source.text), source.sourceDigest);
   assert.equal(feature.manifest.unresolvedReferences.length > 0, true);
   assert.equal(feature.manifest.constraints.successRequires, 'handoff');
-  assert.equal(feature.transitions.some((transition) => transition.kind === 'route'), true);
+  assert.equal(
+    feature.transitions.some((transition) => transition.kind === 'route'),
+    true,
+  );
   assert.deepEqual(feature.steps.find((step) => step.name === 'review')?.requiredEvidence, [
     'independent-review',
   ]);
@@ -228,13 +231,20 @@ test('the captured workflow resources still match their declared source digests'
   assert.equal(feature.manifest.source.upstream.license.resource, 'pstack/LICENSE');
   assert.equal(feature.manifest.resources['pstack/LICENSE'].sourcePath, 'pstack/LICENSE');
   assert.match(feature.manifest.resources['pstack/LICENSE'].text, /MIT License/);
-  assert.equal(feature.manifest.resources['poteto-mode/SKILL.md'].sourcePath.startsWith('/'), false);
+  assert.equal(
+    feature.manifest.resources['poteto-mode/SKILL.md'].sourcePath.startsWith('/'),
+    false,
+  );
   assert.equal(feature.manifest.dependencyStatus.status, 'classified-incomplete');
   assert.deepEqual(feature.manifest.dependencyStatus.parameterizedReferences, [
     { pattern: 'why/references/sources/*.md', directory: 'why/references/sources' },
     { pattern: 'why/references/sources/<source>.md', directory: 'why/references/sources' },
   ]);
-  assert.ok(feature.manifest.resources['create-verification-skill/references/feature-map-example/README.md']);
+  assert.ok(
+    feature.manifest.resources[
+      'create-verification-skill/references/feature-map-example/README.md'
+    ],
+  );
   assert.ok(feature.manifest.resources['why/references/sources/incident-postmortem.md']);
   assert.equal(direct.limits.maxAttempts > 0, true);
   assert.equal(direct.steps[0].name, 'direct');

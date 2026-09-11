@@ -496,7 +496,11 @@ test('native fixture adoption pins an observed AGY process after exact caller au
     throw new Error(`unexpected ${request.method}`);
   });
   try {
-    const processInspector = { async startToken() { return 'process-start-1'; } };
+    const processInspector = {
+      async startToken() {
+        return 'process-start-1';
+      },
+    };
     const adapter = new HerdrNativeAdapter(
       journal().value,
       endpointInspector,

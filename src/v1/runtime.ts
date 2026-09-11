@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { z } from 'zod';
 import { writeSessionContext, type ResolvedContext, type SessionContext } from './context.js';
@@ -334,10 +335,16 @@ export class Runtime {
         step.resources.map((name) => {
           const row = db
             .prepare(
-              'SELECT path FROM workflow_package_resources WHERE project_id=? AND package_digest=? AND resource_name=?',
+              'SELECT r.path,a.digest FROM workflow_package_resources r JOIN artifacts a ON a.id=r.artifact_id AND a.project_id=r.project_id WHERE r.project_id=? AND r.package_digest=? AND r.resource_name=?',
             )
             .get(this.store.project.id, workflow.package.digest, name);
-          return z.object({ path: z.string() }).parse(row).path;
+          const resource = z.object({ path: z.string(), digest: z.string() }).parse(row);
+          if (
+            createHash('sha256').update(readFileSync(resource.path)).digest('hex') !==
+            resource.digest
+          )
+            throw new Error('Pinned workflow resource bytes changed before prompt submission');
+          return resource.path;
         }),
       );
       workflowInstructions = `\n\nWorkflow step: ${step.name}. Read these pinned resources before working:\n${resources.join('\n')}\nOutput contract: ${step.outputContract}\nRequired evidence claims: ${step.requiredEvidence.join(', ')}. Permitted methods: ${step.permittedMethods.join(', ')}.`;

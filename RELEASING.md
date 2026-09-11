@@ -1,66 +1,21 @@
 # Releasing Marionette
 
-The public repository is [theaileverage/marionette](https://github.com/theaileverage/marionette). Source changes go through pull requests into `main`. GitHub Actions runs formatting, metadata validation, type checks, tests, a production build and an installed-package smoke test on Linux and macOS with the pinned Bun runtime. These checks use protocol fixtures, not paid agent sessions.
+The current target is `1.0.0-alpha.1`. Alpha publication must use the `alpha` npm dist-tag. A stable `1.0.0` requires the remaining execution contracts and live acceptance checks to pass.
 
-## Prepare a version
-
-From a clean checkout, create a branch and run:
+Prepare a version with `npm run release:prepare -- VERSION`. Review the resulting version and changelog edits, then run:
 
 ```sh
-git switch -c release/0.3.0
-bun run release:prepare 0.3.0
+bun install --frozen-lockfile
+npm run check
+npm test
+npm run format:check
+npm run release:check
+npm pack
+node scripts/release.mjs smoke /absolute/path/to/package.tgz
 ```
 
-The helper updates `package.json`, `src/version.ts` and a dated changelog section. The dependency-only `bun.lock` does not need a version bump. Replace the placeholder with concrete release notes. Do not change the setup protocol number unless the protocol changes. Update verification evidence when behavior changes, then run:
+The smoke test installs the actual tarball into a temporary project. It exercises the installed CLI, SDK, SQL worker, bundled workflow loading, and TypeScript declarations. CI repeats these checks on Linux and macOS using Node.js 24.10.0.
 
-```sh
-bun run format
-bun run release:check
-bun pm pack --destination /private/tmp
-```
+Publication is a separate authorized action. The release workflow verifies tagged artifacts and does not publish automatically. Before publication, verify that the intended commit is on main, the version tag identifies that commit, the package has passed its smoke test, and the changelog describes the actual release.
 
-Commit the release preparation and open a pull request. `Required CI` must pass before merging. A tag must point at a commit contained in `main`; it must exactly match the package, runtime version and changelog. Stable versions go to npm `latest`; prereleases such as `0.3.0-beta.1` go to `next`.
-
-## Publish the merged version
-
-```sh
-git switch main
-git pull --ff-only
-git tag -a v0.3.0 -m 'Release 0.3.0'
-git push origin v0.3.0
-```
-
-Node and npm remain isolated to the npm OIDC publishing step; application builds, tests, and package smoke checks run on Bun.
-
-The `Release` workflow rebuilds and verifies the package, publishes the tested tarball using npm OIDC, compares the registry integrity, then creates a GitHub release with the tarball and `SHA256SUMS`. It uses pinned official actions, read-only checkout credentials, a dedicated `npm` environment, and an explicitly scoped OIDC permission. No npm token is stored in GitHub.
-
-If a run fails after npm publication, rerun the failed job. Existing package integrity must match before the workflow continues; it never overwrites an npm version or a differing GitHub asset. You can also dispatch on the existing tag:
-
-```sh
-gh workflow run release.yml --ref v0.3.0 -f tag=v0.3.0
-```
-
-Do not move or delete published tags. Fix a bad release with a new version. Registry publication is irreversible in the usual release workflow; removing a GitHub release does not remove its npm package.
-
-## npm trusted publisher
-
-The package's trusted publisher must match these exact values:
-
-- Package: `@theaileverage/marionette`
-- Repository: `theaileverage/marionette`
-- Workflow: `release.yml`
-- Environment: `npm`
-- Permission: publish
-
-A package maintainer configures this once through npm's authenticated trust flow:
-
-```sh
-npm exec --yes --package npm@11.19.1 -- npm trust github @theaileverage/marionette \
-  --repo theaileverage/marionette --file release.yml --env npm --allow-publish --yes
-```
-
-npm may require fresh two-factor/browser authentication for this administrative operation. Subsequent CI publishing uses the GitHub OIDC identity. See [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) and the [npm trust command](https://docs.npmjs.com/cli/v11/commands/npm-trust/). Protect the `npm` environment so only version tags deploy; repository administrators can manage any required reviewer policy.
-
-## Initial 0.2.0 release
-
-Version 0.2.0 was published to npm before this repository existed. `.github/release-baseline.json` pins its verified registry integrity. Only this exact version may reuse the original npm tarball for its initial GitHub release; the workflow never attempts to republish it. The repository adds licensing, metadata and CI/release tooling after that publication, so rebuilding the initial repository commit need not reproduce the old package byte for byte. Future releases are built and published from their Git tags.
+Do not publish alpha builds under `latest`. Preserve existing runtime data and active sessions when trying the rewrite; v1 uses a separate project binding and state directory.
