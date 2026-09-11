@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import type { Board, BoardAuthor, BoardPost, BoardReference } from './board.js';
+import type { Board, BoardAuthor, BoardPost } from './board.js';
 import { z } from 'zod';
 
 const SqlValueSchema = z.union([z.string(), z.number().finite(), z.null()]);
@@ -25,12 +25,11 @@ export interface SqlReadResult {
 export interface SqlBoardContribution {
   readonly threadId: string;
   readonly author: BoardAuthor;
-  readonly body: string;
   readonly kind: import('./board.js').BoardPostKind;
   readonly idempotencyKey: string;
-  readonly references?: readonly BoardReference[];
-  readonly replyToPostId?: string;
-  readonly replacesPostId?: string;
+  readonly sql: string;
+  readonly parameters?: Readonly<Record<string, SqlValue>>;
+  readonly timeoutMs?: number;
 }
 
 export interface SqlQueryServiceOptions {
@@ -76,19 +75,35 @@ function nodeRuntime() {
   return process.execPath;
 }
 
+const ContributionResultSchema = z.object({
+  body: z.string().min(1).max(65_536),
+  kind: z.enum(['question', 'blocker', 'result', 'finding', 'decision', 'progress']),
+  references: z
+    .array(z.object({ kind: z.string().min(1).max(255), value: z.string().min(1).max(4_096) }))
+    .max(50),
+  replyToPostId: z.string().uuid().nullable(),
+  replacesPostId: z.string().uuid().nullable(),
+});
 const WorkerResponseSchema = z.discriminatedUnion('ok', [
   z.object({
     ok: z.literal(true),
-    response: z.object({
-      rows: z.array(SqlRowSchema),
-      truncated: z.boolean(),
-      bytes: z.number().int().nonnegative(),
-    }),
+    response: z.discriminatedUnion('kind', [
+      z.object({
+        kind: z.literal('read'),
+        result: z.object({
+          rows: z.array(SqlRowSchema),
+          truncated: z.boolean(),
+          bytes: z.number().int().nonnegative(),
+        }),
+      }),
+      z.object({ kind: z.literal('contribution'), result: ContributionResultSchema }),
+    ]),
   }),
   z.object({ ok: z.literal(false), error: z.string().min(1) }),
 ]);
+type WorkerResponse = Extract<z.infer<typeof WorkerResponseSchema>, { ok: true }>['response'];
 
-function parseResponse(raw: string): SqlReadResult {
+function parseResponse(raw: string): WorkerResponse {
   const value = WorkerResponseSchema.parse(JSON.parse(raw));
   if (!value.ok) throw new Error(value.error);
   return value.response;
@@ -108,15 +123,57 @@ export class SqlQueryService {
     const maxRows = bounded('maxRows', input.maxRows, DEFAULT_MAX_ROWS, MAX_ROWS);
     const maxBytes = bounded('maxBytes', input.maxBytes, DEFAULT_MAX_BYTES, MAX_BYTES);
     if (input.sql.trim().length === 0) throw new Error('sql must not be empty');
-    const request = JSON.stringify({
-      databasePath: this.#board.databasePath,
-      projectId: this.#board.project.id,
-      sql: input.sql,
-      parameters: input.parameters ?? {},
-      maxRows,
-      maxBytes,
+    return this.#runWorker(
+      JSON.stringify({
+        mode: 'read',
+        databasePath: this.#board.databasePath,
+        projectId: this.#board.project.id,
+        sql: input.sql,
+        parameters: input.parameters ?? {},
+        maxRows,
+        maxBytes,
+      }),
+      timeoutMs,
+    ).then((response) => {
+      if (response.kind !== 'read')
+        throw new Error('SQL worker returned a contribution for a read request');
+      return response.result;
     });
-    return new Promise((resolve, reject) => {
+  }
+
+  contribute(input: SqlBoardContribution): Promise<BoardPost> {
+    const timeoutMs = bounded('timeoutMs', input.timeoutMs, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
+    if (input.sql.trim().length === 0) throw new Error('contribution SQL must not be empty');
+    if (Buffer.byteLength(input.sql, 'utf8') > 16_384)
+      throw new Error('contribution SQL exceeds 16384 bytes');
+    return this.#runWorker(
+      JSON.stringify({
+        mode: 'contribute',
+        sql: input.sql,
+        parameters: input.parameters ?? {},
+      }),
+      timeoutMs,
+    ).then((response) => {
+      if (response.kind !== 'contribution')
+        throw new Error('SQL worker returned a read for a contribution request');
+      const contribution = response.result;
+      if (contribution.kind !== input.kind)
+        throw new Error('contribution kind does not match the parent request');
+      return this.#board.post({
+        threadId: input.threadId,
+        author: input.author,
+        body: contribution.body,
+        kind: contribution.kind,
+        idempotencyKey: input.idempotencyKey,
+        references: contribution.references,
+        replyToPostId: contribution.replyToPostId ?? undefined,
+        replacesPostId: contribution.replacesPostId ?? undefined,
+      });
+    });
+  }
+
+  #runWorker(request: string, timeoutMs: number): Promise<WorkerResponse> {
+    return new Promise<WorkerResponse>((resolve, reject) => {
       const child = spawn(
         nodeRuntime(),
         ['--experimental-strip-types', this.#workerPath, '--marionette-sql-worker'],
@@ -171,9 +228,5 @@ export class SqlQueryService {
       });
       child.stdin.end(request);
     });
-  }
-
-  contribute(input: SqlBoardContribution): BoardPost {
-    return this.#board.post(input);
   }
 }

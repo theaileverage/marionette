@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { Board } from '../../src/v1/board.js';
 import { ProjectBindingSchema } from '../../src/v1/model.js';
 import { SqlQueryService } from '../../src/v1/sql.js';
-import { executeSqlRequest } from '../../src/v1/sql-worker.js';
+import { executeContributionRequest, executeSqlRequest } from '../../src/v1/sql-worker.js';
 import { Store } from '../../src/v1/store.js';
 
 function fixture() {
@@ -111,6 +111,35 @@ test('SQL authorizer rejects mutations, pragma, attach and extension loading', (
   }
 });
 
+test('board contribution SQL can insert one validated in-memory contribution only', () => {
+  assert.deepEqual(
+    executeContributionRequest({
+      sql: 'INSERT INTO board_contributions(body,kind,references_json) VALUES (\'A durable finding\',\'finding\',\'[{"kind":"file","value":"evidence.md"}]\')',
+      parameters: {},
+    }),
+    {
+      body: 'A durable finding',
+      kind: 'finding',
+      references: [{ kind: 'file', value: 'evidence.md' }],
+      replyToPostId: null,
+      replacesPostId: null,
+    },
+  );
+  for (const sql of [
+    "INSERT INTO board_contributions(body,kind) VALUES ('one','finding'); INSERT INTO board_contributions(body,kind) VALUES ('two','finding')",
+    "INSERT INTO board_contributions(body,kind) VALUES ('one','finding'),('two','finding')",
+    "INSERT INTO board_contributions(body,kind) SELECT body,'finding' FROM board_contributions",
+    "UPDATE board_contributions SET body='tampered'",
+    "ATTACH DATABASE ':memory:' AS attack",
+    "INSERT INTO board_posts VALUES ('runtime write')",
+  ]) {
+    assert.throws(
+      () => executeContributionRequest({ sql, parameters: {} }),
+      /authorized|exactly one|statement|no such table/,
+    );
+  }
+});
+
 test('SQL row and byte bounds stop iteration with truncation', () => {
   const f = fixture();
   try {
@@ -175,6 +204,36 @@ test('SQL query timeout kills the isolated Node worker', async () => {
       maxBytes: 1000,
     });
     assert.deepEqual(complete.rows, [{ body: 'visible' }]);
+    const contribution = await service.contribute({
+      threadId: thread.id,
+      author: { kind: 'system', id: 'controller' },
+      kind: 'finding',
+      idempotencyKey: 'contribution-1',
+      sql: "INSERT INTO board_contributions(body,kind,references_json) VALUES ('from contribution','finding','[]')",
+    });
+    assert.equal(contribution.body, 'from contribution');
+    assert.equal(
+      (
+        await service.contribute({
+          threadId: thread.id,
+          author: { kind: 'system', id: 'controller' },
+          kind: 'finding',
+          idempotencyKey: 'contribution-1',
+          sql: "INSERT INTO board_contributions(body,kind,references_json) VALUES ('from contribution','finding','[]')",
+        })
+      ).id,
+      contribution.id,
+    );
+    await assert.rejects(
+      service.contribute({
+        threadId: thread.id,
+        author: { kind: 'system', id: 'controller' },
+        kind: 'finding',
+        idempotencyKey: 'contribution-1',
+        sql: "INSERT INTO board_contributions(body,kind,references_json) VALUES ('different body','finding','[]')",
+      }),
+      /idempotency key/,
+    );
     await assert.rejects(
       service.read({
         sql: 'SELECT id,body FROM public_board_posts',
