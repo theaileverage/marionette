@@ -70,6 +70,7 @@ if (!isMainThread) {
           [1, '001_core'],
           [2, '002_workflows'],
           [3, '003_collaboration_handoff'],
+          [4, '004_native_runtime'],
         ],
       );
       first.close();
@@ -127,8 +128,8 @@ if (!isMainThread) {
       const brokenMigrations = [
         ...migrations,
         {
-          version: 4,
-          name: '004_broken',
+          version: migrations.length + 1,
+          name: 'next_broken',
           sql: 'CREATE TABLE should_rollback (id TEXT PRIMARY KEY) STRICT; SELECT * FROM missing_table;',
         },
       ];
@@ -136,7 +137,7 @@ if (!isMainThread) {
         () => applyMigrations(database, brokenMigrations),
         (error) => error instanceof MigrationError && error.code === 'migration-failed',
       );
-      assert.equal(schemaVersion(database), 3);
+      assert.equal(schemaVersion(database), migrations.length);
       assert.equal(
         database
           .prepare("SELECT count(*) AS count FROM sqlite_schema WHERE name = 'should_rollback'")
@@ -145,7 +146,7 @@ if (!isMainThread) {
       );
       assert.equal(
         database.prepare('SELECT count(*) AS count FROM schema_migrations').get()?.count,
-        3,
+        migrations.length,
       );
       database.close();
     } finally {
@@ -163,10 +164,10 @@ if (!isMainThread) {
       await Promise.all(workers.map(waitForWorker));
 
       const database = openDatabase({ path: databasePath, projectId });
-      assert.equal(schemaVersion(database), 3);
+      assert.equal(schemaVersion(database), migrations.length);
       assert.equal(
         database.prepare('SELECT count(*) AS count FROM schema_migrations').get()?.count,
-        3,
+        migrations.length,
       );
       database.close();
     } finally {
