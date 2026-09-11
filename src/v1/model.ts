@@ -32,7 +32,10 @@ export const ControlIntentIdSchema = id.brand<'ControlIntentId'>();
 export type ControlIntentId = z.infer<typeof ControlIntentIdSchema>;
 export const ArtifactIdSchema = id.brand<'ArtifactId'>();
 export type ArtifactId = z.infer<typeof ArtifactIdSchema>;
-export const DigestSchema = z.string().min(1).max(255).brand<'Digest'>();
+export const DigestSchema = z
+  .string()
+  .regex(/^[a-f0-9]{64}$/)
+  .brand<'Digest'>();
 export type Digest = z.infer<typeof DigestSchema>;
 
 export const TimestampSchema = z.string().datetime().brand<'Timestamp'>();
@@ -238,15 +241,14 @@ export const TransitionRequestSchema = z.discriminatedUnion('kind', [
   z.object({
     ...transitionEnvelope,
     kind: z.literal('finish'),
-    outcome: z.literal('succeeded'),
-    resultIds: z.array(ResultIdSchema),
-  }),
-  z.object({
-    ...transitionEnvelope,
-    kind: z.literal('finish'),
-    outcome: z.literal('failed'),
-    failureReason: z.string().min(1),
-    retainedResultIds: z.array(ResultIdSchema),
+    result: z.discriminatedUnion('outcome', [
+      z.object({ outcome: z.literal('succeeded'), resultIds: z.array(ResultIdSchema) }),
+      z.object({
+        outcome: z.literal('failed'),
+        failureReason: z.string().min(1),
+        retainedResultIds: z.array(ResultIdSchema),
+      }),
+    ]),
   }),
 ]);
 export type TransitionRequest = z.infer<typeof TransitionRequestSchema>;
