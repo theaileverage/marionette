@@ -1,72 +1,37 @@
-import { build } from 'esbuild';
-import { chmodSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-const packages = new Set([
-  'node_modules/react',
-  'node_modules/react-dom',
-  'node_modules/scheduler',
-  'node_modules/lucide-react',
-]);
-for (const [name, entry] of [
-  ['harness-guard', 'src/harness-guard.ts'],
-  ['cli', 'src/cli.ts'],
-  ['mcp', 'src/mcp.ts'],
-  ['evaluate-swarm', 'scripts/evaluate-swarm.mjs'],
-]) {
-  const result = await build({
-    entryPoints: [entry],
-    outfile: `dist/${name}.js`,
-    bundle: true,
-    plugins:
-      name === 'cli'
-        ? [
-            {
-              name: 'runtime-guard-fallback',
-              setup(plugin) {
-                plugin.onLoad({ filter: /[/\\]runtime-bundle\.ts$/ }, () => ({
-                  contents: `export function bundledGuard() { return ${JSON.stringify(readFileSync('dist/harness-guard.js', 'utf8'))}; }`,
-                  loader: 'js',
-                }));
-              },
-            },
-          ]
-        : [],
-    loader: { '.mustache': 'text', '.md': 'text' },
-    platform: 'node',
-    format: 'esm',
-    target: 'esnext',
-    external: ['bun:*'],
-    legalComments: 'eof',
-    metafile: true,
-    banner: {
-      js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);",
-    },
-  });
-  for (const input of Object.keys(result.metafile.inputs)) {
-    const marker = input.lastIndexOf('node_modules/');
-    if (marker < 0) continue;
-    const parts = input.slice(marker + 13).split('/');
-    const count = parts[0].startsWith('@') ? 2 : 1;
-    packages.add(input.slice(0, marker + 13) + parts.slice(0, count).join('/'));
-  }
-  chmodSync(`dist/${name}.js`, 0o755);
-}
-let notices =
-  '# Third-party notices\n\nThese libraries are included in Marionette’s executable and dashboard bundles.\n';
-for (const dir of [...packages].sort()) {
-  const metadata = JSON.parse(readFileSync(resolve(dir, 'package.json'), 'utf8'));
-  notices += `\n## ${metadata.name} ${metadata.version}\n\nLicense: ${metadata.license ?? 'See notice below'}\n`;
-  const licenses = readdirSync(dir).filter(
-    (file) =>
-      /^(licen[sc]e|copying|notice)([.-]|$)/i.test(file) && statSync(resolve(dir, file)).isFile(),
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const dist = resolve(root, 'dist');
+const tsc = resolve(root, 'node_modules', 'typescript', 'lib', 'tsc.js');
+
+rmSync(dist, { recursive: true, force: true });
+const compiled = spawnSync(process.execPath, [tsc, '--project', 'tsconfig.v1.json'], {
+  cwd: root,
+  stdio: 'inherit',
+});
+if (compiled.error) throw compiled.error;
+if (compiled.status !== 0) process.exitCode = compiled.status ?? 1;
+else {
+  for (const path of [
+    'dist/v1/cli.js',
+    'dist/v1/index.js',
+    'dist/v1/sql-worker.js',
+    'dist/herdr-sdk.js',
+    'dist/herdr-protocol.js',
+    'dist/herdr-streams.js',
+    'dist/herdr-transport.js',
+  ])
+    assert.ok(existsSync(resolve(root, path)), `Build did not produce ${path}`);
+  chmodSync(resolve(root, 'dist/v1/cli.js'), 0o755);
+  const herdrLicense = readFileSync(resolve(root, 'vendor/herdr-0.9.0/LICENSE'), 'utf8').trim();
+  writeFileSync(
+    resolve(root, 'THIRD_PARTY_NOTICES.md'),
+    '# Third-party notices\n\n## Herdr 0.9.0 API schema\n\n' +
+      'The SDK protocol types are generated from Herdr (https://github.com/herdrdev/herdr/tree/v0.9.0), licensed under Apache-2.0.\n\n' +
+      `\`\`\`text\n${herdrLicense}\n\`\`\`\n`,
   );
-  if (!licenses.length)
-    throw new Error(`No license notice found for bundled dependency ${metadata.name}`);
-  for (const file of licenses)
-    notices += `\n\`\`\`text\n${readFileSync(resolve(dir, file), 'utf8').trim()}\n\`\`\`\n`;
 }
-notices +=
-  '\n## Herdr 0.9.0 API schema\n\nThe SDK protocol types are generated from Herdr (https://github.com/herdrdev/herdr/tree/v0.9.0), licensed under Apache-2.0.\n\n```text\n' +
-  readFileSync('vendor/herdr-0.9.0/LICENSE', 'utf8').trim() +
-  '\n```\n';
-writeFileSync('THIRD_PARTY_NOTICES.md', notices);
