@@ -189,6 +189,9 @@ function fixture(t: TestContext, crashAt: 'launch' | 'prompt' | null = null) {
     makeObservationAmbiguous: () => {
       ambiguous = true;
     },
+    makeObservationExact: () => {
+      ambiguous = false;
+    },
     counts: () => ({ launches, prompts }),
   };
 }
@@ -258,11 +261,12 @@ test('a working prompt claim recovers as active without resending the prompt', a
   );
 });
 
-test('an ambiguous native observation becomes unconfirmed without replaying effects', async (t) => {
+test('an ambiguous observation can later settle with a durable result without replaying effects', async (t) => {
   const f = fixture(t);
   const id = f.runtime.admit(f.input);
   await f.runtime.start(id);
   f.makeObservationAmbiguous();
+  await f.runtime.reconcile(id);
   await f.runtime.reconcile(id);
   assert.deepEqual(f.counts(), { launches: 1, prompts: 1 });
   assert.equal(f.store.getAttempt(id).phase, 'unconfirmed');
@@ -274,6 +278,31 @@ test('an ambiguous native observation becomes unconfirmed without replaying effe
     db.prepare('SELECT state FROM execution_reservations WHERE attempt_id=?').get(id),
   );
   assert.equal(reservation?.state, 'unconfirmed');
+  f.store.recordResult({
+    actor: f.actor,
+    attemptId: id,
+    content: { kind: 'report', body: 'Controller verified the report', artifactDigests: [] },
+    inputDigest: DigestSchema.parse('0'.repeat(64)),
+    workspaceDigest: DigestSchema.parse('1'.repeat(64)),
+    evidenceClaims: [],
+    evidence: [],
+    verification: { kind: 'not-requested' },
+    upstreamResultIds: [],
+    idempotencyKey: 'result-after-ambiguity',
+  });
+  f.makeObservationExact();
+  f.settleNative();
+  await f.runtime.reconcile(id);
+  assert.deepEqual(f.counts(), { launches: 1, prompts: 1 });
+  assert.equal(f.store.getAttempt(id).phase, 'settled');
+  const settledNative = f.store.read((db) =>
+    db.prepare('SELECT phase FROM native_attempts WHERE attempt_id=?').get(id),
+  );
+  assert.equal(settledNative?.phase, 'settled');
+  const settledReservation = f.store.read((db) =>
+    db.prepare('SELECT state FROM execution_reservations WHERE attempt_id=?').get(id),
+  );
+  assert.equal(settledReservation?.state, 'released');
 });
 
 test('native idle releases execution only after a durable result exists', async (t) => {

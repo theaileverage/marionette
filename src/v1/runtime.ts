@@ -412,24 +412,32 @@ export class Runtime {
   }
 
   private markUnconfirmed(id: AttemptId, reason: string) {
-    this.update(id, 'unconfirmed');
-    return this.store.settleAttempt({
-      actor: this.actor,
-      attemptId: id,
-      observation: { kind: 'unconfirmed', reason },
-      idempotencyKey: `native-unconfirmed/${id}`,
+    return this.store.transaction((db) => {
+      const current = this.store.getAttempt(id);
+      if (['unconfirmed', 'settled', 'closed'].includes(current.phase)) return current;
+      db.prepare(
+        'UPDATE native_attempts SET phase=?,updated_at=? WHERE project_id=? AND attempt_id=?',
+      ).run('unconfirmed', new Date().toISOString(), this.store.project.id, id);
+      return this.store.settleAttempt({
+        actor: this.actor,
+        attemptId: id,
+        observation: { kind: 'unconfirmed', reason },
+        idempotencyKey: `native-unconfirmed/${id}`,
+      });
     });
   }
 
   async reconcile(id: AttemptId) {
     const observed = await this.inspect(id);
-    if (['settled', 'closed', 'unconfirmed'].includes(observed.attempt.phase)) return observed;
+    if (['settled', 'closed'].includes(observed.attempt.phase)) return observed;
     if (observed.native.kind === 'working') {
       if (this.row(id).phase === 'prompt-claimed') this.update(id, 'active');
       return observed;
     }
-    if (observed.native.kind !== 'settled')
+    if (observed.native.kind !== 'settled') {
+      if (observed.attempt.phase === 'unconfirmed') return observed;
       return { ...observed, attempt: this.markUnconfirmed(id, observed.native.reason) };
+    }
     const result = this.store
       .listResults(observed.attempt.jobId)
       .find((candidate) => candidate.attemptId === id);
