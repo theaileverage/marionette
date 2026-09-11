@@ -265,6 +265,18 @@ test('an ambiguous observation can later settle with a durable result without re
   const f = fixture(t);
   const id = f.runtime.admit(f.input);
   await f.runtime.start(id);
+  f.store.recordResult({
+    actor: f.actor,
+    attemptId: id,
+    content: { kind: 'report', body: 'Controller verified the report', artifactDigests: [] },
+    inputDigest: DigestSchema.parse('0'.repeat(64)),
+    workspaceDigest: DigestSchema.parse('1'.repeat(64)),
+    evidenceClaims: [],
+    evidence: [],
+    verification: { kind: 'not-requested' },
+    upstreamResultIds: [],
+    idempotencyKey: 'result-before-ambiguity',
+  });
   f.makeObservationAmbiguous();
   await f.runtime.reconcile(id);
   await f.runtime.reconcile(id);
@@ -278,18 +290,7 @@ test('an ambiguous observation can later settle with a durable result without re
     db.prepare('SELECT state FROM execution_reservations WHERE attempt_id=?').get(id),
   );
   assert.equal(reservation?.state, 'unconfirmed');
-  f.store.recordResult({
-    actor: f.actor,
-    attemptId: id,
-    content: { kind: 'report', body: 'Controller verified the report', artifactDigests: [] },
-    inputDigest: DigestSchema.parse('0'.repeat(64)),
-    workspaceDigest: DigestSchema.parse('1'.repeat(64)),
-    evidenceClaims: [],
-    evidence: [],
-    verification: { kind: 'not-requested' },
-    upstreamResultIds: [],
-    idempotencyKey: 'result-after-ambiguity',
-  });
+
   f.makeObservationExact();
   f.settleNative();
   await f.runtime.reconcile(id);

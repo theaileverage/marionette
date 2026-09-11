@@ -234,15 +234,8 @@ export function openDatabase(options: OpenDatabaseOptions): DatabaseSync {
         database.exec('PRAGMA journal_mode = WAL');
         break;
       } catch (error) {
-        if (
-          !(
-            error instanceof Error &&
-            'errcode' in error &&
-            typeof error.errcode === 'number' &&
-            (error.errcode & 255) === 5
-          ) ||
-          performance.now() >= deadline
-        )
+        const failure = z.object({ errcode: z.number().int() }).safeParse(error);
+        if (!failure.success || (failure.data.errcode & 255) !== 5 || performance.now() >= deadline)
           throw error;
         Atomics.wait(pause, 0, 0, Math.min(10, Math.max(0, deadline - performance.now())));
       }
