@@ -496,6 +496,20 @@ const controlledWorkflowRowSchema = z.object({
   phase: z.enum(['pausing', 'cancelling']),
 });
 const countRowSchema = z.object({ count: z.number().int().nonnegative() });
+const evidenceClaimsSchema = z.array(z.string().min(1));
+const acceptedResultRowSchema = z.object({ decision: z.literal('accepted') });
+const sessionIdentitySchema = z.object({
+  id: AgentSessionIdSchema,
+  generation: SessionGenerationSchema,
+});
+const nativeIdentitySchema = z.union([
+  z.object({ kind: z.null(), serverGeneration: z.null(), locator: z.null() }),
+  z.object({
+    kind: z.string().min(1),
+    serverGeneration: z.string().min(1),
+    locator: z.string().min(1),
+  }),
+]);
 
 type SqliteRow = Record<string, SQLOutputValue>;
 
@@ -712,6 +726,12 @@ export class Store {
       .string()
       .regex(/^[a-f0-9]{64}$/)
       .parse(input.tokenHash);
+    const executionRole = z.string().min(1).parse(input.executionRole);
+    const nativeIdentity = nativeIdentitySchema.parse({
+      kind: input.nativeKind,
+      serverGeneration: input.nativeServerGeneration,
+      locator: input.nativeLocator,
+    });
     return this.transaction((database) => {
       const existing = database
         .prepare('SELECT * FROM agent_sessions WHERE id = ? AND generation = ?')
@@ -731,12 +751,12 @@ export class Store {
               hostId: this.project.hostId,
               workspaceId: input.workspaceId,
               role: input.role,
-              executionRole: input.executionRole,
+              executionRole,
               parentWorkflowId: input.parentWorkflowId,
               attemptId: input.attemptId,
-              nativeKind: input.nativeKind,
-              nativeServerGeneration: input.nativeServerGeneration,
-              nativeLocator: input.nativeLocator,
+              nativeKind: nativeIdentity.kind,
+              nativeServerGeneration: nativeIdentity.serverGeneration,
+              nativeLocator: nativeIdentity.locator,
               state: 'active',
               createdAt: session.createdAt,
               settledAt: null,
@@ -767,13 +787,13 @@ export class Store {
           this.project.hostId,
           input.workspaceId,
           input.role,
-          input.executionRole,
+          executionRole,
           tokenHash,
           input.parentWorkflowId,
           input.attemptId,
-          input.nativeKind,
-          input.nativeServerGeneration,
-          input.nativeLocator,
+          nativeIdentity.kind,
+          nativeIdentity.serverGeneration,
+          nativeIdentity.locator,
           now,
         );
       return this.#requireSession(database, input);
@@ -875,6 +895,9 @@ export class Store {
 
   #requireAdmissibleWorkspace(database: DatabaseSync, id: WorkspaceId): Workspace {
     const workspace = this.#requireWorkspace(database, id);
+    if (workspace.retiredAt !== null) {
+      throw new StoreError('invalid-state', `Workspace ${id} has been retired`);
+    }
     const retirement = database
       .prepare(
         `SELECT id FROM workspace_retirements
@@ -1208,6 +1231,12 @@ export class Store {
           );
         database
           .prepare(
+            `INSERT INTO step_run_inputs (step_run_id, brief_id, result_id, ordinal)
+             VALUES (?, ?, NULL, 0)`,
+          )
+          .run(stepRunId, briefId);
+        database
+          .prepare(
             `INSERT INTO limit_revisions
                (id, project_id, workflow_id, revision, max_attempts, max_repeats,
                 parallelism, inner_loop_deadline_ms, deadline_at, reason,
@@ -1464,7 +1493,7 @@ export class Store {
         }
 
         for (const resultId of input.inputResultIds)
-          this.#requireEligibleResult(database, resultId);
+          this.#requireAcceptedResult(database, resultId);
         const attemptId = this.#newId('attempt', AttemptIdSchema);
         const reservationId = this.#newId('reservation', ReservationIdSchema);
         const now = this.#now();
@@ -1723,14 +1752,26 @@ export class Store {
   }
 
   recordResult(input: RecordResultInput): Result {
-    const actor = this.read((database) => this.#requireSession(database, input.actor));
+    const command: RecordResultInput = {
+      actor: sessionIdentitySchema.parse(input.actor),
+      attemptId: AttemptIdSchema.parse(input.attemptId),
+      content: ResultContentSchema.parse(input.content),
+      inputDigest: DigestSchema.parse(input.inputDigest),
+      workspaceDigest: DigestSchema.parse(input.workspaceDigest),
+      evidenceClaims: evidenceClaimsSchema.parse(input.evidenceClaims),
+      evidence: z.array(EvidenceSchema).parse(input.evidence),
+      verification: VerificationSchema.parse(input.verification),
+      upstreamResultIds: z.array(ResultIdSchema).parse(input.upstreamResultIds),
+      idempotencyKey: z.string().min(1).parse(input.idempotencyKey),
+    };
+    const actor = this.read((database) => this.#requireSession(database, command.actor));
     const result = this.idempotent(
       'record-result',
-      input.idempotencyKey,
-      input,
+      command.idempotencyKey,
+      command,
       ResultIdSchema,
       (database) => {
-        const attempt = this.#requireAttempt(database, input.attemptId);
+        const attempt = this.#requireAttempt(database, command.attemptId);
         if (
           actor.role === 'worker' &&
           (actor.id !== attempt.sessionId || actor.generation !== attempt.sessionGeneration)
@@ -1744,22 +1785,23 @@ export class Store {
           );
         }
         const job = this.#requireJob(database, attempt.jobId);
-        if (job.delivery !== input.content.kind) {
+        if (job.delivery !== command.content.kind) {
           throw new StoreError('invalid-state', `Job ${job.id} requires a ${job.delivery} result`);
         }
-        for (const upstream of input.upstreamResultIds)
-          this.#requireEligibleResult(database, upstream);
+        for (const upstream of command.upstreamResultIds)
+          this.#requireAcceptedResult(database, upstream);
         const resultId = this.#newId('result', ResultIdSchema);
         const now = this.#now();
         const sourceRepository =
-          input.content.kind === 'report' ? null : input.content.sourceRepository;
-        const baseCommit = input.content.kind === 'report' ? null : input.content.baseCommit;
-        const resultingTree = input.content.kind === 'report' ? null : input.content.resultingTree;
+          command.content.kind === 'report' ? null : command.content.sourceRepository;
+        const baseCommit = command.content.kind === 'report' ? null : command.content.baseCommit;
+        const resultingTree =
+          command.content.kind === 'report' ? null : command.content.resultingTree;
         const resultingCommit =
-          input.content.kind === 'commit' ? input.content.resultingCommit : null;
-        const changedPaths = input.content.kind === 'report' ? [] : input.content.changedPaths;
+          command.content.kind === 'commit' ? command.content.resultingCommit : null;
+        const changedPaths = command.content.kind === 'report' ? [] : command.content.changedPaths;
         const artifactDigests =
-          input.content.kind === 'report' ? [] : input.content.artifactDigests;
+          command.content.kind === 'report' ? [] : command.content.artifactDigests;
         database
           .prepare(
             `INSERT INTO results
@@ -1779,18 +1821,18 @@ export class Store {
             attempt.briefRevision,
             attempt.hostId,
             attempt.workspaceId,
-            input.content.kind,
-            input.inputDigest,
-            input.workspaceDigest,
+            command.content.kind,
+            command.inputDigest,
+            command.workspaceDigest,
             sourceRepository,
             baseCommit,
             resultingTree,
             resultingCommit,
             canonicalJson(changedPaths),
             canonicalJson(artifactDigests),
-            canonicalJson([...new Set(input.evidenceClaims)].sort()),
-            canonicalJson(input.evidence),
-            canonicalJson(input.verification),
+            canonicalJson([...new Set(command.evidenceClaims)].sort()),
+            canonicalJson(command.evidence),
+            canonicalJson(command.verification),
             now,
           );
         const eligible =
@@ -1814,7 +1856,7 @@ export class Store {
         const dependencyInsert = database.prepare(
           'INSERT INTO result_dependencies (result_id, upstream_result_id) VALUES (?, ?)',
         );
-        for (const upstream of input.upstreamResultIds) dependencyInsert.run(resultId, upstream);
+        for (const upstream of command.upstreamResultIds) dependencyInsert.run(resultId, upstream);
         return resultId;
       },
     );
@@ -1909,6 +1951,20 @@ export class Store {
     return result;
   }
 
+  #requireAcceptedResult(database: DatabaseSync, id: ResultId): Result {
+    const result = this.#requireEligibleResult(database, id);
+    const decision = database
+      .prepare(
+        `SELECT decision FROM result_acceptances
+         WHERE project_id = ? AND result_id = ? AND brief_id = ?`,
+      )
+      .get(this.project.id, result.id, result.briefId);
+    if (!acceptedResultRowSchema.safeParse(decision).success) {
+      throw new StoreError('invalid-state', `Result ${id} has not been accepted`);
+    }
+    return result;
+  }
+
   decideResult(input: ResultDecisionInput): ResultDecision {
     this.#requireActor(input.actor, ['user', 'controller']);
     const result = this.idempotent(
@@ -1997,16 +2053,21 @@ export class Store {
       (database) => {
         const attempt = this.#requireAttempt(database, input.attemptId);
         const job = this.#requireJob(database, attempt.jobId);
-        if (job.currentBriefRevision !== input.expectedBriefRevision) {
+        if (
+          job.currentBriefRevision !== input.expectedBriefRevision ||
+          attempt.briefRevision !== input.expectedBriefRevision
+        ) {
           throw new StoreError('stale-revision', 'Attempt brief is no longer current');
         }
         if (attempt.phase !== 'pending') {
           throw new StoreError('invalid-state', `Attempt ${attempt.id} is ${attempt.phase}`);
         }
+        this.#requireAdmissibleWorkspace(database, attempt.workspaceId);
         if (attempt.workflowId !== null) {
           const workflow = this.#requireWorkflow(database, attempt.workflowId);
           if (
             workflow.phase !== 'running' ||
+            workflow.briefRevision !== input.expectedBriefRevision ||
             input.expectedControlRevision === null ||
             workflow.controlRevision !== input.expectedControlRevision
           ) {
@@ -2029,6 +2090,14 @@ export class Store {
 
   observeAttemptRunning(input: ObserveAttemptRunningInput): Attempt {
     this.#requireActor(input.actor, ['user', 'controller']);
+    const nativeIdentity = nativeIdentitySchema.parse({
+      kind: input.nativeKind,
+      serverGeneration: input.nativeServerGeneration,
+      locator: input.nativeLocator,
+    });
+    if (nativeIdentity.kind === null) {
+      throw new StoreError('identity-mismatch', 'A running attempt requires native identity');
+    }
     const result = this.idempotent(
       'observe-attempt-running',
       input.idempotencyKey,
@@ -2041,11 +2110,26 @@ export class Store {
         }
         if (
           attempt.nativeKind !== null &&
-          (attempt.nativeKind !== input.nativeKind ||
-            attempt.nativeServerGeneration !== input.nativeServerGeneration ||
-            attempt.nativeLocator !== input.nativeLocator)
+          (attempt.nativeKind !== nativeIdentity.kind ||
+            attempt.nativeServerGeneration !== nativeIdentity.serverGeneration ||
+            attempt.nativeLocator !== nativeIdentity.locator)
         ) {
           throw new StoreError('identity-mismatch', 'Attempt native identity cannot change');
+        }
+        const session = this.#requireSession(database, {
+          id: attempt.sessionId,
+          generation: attempt.sessionGeneration,
+        });
+        const sessionIsUnbound =
+          session.nativeKind === null &&
+          session.nativeServerGeneration === null &&
+          session.nativeLocator === null;
+        const sessionMatches =
+          session.nativeKind === nativeIdentity.kind &&
+          session.nativeServerGeneration === nativeIdentity.serverGeneration &&
+          session.nativeLocator === nativeIdentity.locator;
+        if (!sessionIsUnbound && !sessionMatches) {
+          throw new StoreError('identity-mismatch', 'Session native identity cannot change');
         }
         database
           .prepare(
@@ -2055,9 +2139,9 @@ export class Store {
              WHERE project_id = ? AND id = ?`,
           )
           .run(
-            input.nativeKind,
-            input.nativeServerGeneration,
-            input.nativeLocator,
+            nativeIdentity.kind,
+            nativeIdentity.serverGeneration,
+            nativeIdentity.locator,
             this.#now(),
             this.project.id,
             attempt.id,
@@ -2071,15 +2155,15 @@ export class Store {
                     (native_kind = ? AND native_server_generation = ? AND native_locator = ?))`,
           )
           .run(
-            input.nativeKind,
-            input.nativeServerGeneration,
-            input.nativeLocator,
+            nativeIdentity.kind,
+            nativeIdentity.serverGeneration,
+            nativeIdentity.locator,
             this.project.id,
             attempt.sessionId,
             attempt.sessionGeneration,
-            input.nativeKind,
-            input.nativeServerGeneration,
-            input.nativeLocator,
+            nativeIdentity.kind,
+            nativeIdentity.serverGeneration,
+            nativeIdentity.locator,
           );
         return attempt.id;
       },

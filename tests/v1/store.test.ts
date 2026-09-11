@@ -228,6 +228,24 @@ test('creates jobs idempotently and fences active workspace retirement', (t) => 
     hasCode('resource-busy'),
   );
   assert.throws(() => registerWorker(current, 'late-worker'), hasCode('resource-busy'));
+
+  current.store.transaction((database) => {
+    const retiredAt = new Date().toISOString();
+    database
+      .prepare(
+        `UPDATE workspace_retirements
+         SET state = 'completed', revision = 2, updated_at = ?, completed_at = ?
+         WHERE id = 'retirement_1'`,
+      )
+      .run(retiredAt, retiredAt);
+    database
+      .prepare('UPDATE workspaces SET retired_at = ? WHERE id = ?')
+      .run(retiredAt, current.workspaceId);
+  });
+  assert.throws(
+    () => current.store.createJob(directJobInput(current, 'job-two', 'create-job-two')),
+    hasCode('invalid-state'),
+  );
 });
 
 test('fences attempt launch, persists immutable results, and releases settled resources', (t) => {
@@ -308,6 +326,20 @@ test('fences attempt launch, persists immutable results, and releases settled re
     idempotencyKey: 'record-result',
   });
   assert.deepEqual(current.store.getResult(result.id), result);
+  const nextWorker = registerWorker(current, 'next-worker');
+  const nextJob = current.store.createJob(directJobInput(current, 'next-job', 'create-next-job'));
+  const admitNext = () =>
+    current.store.admitAttempt({
+      actor: current.controller,
+      jobId: nextJob.id,
+      session: nextWorker,
+      resourceKey: 'workspace:main',
+      inputResultIds: [result.id],
+      expectedBriefRevision: 1,
+      workflow: { kind: 'direct' },
+      idempotencyKey: 'admit-next-attempt',
+    });
+  assert.throws(admitNext, hasCode('invalid-state'));
   assert.equal(
     current.store.decideResult({
       actor: current.controller,
@@ -332,20 +364,7 @@ test('fences attempt launch, persists immutable results, and releases settled re
     observation: { kind: 'settled', outcome: 'succeeded', reason: 'Native process exited' },
     idempotencyKey: 'settle-result-attempt',
   });
-  const nextWorker = registerWorker(current, 'next-worker');
-  const nextJob = current.store.createJob(directJobInput(current, 'next-job', 'create-next-job'));
-  assert.doesNotThrow(() =>
-    current.store.admitAttempt({
-      actor: current.controller,
-      jobId: nextJob.id,
-      session: nextWorker,
-      resourceKey: 'workspace:main',
-      inputResultIds: [result.id],
-      expectedBriefRevision: 1,
-      workflow: { kind: 'direct' },
-      idempotencyKey: 'admit-next-attempt',
-    }),
-  );
+  assert.doesNotThrow(admitNext);
 });
 
 test('keeps uncertain resources reserved until later native settlement', (t) => {
