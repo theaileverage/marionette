@@ -6,6 +6,8 @@ import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { isMainThread, parentPort, Worker, workerData } from 'node:worker_threads';
 
+import { z } from 'zod';
+
 import {
   applyMigrations,
   canonicalJson,
@@ -18,21 +20,26 @@ import { migrations } from '../../src/v1/migrations/index.js';
 
 const projectId = ProjectIdSchema.parse('project_migrations');
 
-function fixture(): { directory: string; databasePath: string } {
+type MigrationFixture = { directory: string; databasePath: string };
+
+function fixture(): MigrationFixture {
   const directory = mkdtempSync(join(tmpdir(), 'marionette-v1-migrations-'));
   return { directory, databasePath: join(directory, 'state.sqlite') };
 }
 
 function schemaVersion(database: DatabaseSync): number {
-  const value = database.prepare('PRAGMA user_version').get()?.user_version;
-  if (typeof value !== 'number') throw new TypeError('Missing SQLite user_version');
-  return value;
+  return z
+    .number()
+    .int()
+    .nonnegative()
+    .parse(database.prepare('PRAGMA user_version').get()?.user_version);
 }
 
 function waitForWorker(worker: Worker): Promise<void> {
   return new Promise((resolve, reject) => {
-    worker.once('message', (message: unknown) => {
-      if (message === 'opened') resolve();
+    worker.once('message', (message) => {
+      const parsed = z.literal('opened').safeParse(message);
+      if (parsed.success) resolve();
       else reject(new Error(`Unexpected worker result ${String(message)}`));
     });
     worker.once('error', reject);
@@ -43,15 +50,7 @@ function waitForWorker(worker: Worker): Promise<void> {
 }
 
 if (!isMainThread) {
-  const input = workerData;
-  if (
-    typeof input !== 'object' ||
-    input === null ||
-    !('databasePath' in input) ||
-    typeof input.databasePath !== 'string'
-  ) {
-    throw new TypeError('Migration worker requires a database path');
-  }
+  const input = z.object({ databasePath: z.string() }).parse(workerData);
   const database = openDatabase({ path: input.databasePath, projectId });
   database.close();
   if (parentPort === null) throw new Error('Migration worker has no parent port');

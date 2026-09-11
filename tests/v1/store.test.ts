@@ -24,7 +24,7 @@ function tokenHash(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 
-function hasCode(code: StoreError['code']): (error: unknown) => boolean {
+function hasCode(code: StoreError['code']): (error: Error) => boolean {
   return (error) => error instanceof StoreError && error.code === code;
 }
 

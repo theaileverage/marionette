@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync, type SQLOutputValue } from 'node:sqlite';
+
+import { z } from 'zod';
 
 import type { ProjectId } from './model.js';
 import { migrations, type Migration } from './migrations/index.js';
@@ -34,6 +36,7 @@ export type MigrationRecord = {
   checksum: string;
 };
 
+/* oxlint-disable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof -- This recursive encoder is the parser for arbitrary JSON input. */
 export function canonicalJson(value: unknown): string {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') {
     const encoded = JSON.stringify(value);
@@ -57,8 +60,9 @@ export function canonicalJson(value: unknown): string {
   }
   throw new TypeError('Value is not JSON serializable');
 }
+/* oxlint-enable anti-slop/no-unknown-parameters, anti-slop/no-runtime-typeof */
 
-export function payloadDigest(value: unknown): string {
+export function payloadDigest<T>(value: T): string {
   return createHash('sha256').update(canonicalJson(value)).digest('hex');
 }
 
@@ -88,18 +92,20 @@ export function migrationChecksum(migration: Migration): string {
     .digest('hex');
 }
 
-function readInteger(value: unknown, field: string): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+function readInteger(value: SQLOutputValue | undefined, field: string): number {
+  const parsed = z.number().int().nonnegative().safeParse(value);
+  if (!parsed.success) {
     throw new MigrationError('migration-history', `Invalid ${field} in migration metadata`);
   }
-  return value;
+  return parsed.data;
 }
 
-function readText(value: unknown, field: string): string {
-  if (typeof value !== 'string') {
+function readText(value: SQLOutputValue | undefined, field: string): string {
+  const parsed = z.string().safeParse(value);
+  if (!parsed.success) {
     throw new MigrationError('migration-history', `Invalid ${field} in migration metadata`);
   }
-  return value;
+  return parsed.data;
 }
 
 function currentVersion(database: DatabaseSync): number {

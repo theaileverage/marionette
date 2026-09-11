@@ -1,5 +1,5 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync, type SQLOutputValue } from 'node:sqlite';
 
 import { z } from 'zod';
 
@@ -9,7 +9,6 @@ import {
   AttemptIdSchema,
   BriefContentSchema,
   BriefIdSchema,
-  ControlIntentIdSchema,
   DigestSchema,
   EvidenceSchema,
   HostIdSchema,
@@ -23,10 +22,8 @@ import {
   SessionGenerationSchema,
   StepRunIdSchema,
   TimestampSchema,
-  TransitionRequestIdSchema,
   VerificationSchema,
   WorkflowIdSchema,
-  WorkflowLimitsSchema,
   WorkflowPackageSnapshotSchema,
   WorkspaceIdSchema,
   type AgentSessionId,
@@ -35,7 +32,6 @@ import {
   type BriefContent,
   type BriefId,
   type BriefRevision,
-  type ControlIntent,
   type ControlOperation,
   type DeliveryKind,
   type Digest,
@@ -55,7 +51,6 @@ import {
   type StepRun,
   type StepRunId,
   type Timestamp,
-  type TransitionDecision,
   type TransitionRequest,
   type Verification,
   type WorkflowId,
@@ -478,12 +473,31 @@ const resultDecisionRecordSchema = z.object({
   decision: z.enum(['accepted', 'rejected']),
   createdAt: TimestampSchema,
 });
-const transitionDecisionRecordSchema = z.object({
-  requestId: TransitionRequestIdSchema,
-  workflowId: WorkflowIdSchema,
-  workflowRevision: z.number().int().positive(),
-  createdStepRunId: StepRunIdSchema.nullable(),
+const idempotencyRowSchema = z.object({
+  payload_digest: DigestSchema,
+  result_json: z.string(),
 });
+const tokenHashRowSchema = z.object({
+  token_hash: z.string().regex(/^[a-f0-9]{64}$/),
+});
+const packageSnapshotRowSchema = z.object({ snapshot_json: z.string() });
+const ancestorLimitRowSchema = z.object({
+  id: WorkflowIdSchema,
+  max_attempts: z.number().int().positive(),
+  parallelism: z.number().int().positive(),
+  deadline_at: TimestampSchema,
+});
+const attemptUsageRowSchema = z.object({
+  attempts: z.number().int().nonnegative(),
+  active: z.number().int().nonnegative(),
+});
+const controlledWorkflowRowSchema = z.object({
+  id: WorkflowIdSchema,
+  phase: z.enum(['pausing', 'cancelling']),
+});
+const countRowSchema = z.object({ count: z.number().int().nonnegative() });
+
+type SqliteRow = Record<string, SQLOutputValue>;
 
 function parseJson<TOutput, TInput>(
   schema: z.ZodType<TOutput, z.ZodTypeDef, TInput>,
@@ -493,8 +507,8 @@ function parseJson<TOutput, TInput>(
   return schema.parse(value);
 }
 
-function isPromise(value: unknown): value is Promise<unknown> {
-  return typeof value === 'object' && value !== null && 'then' in value;
+function isPromise<T>(value: T): value is T & Promise<unknown> {
+  return value instanceof Promise;
 }
 
 function requireValue<T>(value: T | undefined, code: StoreErrorCode, message: string): T {
@@ -502,7 +516,7 @@ function requireValue<T>(value: T | undefined, code: StoreErrorCode, message: st
   return value;
 }
 
-function attemptFromRow(raw: unknown): Attempt {
+function attemptFromRow(raw: SqliteRow): Attempt {
   const row = attemptRowSchema.parse(raw);
   return {
     id: row.id,
@@ -571,10 +585,10 @@ export class Store {
     return this.#runTransaction('immediate', fn);
   }
 
-  idempotent<TOutput, TInput>(
+  idempotent<TOutput, TInput, TPayload extends object = object>(
     scope: string,
     key: string,
-    payload: unknown,
+    payload: TPayload,
     resultSchema: z.ZodType<TOutput, z.ZodTypeDef, TInput>,
     fn: (database: DatabaseSync) => TOutput,
   ): IdempotentResult<TOutput> {
@@ -583,21 +597,19 @@ export class Store {
     }
     const digest = payloadDigest(payload);
     return this.transaction((database) => {
-      const existing = database
+      const rawExisting = database
         .prepare(
           `SELECT payload_digest, result_json FROM idempotency_records
            WHERE project_id = ? AND scope = ? AND idempotency_key = ?`,
         )
         .get(this.project.id, scope, key);
-      if (existing !== undefined) {
+      if (rawExisting !== undefined) {
+        const existing = idempotencyRowSchema.parse(rawExisting);
         if (existing.payload_digest !== digest) {
           throw new StoreError(
             'idempotency-conflict',
             `Idempotency key ${key} was already used with a different payload`,
           );
-        }
-        if (typeof existing.result_json !== 'string') {
-          throw new StoreError('invalid-state', 'Stored idempotency result is invalid');
         }
         const value: unknown = JSON.parse(existing.result_json);
         return { value: resultSchema.parse(value), replayed: true };
@@ -777,11 +789,14 @@ export class Store {
         'not-found',
         `Session ${input.id} generation ${input.generation} was not found`,
       );
-      const tokenHash = database
-        .prepare('SELECT token_hash FROM agent_sessions WHERE id = ? AND generation = ?')
-        .get(input.id, input.generation)?.token_hash;
-      if (typeof tokenHash !== 'string')
-        throw new StoreError('identity-mismatch', 'Invalid session');
+      const tokenRow = requireValue(
+        database
+          .prepare('SELECT token_hash FROM agent_sessions WHERE id = ? AND generation = ?')
+          .get(input.id, input.generation),
+        'identity-mismatch',
+        'Invalid session',
+      );
+      const tokenHash = tokenHashRowSchema.parse(tokenRow).token_hash;
       const suppliedHash = createHash('sha256').update(input.token).digest();
       const storedHash = Buffer.from(tokenHash, 'hex');
       if (storedHash.length !== suppliedHash.length || !timingSafeEqual(storedHash, suppliedHash)) {
@@ -872,7 +887,7 @@ export class Store {
     return workspace;
   }
 
-  #sessionFromRow(raw: unknown): AgentSession {
+  #sessionFromRow(raw: SqliteRow): AgentSession {
     const row = sessionRowSchema.parse(raw);
     return {
       id: row.id,
@@ -1002,7 +1017,7 @@ export class Store {
     );
   }
 
-  #jobFromRow(raw: unknown): Job {
+  #jobFromRow(raw: SqliteRow): Job {
     const row = jobRowSchema.parse(raw);
     let origin: JobOrigin;
     if (row.origin_kind === 'direct') {
@@ -1067,7 +1082,7 @@ export class Store {
     });
   }
 
-  #briefFromRow(raw: unknown): BriefRevision {
+  #briefFromRow(raw: SqliteRow): BriefRevision {
     const row = briefRowSchema.parse(raw);
     return {
       id: row.id,
@@ -1261,14 +1276,16 @@ export class Store {
     );
   }
 
-  #workflowFromRow(database: DatabaseSync, raw: unknown): WorkflowRun {
+  #workflowFromRow(database: DatabaseSync, raw: SqliteRow): WorkflowRun {
     const row = workflowRowSchema.parse(raw);
-    const snapshot = database
-      .prepare('SELECT snapshot_json FROM workflow_packages WHERE project_id = ? AND digest = ?')
-      .get(this.project.id, row.package_digest)?.snapshot_json;
-    if (typeof snapshot !== 'string') {
-      throw new StoreError('invalid-state', `Workflow ${row.id} has no package snapshot`);
-    }
+    const snapshotRow = requireValue(
+      database
+        .prepare('SELECT snapshot_json FROM workflow_packages WHERE project_id = ? AND digest = ?')
+        .get(this.project.id, row.package_digest),
+      'invalid-state',
+      `Workflow ${row.id} has no package snapshot`,
+    );
+    const snapshot = packageSnapshotRowSchema.parse(snapshotRow).snapshot_json;
     return {
       id: row.id,
       package: parseJson(WorkflowPackageSnapshotSchema, snapshot),
@@ -1572,16 +1589,9 @@ export class Store {
            WHERE w.project_id = ?
          ) SELECT * FROM ancestors`,
       )
-      .all(this.project.id, workflowId, this.project.id);
+      .all(this.project.id, workflowId, this.project.id)
+      .map((row) => ancestorLimitRowSchema.parse(row));
     for (const ancestor of ancestors) {
-      if (
-        typeof ancestor.id !== 'string' ||
-        typeof ancestor.max_attempts !== 'number' ||
-        typeof ancestor.parallelism !== 'number' ||
-        typeof ancestor.deadline_at !== 'string'
-      ) {
-        throw new StoreError('invalid-state', 'Workflow limit row is invalid');
-      }
       if (new Date(ancestor.deadline_at).getTime() <= this.#clock().getTime()) {
         throw new StoreError('limit-exhausted', `Workflow ${ancestor.id} deadline has passed`);
       }
@@ -1594,16 +1604,15 @@ export class Store {
              WHERE w.project_id = ?
            )
            SELECT count(*) AS attempts,
-                  sum(CASE WHEN a.phase IN ('pending','launching','running','stopping','unconfirmed')
-                           THEN 1 ELSE 0 END) AS active
+                  coalesce(sum(CASE WHEN a.phase IN
+                                    ('pending','launching','running','stopping','unconfirmed')
+                                    THEN 1 ELSE 0 END), 0) AS active
            FROM attempts a JOIN descendants d ON d.id = a.workflow_id`,
         )
         .get(this.project.id, ancestor.id, this.project.id);
-      const attemptCount = usage?.attempts;
-      const activeCount = usage?.active ?? 0;
-      if (typeof attemptCount !== 'number' || typeof activeCount !== 'number') {
-        throw new StoreError('invalid-state', 'Workflow usage row is invalid');
-      }
+      const parsedUsage = attemptUsageRowSchema.parse(usage);
+      const attemptCount = parsedUsage.attempts;
+      const activeCount = parsedUsage.active;
       if (attemptCount >= ancestor.max_attempts) {
         throw new StoreError(
           'limit-exhausted',
@@ -1669,33 +1678,27 @@ export class Store {
 
   acknowledgeBrief(input: AcknowledgeBriefInput): BriefRevision {
     const actor = this.#requireActor(input.actor);
-    const result = this.idempotent(
-      'acknowledge-brief',
-      input.idempotencyKey,
-      input,
-      BriefIdSchema,
-      (database) => {
-        const attempt = this.#requireAttempt(database, input.attemptId);
-        if (
-          actor.id !== attempt.sessionId ||
-          actor.generation !== attempt.sessionGeneration ||
-          attempt.briefRevision !== input.briefRevision
-        ) {
-          throw new StoreError(
-            'identity-mismatch',
-            'Only the assigned attempt session can acknowledge its brief revision',
-          );
-        }
-        database
-          .prepare(
-            `INSERT INTO brief_acknowledgements
+    this.idempotent('acknowledge-brief', input.idempotencyKey, input, BriefIdSchema, (database) => {
+      const attempt = this.#requireAttempt(database, input.attemptId);
+      if (
+        actor.id !== attempt.sessionId ||
+        actor.generation !== attempt.sessionGeneration ||
+        attempt.briefRevision !== input.briefRevision
+      ) {
+        throw new StoreError(
+          'identity-mismatch',
+          'Only the assigned attempt session can acknowledge its brief revision',
+        );
+      }
+      database
+        .prepare(
+          `INSERT INTO brief_acknowledgements
                (brief_id, attempt_id, session_id, session_generation, adopted_at)
              VALUES (?, ?, ?, ?, ?)`,
-          )
-          .run(attempt.briefId, attempt.id, actor.id, actor.generation, this.#now());
-        return attempt.briefId;
-      },
-    );
+        )
+        .run(attempt.briefId, attempt.id, actor.id, actor.generation, this.#now());
+      return attempt.briefId;
+    });
     return this.getBrief(this.getAttempt(input.attemptId).jobId, input.briefRevision);
   }
 
@@ -1839,7 +1842,7 @@ export class Store {
     });
   }
 
-  #resultFromRow(raw: unknown): Result {
+  #resultFromRow(raw: SqliteRow): Result {
     const row = resultRowSchema.parse(raw);
     let content: ResultContent;
     if (row.result_kind === 'report') {
@@ -2178,12 +2181,10 @@ export class Store {
         `SELECT id, phase FROM workflow_runs
          WHERE project_id = ? AND phase IN ('pausing', 'cancelling')`,
       )
-      .all(this.project.id);
+      .all(this.project.id)
+      .map((row) => controlledWorkflowRowSchema.parse(row));
     for (const row of controlled) {
-      if (typeof row.id !== 'string' || typeof row.phase !== 'string') {
-        throw new StoreError('invalid-state', 'Controlled workflow row is invalid');
-      }
-      const unsettled = database
+      const unsettledRow = database
         .prepare(
           `WITH RECURSIVE descendants(id) AS (
              SELECT id FROM workflow_runs WHERE project_id = ? AND id = ?
@@ -2195,8 +2196,8 @@ export class Store {
            FROM attempts a JOIN descendants d ON d.id = a.workflow_id
            WHERE a.phase IN ('launching','running','stopping','unconfirmed')`,
         )
-        .get(this.project.id, row.id, this.project.id)?.count;
-      if (unsettled === 0) {
+        .get(this.project.id, row.id, this.project.id);
+      if (countRowSchema.parse(unsettledRow).count === 0) {
         database
           .prepare(
             `UPDATE workflow_runs SET phase = ?, updated_at = ?
