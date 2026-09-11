@@ -3,32 +3,38 @@ import { test } from 'node:test';
 import {
   AppServerRpcError,
   CodexAppServerDeliveryPort,
+  type AppServerReply,
+  type AppServerRequest,
   type CodexThreadBinding,
   type JsonRpcTransport,
 } from '../../src/v1/codex-app-server.js';
 
 function binding(activeTurnId?: string): CodexThreadBinding {
-  return {
+  const result: CodexThreadBinding = {
     projectId: 'project-1',
     executionHostId: 'host-1',
     endpointHostId: 'host-1',
     endpoint: { kind: 'websocket', url: 'ws://127.0.0.1:4500' },
     threadId: 'thread-1',
-    ...(activeTurnId === undefined ? {} : { activeTurnId }),
   };
+  if (activeTurnId !== undefined) result.activeTurnId = activeTurnId;
+  return result;
+}
+
+function noNotifications(): Pick<JsonRpcTransport, 'notify' | 'close'> {
+  return { notify() {}, close() {} };
 }
 
 test('desktop delivery starts an idle registered thread without changing its settings', async () => {
-  const calls: { method: string; params: Record<string, unknown> }[] = [];
+  const calls: AppServerRequest[] = [];
   const transport: JsonRpcTransport = {
-    async request(method, params) {
-      calls.push({ method, params });
-      if (method === 'thread/read') return { thread: { status: { type: 'idle' } } };
-      if (method === 'turn/start') return { turn: { id: 'turn-1' } };
-      throw new Error(`unexpected ${method}`);
+    ...noNotifications(),
+    async request(request): Promise<AppServerReply> {
+      calls.push(request);
+      if (request.method === 'thread/read') return { kind: 'thread-read', status: 'idle' };
+      if (request.method === 'turn/start') return { kind: 'turn-started', turnId: 'turn-1' };
+      throw new Error(`unexpected ${request.method}`);
     },
-    notify() {},
-    close() {},
   };
   const port = new CodexAppServerDeliveryPort(binding(), transport);
   const result = await port.deliver({
@@ -52,18 +58,18 @@ test('desktop delivery steers only the registered active turn and starts after a
   let reads = 0;
   const calls: string[] = [];
   const transport: JsonRpcTransport = {
-    async request(method) {
-      calls.push(method);
-      if (method === 'thread/read') {
+    ...noNotifications(),
+    async request(request): Promise<AppServerReply> {
+      calls.push(request.method);
+      if (request.method === 'thread/read') {
         reads += 1;
-        return { thread: { status: { type: reads === 1 ? 'active' : 'idle' } } };
+        return { kind: 'thread-read', status: reads === 1 ? 'active' : 'idle' };
       }
-      if (method === 'turn/steer') throw new AppServerRpcError(-32602, 'expected turn changed');
-      if (method === 'turn/start') return { turn: { id: 'turn-2' } };
-      throw new Error(`unexpected ${method}`);
+      if (request.method === 'turn/steer')
+        throw new AppServerRpcError(-32602, 'expected turn changed');
+      if (request.method === 'turn/start') return { kind: 'turn-started', turnId: 'turn-2' };
+      throw new Error(`unexpected ${request.method}`);
     },
-    notify() {},
-    close() {},
   };
   const port = new CodexAppServerDeliveryPort(binding('turn-old'), transport);
   const result = await port.deliver({
@@ -80,11 +86,10 @@ test('desktop delivery rejects an endpoint registered to another execution host'
   const port = new CodexAppServerDeliveryPort(
     { ...binding(), endpointHostId: 'host-2' },
     {
+      ...noNotifications(),
       async request() {
         throw new Error('must not call');
       },
-      notify() {},
-      close() {},
     },
   );
   const result = await port.deliver({

@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import net from 'node:net';
+import { z } from 'zod';
 
 export type AppServerEndpoint =
   | { kind: 'websocket'; url: string; authorization?: string }
@@ -28,9 +29,41 @@ export interface CodexAppServerPort {
   }): Promise<CodexDelivery>;
 }
 
+export type AppServerRequest =
+  | {
+      method: 'initialize';
+      params: { clientInfo: { name: string; title: string; version: string } };
+    }
+  | { method: 'thread/read'; params: { threadId: string; includeTurns: boolean } }
+  | {
+      method: 'turn/steer';
+      params: {
+        threadId: string;
+        expectedTurnId: string;
+        clientUserMessageId: string;
+        input: readonly [{ type: 'text'; text: string }];
+      };
+    }
+  | {
+      method: 'turn/start';
+      params: {
+        threadId: string;
+        clientUserMessageId: string;
+        input: readonly [{ type: 'text'; text: string }];
+      };
+    };
+
+export type AppServerNotification = { method: 'initialized'; params: object };
+
+export type AppServerReply =
+  | { kind: 'initialized' }
+  | { kind: 'thread-read'; status: 'active' | 'idle' | 'notLoaded' }
+  | { kind: 'turn-steered'; turnId: string }
+  | { kind: 'turn-started'; turnId: string };
+
 export interface JsonRpcTransport {
-  request(method: string, params: Record<string, unknown>): Promise<unknown>;
-  notify(method: string, params: Record<string, unknown>): void;
+  request(request: AppServerRequest): Promise<AppServerReply>;
+  notify(notification: AppServerNotification): void;
   close(): void;
 }
 
@@ -45,17 +78,33 @@ export class AppServerRpcError extends Error {
 }
 
 type Pending = {
-  resolve: (value: unknown) => void;
+  request: AppServerRequest;
+  resolve: (value: AppServerReply) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 };
 
-function record(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
+type DecodedReply = { id: number; reply: AppServerReply };
 
-function errorText(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+const rpcErrorSchema = z.object({ code: z.number().int(), message: z.string().min(1) });
+const rpcEnvelopeSchema = z
+  .object({
+    id: z.number().int(),
+    result: z.unknown().optional(),
+    error: rpcErrorSchema.optional(),
+  })
+  .passthrough();
+const initializedResultSchema = z.object({}).passthrough();
+const threadReadResultSchema = z.object({
+  thread: z.object({
+    status: z.object({ type: z.enum(['active', 'idle', 'notLoaded']) }).passthrough(),
+  }),
+});
+const turnSteerResultSchema = z.object({ turnId: z.string().min(1) });
+const turnStartResultSchema = z.object({ turn: z.object({ id: z.string().min(1) }) });
+
+function errorText(error: Error) {
+  return error.message;
 }
 
 function maskedFrame(text: string) {
@@ -97,6 +146,42 @@ function unmaskedFrame(opcode: number, payload: Buffer) {
   return Buffer.concat([header, payload]);
 }
 
+function decodeReply(request: AppServerRequest, text: string): DecodedReply {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(text);
+  } catch {
+    throw new Error('Codex app-server sent invalid JSON');
+  }
+  const envelope = rpcEnvelopeSchema.safeParse(decoded);
+  if (!envelope.success) throw new Error('Codex app-server sent an invalid JSON-RPC response');
+  if (envelope.data.error)
+    throw new AppServerRpcError(envelope.data.error.code, envelope.data.error.message);
+  if (envelope.data.result === undefined)
+    throw new Error('Codex app-server response lacked result');
+  if (request.method === 'initialize') {
+    if (!initializedResultSchema.safeParse(envelope.data.result).success)
+      throw new Error('initialize returned an invalid result');
+    return { id: envelope.data.id, reply: { kind: 'initialized' } };
+  }
+  if (request.method === 'thread/read') {
+    const result = threadReadResultSchema.safeParse(envelope.data.result);
+    if (!result.success) throw new Error('thread/read returned an invalid result');
+    return {
+      id: envelope.data.id,
+      reply: { kind: 'thread-read', status: result.data.thread.status.type },
+    };
+  }
+  if (request.method === 'turn/steer') {
+    const result = turnSteerResultSchema.safeParse(envelope.data.result);
+    if (!result.success) throw new Error('turn/steer returned an invalid result');
+    return { id: envelope.data.id, reply: { kind: 'turn-steered', turnId: result.data.turnId } };
+  }
+  const result = turnStartResultSchema.safeParse(envelope.data.result);
+  if (!result.success) throw new Error('turn/start returned an invalid result');
+  return { id: envelope.data.id, reply: { kind: 'turn-started', turnId: result.data.turn.id } };
+}
+
 /** A small JSON-RPC 2.0 client for a registered app-server WebSocket or Unix-socket endpoint. */
 export class AppServerWebSocketTransport implements JsonRpcTransport {
   private constructor(private readonly socket: net.Socket) {
@@ -114,10 +199,11 @@ export class AppServerWebSocketTransport implements JsonRpcTransport {
     const socket = await AppServerWebSocketTransport.open(endpoint);
     await AppServerWebSocketTransport.upgrade(socket, endpoint);
     const transport = new AppServerWebSocketTransport(socket);
-    await transport.request('initialize', {
-      clientInfo: { name: 'marionette-v1', title: 'Marionette', version: '1.0.0' },
+    await transport.request({
+      method: 'initialize',
+      params: { clientInfo: { name: 'marionette-v1', title: 'Marionette', version: '1.0.0' } },
     });
-    transport.notify('initialized', {});
+    transport.notify({ method: 'initialized', params: {} });
     return transport;
   }
 
@@ -189,25 +275,25 @@ export class AppServerWebSocketTransport implements JsonRpcTransport {
     });
   }
 
-  request(method: string, params: Record<string, unknown>) {
+  request(request: AppServerRequest) {
     if (this.closed) return Promise.reject(new Error('Codex app-server transport is closed'));
     const id = this.nextId++;
-    return new Promise<unknown>((resolve, reject) => {
+    return new Promise<AppServerReply>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`${method} acknowledgement is unknown after timeout`));
+        reject(new Error(`${request.method} acknowledgement is unknown after timeout`));
       }, 10000);
-      this.pending.set(id, { resolve, reject, timer });
-      this.send({ id, method, params });
+      this.pending.set(id, { request, resolve, reject, timer });
+      this.send(JSON.stringify({ jsonrpc: '2.0', id, ...request }));
     });
   }
 
-  notify(method: string, params: Record<string, unknown>) {
-    if (!this.closed) this.send({ method, params });
+  notify(notification: AppServerNotification) {
+    if (!this.closed) this.send(JSON.stringify({ jsonrpc: '2.0', ...notification }));
   }
 
-  private send(message: Record<string, unknown>) {
-    this.socket.write(maskedFrame(JSON.stringify(message)), (error) => {
+  private send(message: string) {
+    this.socket.write(maskedFrame(message), (error) => {
       if (error) this.failAll(error);
     });
   }
@@ -248,31 +334,24 @@ export class AppServerWebSocketTransport implements JsonRpcTransport {
   }
 
   private receiveJson(text: string) {
-    let message: unknown;
+    let envelope: z.SafeParseReturnType<unknown, z.infer<typeof rpcEnvelopeSchema>>;
     try {
-      message = JSON.parse(text);
+      envelope = rpcEnvelopeSchema.safeParse(JSON.parse(text));
     } catch {
       this.failAll(new Error('Codex app-server sent invalid JSON'));
       return;
     }
-    if (!record(message) || typeof message.id !== 'number') return;
-    const pending = this.pending.get(message.id);
+    if (!envelope.success) return this.failAll(new Error('Codex app-server sent invalid JSON-RPC'));
+    const pending = this.pending.get(envelope.data.id);
     if (!pending) return;
-    this.pending.delete(message.id);
+    this.pending.delete(envelope.data.id);
     clearTimeout(pending.timer);
-    if (
-      record(message.error) &&
-      typeof message.error.code === 'number' &&
-      typeof message.error.message === 'string'
-    ) {
-      pending.reject(new AppServerRpcError(message.error.code, message.error.message));
-      return;
+    try {
+      const decoded = decodeReply(pending.request, text);
+      pending.resolve(decoded.reply);
+    } catch (error) {
+      pending.reject(error instanceof Error ? error : new Error('App-server response failed'));
     }
-    if (!Object.hasOwn(message, 'result')) {
-      pending.reject(new Error('Codex app-server response lacked result'));
-      return;
-    }
-    pending.resolve(message.result);
   }
 
   private failAll(error: Error) {
@@ -292,24 +371,11 @@ export class AppServerWebSocketTransport implements JsonRpcTransport {
   }
 }
 
-type ThreadMode = { kind: 'active' } | { kind: 'idle' } | { kind: 'unavailable'; reason: string };
+type ThreadMode = { kind: 'active' } | { kind: 'idle' };
 
-function threadMode(value: unknown): ThreadMode {
-  if (!record(value) || !record(value.thread) || !record(value.thread.status))
-    return { kind: 'unavailable', reason: 'thread/read returned no thread status' };
-  const status = value.thread.status;
-  if (status.type === 'active') return { kind: 'active' };
-  if (status.type === 'idle' || status.type === 'notLoaded') return { kind: 'idle' };
-  return {
-    kind: 'unavailable',
-    reason: `Thread is ${typeof status.type === 'string' ? status.type : 'unknown'}`,
-  };
-}
-
-function turnId(value: unknown, field: 'turnId' | 'turn') {
-  if (!record(value)) return undefined;
-  if (field === 'turnId') return typeof value.turnId === 'string' ? value.turnId : undefined;
-  return record(value.turn) && typeof value.turn.id === 'string' ? value.turn.id : undefined;
+function threadMode(reply: AppServerReply): ThreadMode | undefined {
+  if (reply.kind !== 'thread-read') return undefined;
+  return reply.status === 'active' ? { kind: 'active' } : { kind: 'idle' };
 }
 
 /** Delivery adapter for one registered Desktop thread. The watcher retains delivery durability. */
@@ -335,20 +401,21 @@ export class CodexAppServerDeliveryPort implements CodexAppServerPort {
         kind: 'unsupported',
         reason: 'App-server endpoint is not on the project execution host',
       };
-    let mode: ThreadMode;
     try {
-      mode = threadMode(
-        await this.transport.request('thread/read', {
-          threadId: this.binding.threadId,
-          includeTurns: false,
+      const mode = threadMode(
+        await this.transport.request({
+          method: 'thread/read',
+          params: { threadId: this.binding.threadId, includeTurns: false },
         }),
       );
+      if (!mode) return { kind: 'unsupported', reason: 'thread/read returned an unexpected reply' };
+      return mode.kind === 'active' ? this.steerOrStart(input) : this.start(input);
     } catch (error) {
-      return { kind: 'unconfirmed', reason: errorText(error) };
+      return {
+        kind: 'unconfirmed',
+        reason: error instanceof Error ? errorText(error) : 'thread/read failed',
+      };
     }
-    if (mode.kind === 'unavailable') return { kind: 'unsupported', reason: mode.reason };
-    if (mode.kind === 'active') return this.steerOrStart(input);
-    return this.start(input);
   }
 
   private async steerOrStart(input: {
@@ -361,48 +428,61 @@ export class CodexAppServerDeliveryPort implements CodexAppServerPort {
         reason: 'Active thread has no registered expected turn identity',
       };
     try {
-      const result = await this.transport.request('turn/steer', {
-        threadId: this.binding.threadId,
-        expectedTurnId: this.binding.activeTurnId,
-        clientUserMessageId: input.deliveryId,
-        input: [{ type: 'text', text: input.message }],
+      const result = await this.transport.request({
+        method: 'turn/steer',
+        params: {
+          threadId: this.binding.threadId,
+          expectedTurnId: this.binding.activeTurnId,
+          clientUserMessageId: input.deliveryId,
+          input: [{ type: 'text', text: input.message }],
+        },
       });
-      const id = turnId(result, 'turnId');
-      return id
-        ? { kind: 'submitted', turnId: id }
-        : { kind: 'unconfirmed', reason: 'turn/steer lacked turnId' };
+      return result.kind === 'turn-steered'
+        ? { kind: 'submitted', turnId: result.turnId }
+        : { kind: 'unconfirmed', reason: 'turn/steer returned an unexpected reply' };
     } catch (error) {
       if (!(error instanceof AppServerRpcError))
-        return { kind: 'unconfirmed', reason: errorText(error) };
+        return {
+          kind: 'unconfirmed',
+          reason: error instanceof Error ? errorText(error) : 'turn/steer failed',
+        };
       try {
         const mode = threadMode(
-          await this.transport.request('thread/read', {
-            threadId: this.binding.threadId,
-            includeTurns: false,
+          await this.transport.request({
+            method: 'thread/read',
+            params: { threadId: this.binding.threadId, includeTurns: false },
           }),
         );
-        return mode.kind === 'idle'
+        return mode?.kind === 'idle'
           ? this.start(input)
           : { kind: 'unconfirmed', reason: `turn/steer rejected: ${error.message}` };
       } catch (readError) {
-        return { kind: 'unconfirmed', reason: errorText(readError) };
+        return {
+          kind: 'unconfirmed',
+          reason: readError instanceof Error ? errorText(readError) : 'thread/read failed',
+        };
       }
     }
   }
 
   private async start(input: { deliveryId: string; message: string }): Promise<CodexDelivery> {
     try {
-      const result = await this.transport.request('turn/start', {
-        threadId: this.binding.threadId,
-        clientUserMessageId: input.deliveryId,
-        input: [{ type: 'text', text: input.message }],
+      const result = await this.transport.request({
+        method: 'turn/start',
+        params: {
+          threadId: this.binding.threadId,
+          clientUserMessageId: input.deliveryId,
+          input: [{ type: 'text', text: input.message }],
+        },
       });
-      const id = turnId(result, 'turn');
-      return id
-        ? { kind: 'submitted', turnId: id }
-        : { kind: 'unconfirmed', reason: 'turn/start lacked turn.id' };
+      return result.kind === 'turn-started'
+        ? { kind: 'submitted', turnId: result.turnId }
+        : { kind: 'unconfirmed', reason: 'turn/start returned an unexpected reply' };
     } catch (error) {
-      return { kind: 'unconfirmed', reason: errorText(error) };
+      return {
+        kind: 'unconfirmed',
+        reason: error instanceof Error ? errorText(error) : 'turn/start failed',
+      };
     }
   }
 }

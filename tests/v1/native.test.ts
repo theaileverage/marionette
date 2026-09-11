@@ -3,9 +3,16 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import net from 'node:net';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { HerdrNativeAdapter, type NativeJournal } from '../../src/v1/native.js';
+import {
+  HerdrNativeAdapter,
+  LocalEndpointInspector,
+  type LocalCommandRunner,
+  type NativeJournal,
+} from '../../src/v1/native.js';
 
-type Request = { id: string; method: string; params: Record<string, unknown> };
+type Request = { id: string; method: string; params: object };
+type HerdrReply = object;
+type RecordedJournal = { value: NativeJournal; effects: string[] };
 
 function agent(status: 'idle' | 'working' | 'blocked' | 'done' = 'idle') {
   return {
@@ -23,7 +30,7 @@ function agent(status: 'idle' | 'working' | 'blocked' | 'done' = 'idle') {
   };
 }
 
-async function fakeHerdr(socketPath: string, onRequest: (request: Request) => unknown) {
+async function fakeHerdr(socketPath: string, onRequest: (request: Request) => HerdrReply) {
   const server = net.createServer((socket) => {
     let input = '';
     socket.on('data', (chunk) => {
@@ -41,7 +48,7 @@ async function fakeHerdr(socketPath: string, onRequest: (request: Request) => un
   return server;
 }
 
-function journal(): { value: NativeJournal; effects: string[] } {
+function journal(): RecordedJournal {
   const effects: string[] = [];
   return {
     effects,
@@ -59,6 +66,29 @@ const endpointInspector = {
     return 'server-start-1';
   },
 };
+
+test('local endpoint inspector ties a socket owner to its process start instance', async () => {
+  const commands: LocalCommandRunner = {
+    async run(command) {
+      if (command === 'lsof') return { stdout: 'p481\nn/private/tmp/herdr.sock\n' };
+      return { stdout: 'Wed Sep 11 10:22:33 2026\n' };
+    },
+  };
+  const first = await new LocalEndpointInspector(commands).serverStartToken(
+    '/private/tmp/herdr.sock',
+  );
+  assert.ok(first);
+  const restarted: LocalCommandRunner = {
+    async run(command) {
+      if (command === 'lsof') return { stdout: 'p481\n' };
+      return { stdout: 'Wed Sep 11 10:22:34 2026\n' };
+    },
+  };
+  assert.notEqual(
+    first,
+    await new LocalEndpointInspector(restarted).serverStartToken('/private/tmp/herdr.sock'),
+  );
+});
 
 test('native adapter registers, launches AGY in an owned tab, prompts, settles, and cleans up', async () => {
   const root = mkdtempSync('/private/tmp/marionette-v1-native-');

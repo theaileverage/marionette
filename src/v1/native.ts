@@ -1,4 +1,8 @@
+import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { statSync } from 'node:fs';
+import { promisify } from 'node:util';
+import { z } from 'zod';
 import { HerdrClient, type ResponseTypes } from '../herdr-sdk.js';
 
 export type NativeBinding = {
@@ -47,6 +51,49 @@ export interface NativeEndpointInspector {
   serverStartToken(socketPath: string): Promise<string | undefined>;
 }
 
+export type LocalCommandResult = { stdout: string };
+
+export interface LocalCommandRunner {
+  run(command: 'lsof' | 'ps', args: readonly string[]): Promise<LocalCommandResult | undefined>;
+}
+
+const processIdSchema = z.string().regex(/^\d+$/);
+const processStartSchema = z.string().min(1);
+
+const execFileAsync = promisify(execFile);
+
+const localCommandRunner: LocalCommandRunner = {
+  async run(command, args) {
+    try {
+      const result = await execFileAsync(command, [...args], { encoding: 'utf8' });
+      return { stdout: result.stdout };
+    } catch {
+      return undefined;
+    }
+  },
+};
+
+/** Maps a local Unix socket to a process start instance; absence is never treated as proof. */
+export class LocalEndpointInspector implements NativeEndpointInspector {
+  constructor(private readonly commands: LocalCommandRunner = localCommandRunner) {}
+
+  async serverStartToken(socketPath: string): Promise<string | undefined> {
+    const owners = await this.commands.run('lsof', ['-Fn', '-U', socketPath]);
+    if (!owners) return undefined;
+    const processId = owners.stdout
+      .split('\n')
+      .filter((line) => line.startsWith('p'))
+      .map((line) => processIdSchema.safeParse(line.slice(1)))
+      .find((parsed) => parsed.success)?.data;
+    if (!processId) return undefined;
+    const started = await this.commands.run('ps', ['-o', 'lstart=', '-p', processId]);
+    if (!started) return undefined;
+    const start = processStartSchema.safeParse(started.stdout.trim());
+    if (!start.success) return undefined;
+    return createHash('sha256').update(`${processId}\u0000${start.data}`).digest('base64url');
+  }
+}
+
 export type NativeSubmission =
   | { kind: 'submitted'; operationId: string }
   | { kind: 'unconfirmed'; operationId: string; reason: string }
@@ -86,8 +133,8 @@ function sameSocket(a: NativeEndpointEvidence, b: ReturnType<typeof socketEviden
   return a.device === b.device && a.inode === b.inode && a.birthtimeMs === b.birthtimeMs;
 }
 
-function errorText(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
+function errorText(error: Error) {
+  return error.message;
 }
 
 function promptDigest(text: string) {
@@ -145,7 +192,7 @@ function sameIdentity(identity: NativeIdentity, agent: ResponseTypes.AgentInfo) 
 export class HerdrNativeAdapter {
   constructor(
     private readonly journal: NativeJournal,
-    private readonly endpointInspector: NativeEndpointInspector,
+    private readonly endpointInspector: NativeEndpointInspector = new LocalEndpointInspector(),
     private readonly clientFor = (socketPath: string) => new HerdrClient(socketPath),
   ) {}
 
@@ -169,19 +216,23 @@ export class HerdrNativeAdapter {
       )
         return { kind: 'unsupported', reason: 'The registered workspace is unavailable' };
       const generation = endpointGeneration(ping);
+      const evidence: NativeEndpointEvidence = {
+        ...endpoint,
+        serverStartToken,
+        protocol: ping.protocol,
+      };
+      if (generation !== undefined) evidence.endpointProtocolGeneration = generation;
       return {
         hostId: input.hostId,
         socketPath: input.socketPath,
         workspaceId: input.workspaceId,
-        endpoint: {
-          ...endpoint,
-          serverStartToken,
-          protocol: ping.protocol,
-          ...(generation === undefined ? {} : { endpointProtocolGeneration: generation }),
-        },
+        endpoint: evidence,
       };
     } catch (error) {
-      return { kind: 'unsupported', reason: `Cannot register Herdr endpoint: ${errorText(error)}` };
+      return {
+        kind: 'unsupported',
+        reason: `Cannot register Herdr endpoint: ${error instanceof Error ? errorText(error) : 'unknown error'}`,
+      };
     }
   }
 
@@ -271,7 +322,11 @@ export class HerdrNativeAdapter {
         reason: `Agent is ${observation.kind}`,
       };
     } catch (error) {
-      return { kind: 'unconfirmed', operationId: create.operationId, reason: errorText(error) };
+      return {
+        kind: 'unconfirmed',
+        operationId: create.operationId,
+        reason: error instanceof Error ? errorText(error) : 'Native launch failed',
+      };
     }
   }
 
@@ -297,7 +352,10 @@ export class HerdrNativeAdapter {
         return { kind: 'ready', identity };
       return { kind: 'unconfirmed', reason: 'Native agent is still launching' };
     } catch (error) {
-      return { kind: 'unconfirmed', reason: errorText(error) };
+      return {
+        kind: 'unconfirmed',
+        reason: error instanceof Error ? errorText(error) : 'Native observation failed',
+      };
     }
   }
 
@@ -330,7 +388,11 @@ export class HerdrNativeAdapter {
         };
       return { kind: 'submitted', operationId: prepared.operationId };
     } catch (error) {
-      return { kind: 'unconfirmed', operationId: prepared.operationId, reason: errorText(error) };
+      return {
+        kind: 'unconfirmed',
+        operationId: prepared.operationId,
+        reason: error instanceof Error ? errorText(error) : 'Native prompt failed',
+      };
     }
   }
 
@@ -349,7 +411,11 @@ export class HerdrNativeAdapter {
       });
       return { kind: 'submitted', operationId: prepared.operationId };
     } catch (error) {
-      return { kind: 'unconfirmed', operationId: prepared.operationId, reason: errorText(error) };
+      return {
+        kind: 'unconfirmed',
+        operationId: prepared.operationId,
+        reason: error instanceof Error ? errorText(error) : 'Native interrupt failed',
+      };
     }
   }
 
@@ -386,7 +452,11 @@ export class HerdrNativeAdapter {
         };
       return { kind: 'cleaned', operationId: prepared.operationId };
     } catch (error) {
-      return { kind: 'unconfirmed', operationId: prepared.operationId, reason: errorText(error) };
+      return {
+        kind: 'unconfirmed',
+        operationId: prepared.operationId,
+        reason: error instanceof Error ? errorText(error) : 'Native cleanup failed',
+      };
     }
   }
 }
