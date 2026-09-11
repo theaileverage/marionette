@@ -120,7 +120,7 @@ export function createBinding(options: {
 }
 
 export function resolveContext(
-  options: { cwd?: string; bindingPath?: string; env?: NodeJS.ProcessEnv } = {},
+  options: { cwd?: string; bindingPath?: string; env?: NodeJS.ProcessEnv; readOnly?: boolean } = {},
 ): ResolvedContext {
   const env = options.env ?? process.env;
   const inheritedContext = process.env.MARIONETTE_CONTEXT || env.MARIONETTE_CONTEXT;
@@ -144,8 +144,10 @@ export function resolveContext(
     }
   }
   const binding = readJson(bindingPath, bindingSchema);
-  if (binding.hostId !== localHostId(stateRoot(env)))
-    throw new Error('Project belongs to another execution host');
+  const hostId = options.readOnly
+    ? readJson(join(stateRoot(env), 'host.json'), hostSchema).hostId
+    : localHostId(stateRoot(env));
+  if (binding.hostId !== hostId) throw new Error('Project belongs to another execution host');
   if (session && (session.hostId !== binding.hostId || session.projectId !== binding.projectId)) {
     throw new Error('Session context does not match its project binding');
   }
@@ -171,7 +173,7 @@ export function writeSessionContext(options: {
   return path;
 }
 
-export function localSessionContext(resolved: ResolvedContext): SessionContext {
+export function localSessionContext(resolved: ResolvedContext, readOnly = false): SessionContext {
   if (resolved.session) return resolved.session;
   const path = join(resolved.binding.stateDirectory, 'local-user.json');
   try {
@@ -179,6 +181,7 @@ export function localSessionContext(resolved: ResolvedContext): SessionContext {
   } catch (error) {
     if (!missing(error)) throw error;
   }
+  if (readOnly) throw new Error('A local session must already exist before previewing retirement.');
   const session: SessionContext = {
     version: 1,
     bindingPath: resolved.bindingPath,

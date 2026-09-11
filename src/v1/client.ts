@@ -45,7 +45,7 @@ import {
   type AcknowledgeBriefInput,
 } from './store.js';
 
-export type ConnectOptions = Parameters<typeof resolveContext>[0];
+export type ConnectOptions = Omit<NonNullable<Parameters<typeof resolveContext>[0]>, 'readOnly'>;
 
 export class Marionette {
   readonly #store: Store;
@@ -111,6 +111,40 @@ export class Marionette {
 
   static connect(options: ConnectOptions = {}): Marionette {
     return new Marionette(resolveContext(options));
+  }
+
+  static previewRetirement(
+    options: ConnectOptions,
+    input: { workspaceId: z.infer<typeof WorkspaceIdSchema>; idempotencyKey: string },
+  ) {
+    const resolved = resolveContext({ ...options, readOnly: true });
+    const session = localSessionContext(resolved, true);
+    if (
+      session.projectId !== resolved.binding.projectId ||
+      session.hostId !== resolved.binding.hostId ||
+      realpathSync(session.bindingPath) !== realpathSync(resolved.bindingPath)
+    )
+      throw new Error('Local session does not match the project binding');
+    const store = Store.open({
+      readOnly: true,
+      databasePath: resolved.binding.databasePath,
+      project: ProjectBindingSchema.parse({
+        id: resolved.binding.projectId,
+        hostId: resolved.binding.hostId,
+        repositoryRoot: resolved.binding.repositoryRoot,
+        stateDirectory: resolved.binding.stateDirectory,
+      }),
+    });
+    try {
+      const actor = {
+        id: AgentSessionIdSchema.parse(session.sessionId),
+        generation: session.generation,
+      };
+      store.authenticateSession({ ...actor, token: session.token });
+      return previewRuntimeWorkspaceRetirement({ ...input, store, actor });
+    } finally {
+      store.close();
+    }
   }
 
   static init(options: { repositoryRoot: string; stateHome?: string }): Marionette {

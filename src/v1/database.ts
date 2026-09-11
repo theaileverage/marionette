@@ -24,6 +24,7 @@ export class MigrationError extends Error {
 }
 
 export type OpenDatabaseOptions = {
+  readOnly?: boolean;
   path: string;
   projectId: ProjectId;
   busyTimeoutMs?: number;
@@ -220,6 +221,7 @@ export function applyMigrations(
 
 export function openDatabase(options: OpenDatabaseOptions): DatabaseSync {
   const database = new DatabaseSync(options.path, {
+    readOnly: options.readOnly ?? false,
     allowExtension: false,
     enableDoubleQuotedStringLiterals: false,
     enableForeignKeyConstraints: true,
@@ -227,6 +229,18 @@ export function openDatabase(options: OpenDatabaseOptions): DatabaseSync {
   });
   try {
     database.function('marionette_project_id', { deterministic: true }, () => options.projectId);
+    if (options.readOnly) {
+      const migrationSet = options.migrationSet ?? migrations;
+      requireMigrationSet(migrationSet);
+      const version = currentVersion(database);
+      if (version !== migrationSet.length)
+        throw new MigrationError(
+          'migration-history',
+          'Preview requires the current schema; open the project normally to migrate it first.',
+        );
+      verifyHistory(database, migrationSet, version);
+      return database;
+    }
     const deadline = performance.now() + (options.busyTimeoutMs ?? 5_000);
     const pause = new Int32Array(new SharedArrayBuffer(4));
     for (;;) {

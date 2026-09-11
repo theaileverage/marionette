@@ -272,12 +272,15 @@ async function main() {
       '--no-watch applies only to commands that can start the watcher.',
       `marionette ${name.replace('.', ' ')} --help`,
     );
+  if (values['dry-run'] && operation.operation === 'workspace.retire') {
+    writeOutput(
+      Marionette.previewRetirement({ bindingPath: stringOption(values, 'project') }, operation),
+      output,
+    );
+    return;
+  }
   const client = Marionette.connect({ bindingPath: stringOption(values, 'project') });
   try {
-    if (values['dry-run'] && operation.operation === 'workspace.retire') {
-      writeOutput(await client.previewRetirement(operation), output);
-      return;
-    }
     mutationStarted = metadata?.effect !== 'read';
     const result = await execute(client, operation);
     writeOutput(result, output);

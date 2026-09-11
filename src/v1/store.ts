@@ -88,6 +88,7 @@ export class StoreError extends Error {
 }
 
 export type StoreOptions = {
+  readOnly?: boolean;
   databasePath: string;
   project: ProjectBinding;
   busyTimeoutMs?: number;
@@ -592,12 +593,13 @@ export class Store {
     this.#database = database;
     this.#clock = options.clock ?? (() => new Date());
     this.#idFactory = options.idFactory ?? ((kind) => `${kind}_${randomUUID()}`);
-    this.#bindProject();
+    this.#bindProject(options.readOnly ?? false);
   }
 
   static open(options: StoreOptions): Store {
     const project = ProjectBindingSchema.parse(options.project);
     const database = openDatabase({
+      readOnly: options.readOnly,
       path: options.databasePath,
       projectId: project.id,
       busyTimeoutMs: options.busyTimeoutMs,
@@ -701,8 +703,8 @@ export class Store {
     return schema.parse(this.#idFactory(kind));
   }
 
-  #bindProject(): void {
-    this.transaction((database) => {
+  #bindProject(readOnly: boolean): void {
+    this.#runTransaction(readOnly ? 'deferred' : 'immediate', (database) => {
       const existing = database
         .prepare(
           `SELECT b.project_id, b.host_id, p.repository_root, p.state_directory
@@ -724,6 +726,11 @@ export class Store {
         }
         return;
       }
+      if (readOnly)
+        throw new StoreError(
+          'binding-mismatch',
+          'Preview requires an initialized project binding.',
+        );
       const now = this.#now();
       database
         .prepare('INSERT OR IGNORE INTO hosts (id, created_at) VALUES (?, ?)')
