@@ -49,6 +49,50 @@ type Props = {
   onAddTask: () => void;
   onAction: <Input>(action: string, input: Input, success?: string) => Promise<any>;
 };
+function Disclosure({ title, children }: { title: string; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <details onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary>{title}</summary>
+      {open ? children : null}
+    </details>
+  );
+}
+
+type TaskPresentation = {
+  group:
+    'Queued' | 'In progress' | 'Waiting' | 'Needs attention' | 'Verified' | 'Cancelled history';
+  summary: string;
+  detailId: BoardTask['id'];
+};
+const shortText = (value: string) => {
+  const text = value.replace(/\s+/g, ' ').trim();
+  return text.length > 180 ? `${text.slice(0, 177)}…` : text;
+};
+export function presentTask(task: BoardTask, outcomeComplete: boolean): TaskPresentation {
+  const groups = new Map<string, TaskPresentation['group']>([
+    ['queued', 'Queued'],
+    ['preparing', 'Queued'],
+    ['running', 'In progress'],
+    ['verifying', 'In progress'],
+    ['redirecting', 'In progress'],
+    ['cancelling', 'In progress'],
+    ['waiting', 'Waiting'],
+    ['yielding', 'Waiting'],
+    ['paused', 'Waiting'],
+    ['completed', 'Verified'],
+  ]);
+  return {
+    group:
+      task.status === 'cancelled' &&
+      (outcomeComplete || task.required === false || !!task.supersededBy)
+        ? 'Cancelled history'
+        : (groups.get(task.status) ?? 'Needs attention'),
+    summary: shortText(task.waitReason || task.error || task.receipt?.summary || ''),
+    detailId: task.id,
+  };
+}
+
 function RevisionDetail({ id, onAction }: { id: string; onAction: Props['onAction'] }) {
   const [value, setValue] = useState<Revision>();
   return (
@@ -83,14 +127,14 @@ function TaskCard({
   onTask: Props['onTask'];
 }) {
   const children = tasks.filter((t) => t.parentId === task.id);
+  const presentation = presentTask(task, false);
   return (
-    <button className="outcome-task" onClick={() => onTask(task.id)}>
+    <button className="outcome-task" onClick={() => onTask(presentation.detailId)}>
       <span className={`status status-${task.status}`}>{label(task.status)}</span>
       <strong>{task.title}</strong>
       <span>
-        {task.kind} · {task.model ?? 'Configured runtime default; exact model unreported'}
+        {task.kind} · {task.model ?? 'Runtime default'}
       </span>
-      {task.reasoning && <span>Reasoning: {task.reasoning}</span>}
       <span>
         {children.length} direct children · {task.dependencies.length} dependencies
       </span>
@@ -100,10 +144,12 @@ function TaskCard({
           Superseded by {tasks.find((t) => t.id === task.supersededBy)?.title ?? task.supersededBy}
         </span>
       )}
-      {(task.waitReason || task.error) && (
-        <span className="board-warning">{task.waitReason ?? task.error}</span>
+      {presentation.summary && (
+        <span className={task.waitReason || task.error ? 'board-warning' : undefined}>
+          {presentation.summary}
+        </span>
       )}
-      {task.receipt && <span>{task.receipt.summary}</span>}
+      <span className="muted">Open task details and evidence</span>
     </button>
   );
 }
@@ -163,10 +209,6 @@ export function OutcomeBoard({
   return (
     <div className="outcome-board">
       <section className="panel outcome-toolbar">
-        <div>
-          <h2>Outcomes and definitions of done</h2>
-          <p>Understand what remains, who owns it, and the evidence required to finish.</p>
-        </div>
         <div className="outcome-actions">
           <button disabled={!canEdit || pending} onClick={() => setCreating(!creating)}>
             {creating ? 'Close outcome form' : 'New outcome'}
@@ -305,189 +347,61 @@ export function OutcomeBoard({
       )}
       {outcome ? (
         <>
-          <section key={`${outcome.id}:${outcome.revision}`} className="panel outcome-section">
-            <div className="outcome-title">
-              <h3>{outcome.objective}</h3>
-              <span className={`status status-${outcome.status}`}>{outcome.status}</span>
-            </div>
-            <p>
-              Responsible lead: <strong>{outcome.leadOwner}</strong> · Revision {outcome.revision} ·{' '}
-              {outcome.turnsUsed} / {outcome.maxTurns} shared turns
-            </p>
-            <p>
-              Scope: {outcome.scope.join(', ')} · Delegation depth limit: {outcome.maxDepth}
-            </p>
-            <ul className="criteria-list">
-              {outcome.criteria.map((criterion) => {
-                const assessment = outcome.assessments.find(
-                  (a) => a.criterionId === criterion.id && a.revision === outcome.revision,
-                );
-                return (
-                  <li key={criterion.id}>
-                    <strong>{criterion.description}</strong>
-                    <p>Required evidence: {criterion.requiredEvidence}</p>
-                    {assessment && (
-                      <p>
-                        Reviewed by {assessment.owner}: {assessment.rationale}
-                        <br />
-                        Evidence: {assessment.references.map((r) => r.path).join(', ')}
-                      </p>
-                    )}
-                    <details>
-                      <summary>Evaluate this criterion</summary>
-                      <form
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          const f = new FormData(e.currentTarget);
-                          void submit(
-                            'outcome.assess',
-                            {
-                              ...expected,
-                              criterionId: criterion.id,
-                              rationale: String(f.get('rationale')),
-                              references: lines(f.get('references')),
-                            },
-                            'Criterion evidence recorded',
-                          );
-                        }}
-                      >
-                        <label>
-                          Independent evaluation
-                          <textarea name="rationale" required rows={2} />
-                        </label>
-                        <label>
-                          Evidence files in this project, one per line
-                          <textarea name="references" required rows={2} />
-                        </label>
-                        <button disabled={!canEdit || pending}>Record evaluation</button>
-                      </form>
-                    </details>
-                  </li>
-                );
-              })}
-            </ul>
-            <details>
-              <summary>Revise completion criteria</summary>
-              <form
-                key={outcome.revision}
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  const f = new FormData(e.currentTarget);
-                  const criteria = outcome.criteria.map((c, i) => ({
-                    ...c,
-                    description: String(f.get(`description-${i}`)),
-                    requiredEvidence: String(f.get(`required-${i}`)),
-                  }));
-                  void submit(
-                    'outcome.revise',
-                    { ...expected, criteria, reason: String(f.get('reason')) },
-                    'Criteria revised; previous evidence retained in history',
-                  );
-                }}
-              >
-                {outcome.criteria.map((c, i) => (
-                  <fieldset key={c.id}>
-                    <legend>{c.id}</legend>
-                    <label>
-                      Requirement
-                      <input name={`description-${i}`} defaultValue={c.description} required />
-                    </label>
-                    <label>
-                      Required evidence
-                      <input name={`required-${i}`} defaultValue={c.requiredEvidence} required />
-                    </label>
-                  </fieldset>
-                ))}
-                <label>
-                  Why did the completion contract change?
-                  <textarea name="reason" required rows={2} />
-                </label>
-                <button disabled={!canEdit || pending}>Save criteria revision</button>
-              </form>
-            </details>
-            <details>
-              <summary>Review the integrated result</summary>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  const f = new FormData(e.currentTarget);
-                  void submit(
-                    'outcome.integrate',
-                    {
-                      ...expected,
-                      summary: String(f.get('summary')),
-                      references: lines(f.get('references')),
-                    },
-                    'Integrated result reviewed',
-                  );
-                }}
-              >
-                <label>
-                  Integrated evaluation
-                  <textarea
-                    name="summary"
-                    required
-                    rows={3}
-                    defaultValue={outcome.integrated?.summary}
-                  />
-                </label>
-                <label>
-                  Integration evidence files, one per line
-                  <textarea name="references" required rows={2} />
-                </label>
-                <button disabled={!canEdit || pending}>Record integrated review</button>
-              </form>
-            </details>
-            {outcome.unmet.length > 0 ? (
-              <div className="outcome-unmet">
-                <strong>What remains before completion</strong>
-                <ul>
-                  {outcome.unmet.map((item, i) => (
-                    <li key={i}>{item}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : (
-              <p className="board-success">
-                All required work and current acceptance evidence pass.
-              </p>
-            )}
-            <button
-              disabled={
-                !canEdit || pending || outcome.status === 'completed' || outcome.unmet.length > 0
-              }
-              onClick={() => void submit('outcome.complete', expected, 'Outcome verified complete')}
-            >
-              Verify outcome complete
-            </button>
+          <section className="outcome-summary" aria-label="Current outcome status">
+            <h3>
+              {outcome.objective.length > 160
+                ? `${outcome.objective.slice(0, 157)}…`
+                : outcome.objective}
+            </h3>
+            <span className={`status status-${outcome.status}`}>{outcome.status}</span>
+            <span>
+              {outcome.unmet.length} completion blockers · {tasks.length} tasks
+            </span>
           </section>
           {view === 'Board' && (
             <section className="outcome-columns" aria-label="Outcome task board">
-              {[
-                { name: 'Queued', statuses: ['queued', 'preparing'] },
-                {
-                  name: 'In progress',
-                  statuses: ['running', 'verifying', 'redirecting', 'cancelling'],
+              {(
+                [
+                  'Needs attention',
+                  'In progress',
+                  'Queued',
+                  'Waiting',
+                ] satisfies TaskPresentation['group'][]
+              ).map((name) => {
+                const items = tasks.filter(
+                  (task) => presentTask(task, outcome.status === 'completed').group === name,
+                );
+                return (
+                  <div className="outcome-column" key={name}>
+                    <h3>
+                      {name} <span>{items.length}</span>
+                    </h3>
+                    {items.length ? (
+                      items.map((task) => (
+                        <TaskCard key={task.id} task={task} tasks={tasks} onTask={onTask} />
+                      ))
+                    ) : (
+                      <p className="muted">No tasks</p>
+                    )}
+                  </div>
+                );
+              })}
+              {(['Verified', 'Cancelled history'] satisfies TaskPresentation['group'][]).map(
+                (name) => {
+                  const items = tasks.filter(
+                    (task) => presentTask(task, outcome.status === 'completed').group === name,
+                  );
+                  return (
+                    <div className="outcome-column" key={name}>
+                      <Disclosure title={`${name} · ${items.length}`}>
+                        {items.map((task) => (
+                          <TaskCard key={task.id} task={task} tasks={tasks} onTask={onTask} />
+                        ))}
+                      </Disclosure>
+                    </div>
+                  );
                 },
-                { name: 'Waiting', statuses: ['waiting', 'yielding', 'paused'] },
-                {
-                  name: 'Needs attention',
-                  statuses: ['failed', 'blocked', 'uncertain', 'cancelled'],
-                },
-                { name: 'Verified', statuses: ['completed'] },
-              ].map((column) => (
-                <div className="outcome-column" key={column.name}>
-                  <h3>
-                    {column.name}{' '}
-                    <span>{tasks.filter((t) => column.statuses.includes(t.status)).length}</span>
-                  </h3>
-                  {tasks
-                    .filter((t) => column.statuses.includes(t.status))
-                    .map((task) => (
-                      <TaskCard key={task.id} task={task} tasks={tasks} onTask={onTask} />
-                    ))}
-                </div>
-              ))}
+              )}
             </section>
           )}
           {view === 'Task tree' && (
@@ -515,34 +429,201 @@ export function OutcomeBoard({
               </ul>
             </section>
           )}
+          <section key={`${outcome.id}:${outcome.revision}`} className="panel outcome-section">
+            <Disclosure title={`Outcome details and blockers · ${outcome.unmet.length} remaining`}>
+              <p>{outcome.objective}</p>
+              <p>
+                Responsible lead: <strong>{outcome.leadOwner}</strong> · Revision {outcome.revision}{' '}
+                · {outcome.turnsUsed} / {outcome.maxTurns} shared turns
+              </p>
+              <p>
+                Scope: {outcome.scope.join(', ')} · Delegation depth limit: {outcome.maxDepth}
+              </p>
+              <Disclosure title={`Completion criteria and reviews · ${outcome.criteria.length}`}>
+                <ul className="criteria-list">
+                  {outcome.criteria.map((criterion) => {
+                    const assessment = outcome.assessments.find(
+                      (a) => a.criterionId === criterion.id && a.revision === outcome.revision,
+                    );
+                    return (
+                      <li key={criterion.id}>
+                        <strong>{criterion.description}</strong>
+                        <p>Required evidence: {criterion.requiredEvidence}</p>
+                        {assessment && (
+                          <p>
+                            Reviewed by {assessment.owner}: {assessment.rationale}
+                            <br />
+                            Evidence: {assessment.references.map((r) => r.path).join(', ')}
+                          </p>
+                        )}
+                        <details>
+                          <summary>Evaluate this criterion</summary>
+                          <form
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              const f = new FormData(e.currentTarget);
+                              void submit(
+                                'outcome.assess',
+                                {
+                                  ...expected,
+                                  criterionId: criterion.id,
+                                  rationale: String(f.get('rationale')),
+                                  references: lines(f.get('references')),
+                                },
+                                'Criterion evidence recorded',
+                              );
+                            }}
+                          >
+                            <label>
+                              Independent evaluation
+                              <textarea name="rationale" required rows={2} />
+                            </label>
+                            <label>
+                              Evidence files in this project, one per line
+                              <textarea name="references" required rows={2} />
+                            </label>
+                            <button disabled={!canEdit || pending}>Record evaluation</button>
+                          </form>
+                        </details>
+                      </li>
+                    );
+                  })}
+                </ul>
+                <details>
+                  <summary>Revise completion criteria</summary>
+                  <form
+                    key={outcome.revision}
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const f = new FormData(e.currentTarget);
+                      const criteria = outcome.criteria.map((c, i) => ({
+                        ...c,
+                        description: String(f.get(`description-${i}`)),
+                        requiredEvidence: String(f.get(`required-${i}`)),
+                      }));
+                      void submit(
+                        'outcome.revise',
+                        { ...expected, criteria, reason: String(f.get('reason')) },
+                        'Criteria revised; previous evidence retained in history',
+                      );
+                    }}
+                  >
+                    {outcome.criteria.map((c, i) => (
+                      <fieldset key={c.id}>
+                        <legend>{c.id}</legend>
+                        <label>
+                          Requirement
+                          <input name={`description-${i}`} defaultValue={c.description} required />
+                        </label>
+                        <label>
+                          Required evidence
+                          <input
+                            name={`required-${i}`}
+                            defaultValue={c.requiredEvidence}
+                            required
+                          />
+                        </label>
+                      </fieldset>
+                    ))}
+                    <label>
+                      Why did the completion contract change?
+                      <textarea name="reason" required rows={2} />
+                    </label>
+                    <button disabled={!canEdit || pending}>Save criteria revision</button>
+                  </form>
+                </details>
+                <details>
+                  <summary>Review the integrated result</summary>
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const f = new FormData(e.currentTarget);
+                      void submit(
+                        'outcome.integrate',
+                        {
+                          ...expected,
+                          summary: String(f.get('summary')),
+                          references: lines(f.get('references')),
+                        },
+                        'Integrated result reviewed',
+                      );
+                    }}
+                  >
+                    <label>
+                      Integrated evaluation
+                      <textarea
+                        name="summary"
+                        required
+                        rows={3}
+                        defaultValue={outcome.integrated?.summary}
+                      />
+                    </label>
+                    <label>
+                      Integration evidence files, one per line
+                      <textarea name="references" required rows={2} />
+                    </label>
+                    <button disabled={!canEdit || pending}>Record integrated review</button>
+                  </form>
+                </details>
+              </Disclosure>
+              {outcome.unmet.length > 0 ? (
+                <div className="outcome-unmet">
+                  <strong>What remains before completion</strong>
+                  <ul>
+                    {outcome.unmet.map((item, i) => (
+                      <li key={i}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p className="board-success">
+                  All required work and current acceptance evidence pass.
+                </p>
+              )}
+              <button
+                disabled={
+                  !canEdit || pending || outcome.status === 'completed' || outcome.unmet.length > 0
+                }
+                onClick={() =>
+                  void submit('outcome.complete', expected, 'Outcome verified complete')
+                }
+              >
+                Verify outcome complete
+              </button>
+            </Disclosure>
+          </section>
           <section className="panel outcome-section">
-            <h3>Findings and plan revisions</h3>
-            {data.findings
-              ?.filter((f) => f.outcomeId === outcome.id)
-              .map((f) => (
-                <article key={f.id}>
-                  <strong>{f.summary}</strong>
-                  <p>{f.evidence.join(', ')}</p>
-                </article>
-              ))}
-            {revisions.length ? (
-              <ol className="revision-list">
-                {[...revisions].reverse().map((r) => (
-                  <li key={r.id}>
-                    <strong>
-                      Revision {r.revision} · {r.reason}
-                    </strong>
-                    <p>
-                      {r.owner} · {new Date(r.createdAt).toLocaleString()}
-                    </p>
-                    {r.evidence.length > 0 && <p>Finding references: {r.evidence.join(', ')}</p>}
-                    <RevisionDetail id={r.id} onAction={onAction} />
-                  </li>
+            <Disclosure
+              key={outcome.id}
+              title={`Findings and plan revisions · ${revisions.length} revisions`}
+            >
+              {data.findings
+                ?.filter((f) => f.outcomeId === outcome.id)
+                .map((f) => (
+                  <article key={f.id}>
+                    <strong>{f.summary}</strong>
+                    <p>{f.evidence.join(', ')}</p>
+                  </article>
                 ))}
-              </ol>
-            ) : (
-              <p>No plan revisions yet.</p>
-            )}
+              {revisions.length ? (
+                <ol className="revision-list">
+                  {[...revisions].reverse().map((r) => (
+                    <li key={r.id}>
+                      <strong>
+                        Revision {r.revision} · {r.reason}
+                      </strong>
+                      <p>
+                        {r.owner} · {new Date(r.createdAt).toLocaleString()}
+                      </p>
+                      {r.evidence.length > 0 && <p>Finding references: {r.evidence.join(', ')}</p>}
+                      <RevisionDetail id={r.id} onAction={onAction} />
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p>No plan revisions yet.</p>
+              )}
+            </Disclosure>
           </section>
           {data.strategies
             .filter((s) => s.outcomeId === outcome.id)
@@ -555,15 +636,17 @@ export function OutcomeBoard({
                   Round {strategy.round} / {strategy.maxRounds} · Stop when:{' '}
                   {strategy.stopCondition}
                 </p>
-                <p>Evaluate against: {strategy.criteria}</p>
-                <p>{strategy.synthesis}</p>
-                {strategy.disagreements?.length ? (
-                  <ul>
-                    {strategy.disagreements.map((d, i) => (
-                      <li key={i}>{d}</li>
-                    ))}
-                  </ul>
-                ) : null}
+                <Disclosure title="Strategy criteria and result">
+                  <p>Evaluate against: {strategy.criteria}</p>
+                  <p>{strategy.synthesis}</p>
+                  {strategy.disagreements?.length ? (
+                    <ul>
+                      {strategy.disagreements.map((d, i) => (
+                        <li key={i}>{d}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </Disclosure>
               </section>
             ))}
         </>
@@ -577,159 +660,163 @@ export function OutcomeBoard({
         </section>
       )}
       <section className="panel outcome-section">
-        <h3>Capacity and continuation</h3>
-        <p>
-          Global slots: {data.limits.global} · Project slots: {data.limits.project} · Coordination
-          turns delivered: {data.coordination.turns}
-        </p>
-        {data.waits
-          .filter((w) => !outcome || w.outcomeId === outcome.id)
-          .map((wait) => (
-            <div className="wait-card" key={wait.id}>
-              <strong>
-                {wait.owner}: {wait.state}
-              </strong>
-              <p>
-                {wait.adapter.type === 'herdr'
-                  ? 'Automatic continuation in the pinned Herdr session'
-                  : 'Continuation on the next user message'}
-              </p>
-              {wait.error && <p className="board-warning">{wait.error}</p>}
-              <p>
-                {wait.condition.tasks.length} required results · {wait.eventIds?.length ?? 0}{' '}
-                grouped events
-              </p>
-            </div>
-          ))}
-        <p className="muted">{data.coordination.metricBoundary}</p>
-        {data.coordination.usage.map((u) => (
-          <p key={u.id}>
-            Cache read: {u.cacheReadTokens ?? 'unavailable'} · Cache write:{' '}
-            {u.cacheWriteTokens ?? 'unavailable'} · Uncached input:{' '}
-            {u.uncachedInputTokens ?? 'unavailable'} · Cost:{' '}
-            {u.costUsd === null ? 'unavailable' : `$${u.costUsd.toFixed(4)}`}
-            <br />
-            Source: {u.source}
+        <Disclosure title="Capacity and continuation">
+          <p>
+            Global slots: {data.limits.global} · Project slots: {data.limits.project} · Coordination
+            turns delivered: {data.coordination.turns}
           </p>
-        ))}
-        <details>
-          <summary>Configure shared execution limits</summary>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              const f = new FormData(e.currentTarget);
-              void submit(
-                'limits.configure',
-                {
-                  limits: {
-                    ...data.limits,
-                    global: Number(f.get('global')),
-                    project: Number(f.get('project')),
+          {data.waits
+            .filter((w) => !outcome || w.outcomeId === outcome.id)
+            .map((wait) => (
+              <div className="wait-card" key={wait.id}>
+                <strong>
+                  {wait.owner}: {wait.state}
+                </strong>
+                <p>
+                  {wait.adapter.type === 'herdr'
+                    ? 'Automatic continuation in the pinned Herdr session'
+                    : 'Continuation on the next user message'}
+                </p>
+                {wait.error && <p className="board-warning">{wait.error}</p>}
+                <p>
+                  {wait.condition.tasks.length} required results · {wait.eventIds?.length ?? 0}{' '}
+                  grouped events
+                </p>
+              </div>
+            ))}
+          <p className="muted">{data.coordination.metricBoundary}</p>
+          {data.coordination.usage.map((u) => (
+            <p key={u.id}>
+              Cache read: {u.cacheReadTokens ?? 'unavailable'} · Cache write:{' '}
+              {u.cacheWriteTokens ?? 'unavailable'} · Uncached input:{' '}
+              {u.uncachedInputTokens ?? 'unavailable'} · Cost:{' '}
+              {u.costUsd === null ? 'unavailable' : `$${u.costUsd.toFixed(4)}`}
+              <br />
+              Source: {u.source}
+            </p>
+          ))}
+          <details>
+            <summary>Configure shared execution limits</summary>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const f = new FormData(e.currentTarget);
+                void submit(
+                  'limits.configure',
+                  {
+                    limits: {
+                      ...data.limits,
+                      global: Number(f.get('global')),
+                      project: Number(f.get('project')),
+                    },
+                    reason: String(f.get('reason')),
                   },
-                  reason: String(f.get('reason')),
-                },
-                'Shared limits updated',
-              );
-            }}
-          >
-            <div className="form-grid">
+                  'Shared limits updated',
+                );
+              }}
+            >
+              <div className="form-grid">
+                <label>
+                  Global slots
+                  <input
+                    name="global"
+                    type="number"
+                    min="1"
+                    max="32"
+                    defaultValue={data.limits.global}
+                    required
+                  />
+                </label>
+                <label>
+                  Project slots
+                  <input
+                    name="project"
+                    type="number"
+                    min="1"
+                    max="8"
+                    defaultValue={data.limits.project}
+                    required
+                  />
+                </label>
+              </div>
               <label>
-                Global slots
-                <input
-                  name="global"
-                  type="number"
-                  min="1"
-                  max="32"
-                  defaultValue={data.limits.global}
-                  required
-                />
+                Reason
+                <input name="reason" required />
               </label>
-              <label>
-                Project slots
-                <input
-                  name="project"
-                  type="number"
-                  min="1"
-                  max="8"
-                  defaultValue={data.limits.project}
-                  required
-                />
-              </label>
-            </div>
-            <label>
-              Reason
-              <input name="reason" required />
-            </label>
-            <button disabled={!canEdit || pending}>Save limits</button>
-          </form>
-        </details>
+              <button disabled={!canEdit || pending}>Save limits</button>
+            </form>
+          </details>
+        </Disclosure>
       </section>
       <section className="panel outcome-section">
-        <h3>Model and capability profiles</h3>
-        <p>
-          {data.profiles.length} profiles. Discovery reads native catalogs; validation tests the
-          exact selection.
-        </p>
-        <div className="outcome-actions">
-          <label>
-            Runtime
-            <select
-              aria-label="Filter model runtime"
-              value={profileKind}
-              onChange={(e) => setProfileKind(e.target.value)}
-            >
-              <option value="all">All runtimes</option>
-              <option value="codex">Codex</option>
-              <option value="claude">Claude</option>
-              <option value="agy">AGY</option>
-            </select>
-          </label>
-          <label>
-            Find a model
-            <input
-              aria-label="Find a model"
-              value={profileQuery}
-              onChange={(e) => setProfileQuery(e.target.value)}
-            />
-          </label>
-          {['codex', 'claude', 'agy'].map((kind) => (
-            <button
-              key={kind}
-              disabled={!canEdit || pending}
-              onClick={() => void submit('profile.discover', { kind }, `${kind} catalog refreshed`)}
-            >
-              Discover {kind} models
-            </button>
-          ))}
-        </div>
-        {visibleProfiles.map((profile) => (
-          <div className="profile-card" key={profile.id}>
-            <strong>{profile.name}</strong>
-            <p>
-              {profile.kind} · {profile.model} · {profile.reasoning ?? 'Default effort'} ·{' '}
-              {profile.availability}
-            </p>
-            <p>
-              Supported effort:{' '}
-              {profile.supportedReasoning.join(', ') || 'No separate effort control'} · Categories:{' '}
-              {profile.categories.join(', ')}
-            </p>
-            <p>{profile.strengths}</p>
-            <p>{profile.availabilityEvidence}</p>
-            <button
-              disabled={!canEdit || pending}
-              onClick={() =>
-                void submit(
-                  'profile.validate',
-                  { profileId: profile.id },
-                  'Model availability probe finished',
-                )
-              }
-            >
-              Validate exact model
-            </button>
+        <Disclosure title={`Model and capability profiles · ${data.profiles.length}`}>
+          <p>
+            {data.profiles.length} profiles. Discovery reads native catalogs; validation tests the
+            exact selection.
+          </p>
+          <div className="outcome-actions">
+            <label>
+              Runtime
+              <select
+                aria-label="Filter model runtime"
+                value={profileKind}
+                onChange={(e) => setProfileKind(e.target.value)}
+              >
+                <option value="all">All runtimes</option>
+                <option value="codex">Codex</option>
+                <option value="claude">Claude</option>
+                <option value="agy">AGY</option>
+              </select>
+            </label>
+            <label>
+              Find a model
+              <input
+                aria-label="Find a model"
+                value={profileQuery}
+                onChange={(e) => setProfileQuery(e.target.value)}
+              />
+            </label>
+            {['codex', 'claude', 'agy'].map((kind) => (
+              <button
+                key={kind}
+                disabled={!canEdit || pending}
+                onClick={() =>
+                  void submit('profile.discover', { kind }, `${kind} catalog refreshed`)
+                }
+              >
+                Discover {kind} models
+              </button>
+            ))}
           </div>
-        ))}
+          {visibleProfiles.map((profile) => (
+            <div className="profile-card" key={profile.id}>
+              <strong>{profile.name}</strong>
+              <p>
+                {profile.kind} · {profile.model} · {profile.reasoning ?? 'Default effort'} ·{' '}
+                {profile.availability}
+              </p>
+              <p>
+                Supported effort:{' '}
+                {profile.supportedReasoning.join(', ') || 'No separate effort control'} ·
+                Categories: {profile.categories.join(', ')}
+              </p>
+              <p>{profile.strengths}</p>
+              <p>{profile.availabilityEvidence}</p>
+              <button
+                disabled={!canEdit || pending}
+                onClick={() =>
+                  void submit(
+                    'profile.validate',
+                    { profileId: profile.id },
+                    'Model availability probe finished',
+                  )
+                }
+              >
+                Validate exact model
+              </button>
+            </div>
+          ))}
+        </Disclosure>
       </section>
     </div>
   );

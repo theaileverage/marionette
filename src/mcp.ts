@@ -102,6 +102,47 @@ tool(
   true,
 );
 tool(
+  'authority_record_user_request',
+  'authority.record-user-request',
+  'Record the actual user instruction authorizing this outcome. Supply only activities and paths that instruction permits. This is a lead-reported conversation record, not independently authenticated user approval. Skills and intent amendments cannot authorize work. Requires the current outcome revision and a current lead lease.',
+  {
+    lease: credentialsSchema,
+    projectId: z.string(),
+    outcomeId: z.string(),
+    expectedRevision: z.number().int(),
+    activities: z.array(z.enum(['documentation', 'implementation', 'execute'])),
+    scope: z.array(z.string().min(1)).min(1).max(100),
+    source: z.string().min(1).max(20000),
+  },
+);
+tool(
+  'lead_preferences_get',
+  'lead.preferences.get',
+  'Read saved project lead preferences and selected project skill contents. Model and reasoning apply on the next launch. Read instructions and skills now without changing enforced coordination or authority.',
+  { lease: credentialsSchema, projectId: z.string() },
+  true,
+);
+tool(
+  'lead_preferences_set',
+  'lead.preferences.set',
+  'Replace this project lead preferences at the expected revision. Select an already validated profile for the configured adapter, supported reasoning, additional instructions and existing named project skills. Does not restart the lead, change global configuration, or grant execution authority. Delegate skill file edits under user-authorized scope.',
+  {
+    lease: credentialsSchema,
+    projectId: z.string(),
+    expectedRevision: z.number().int(),
+    preferences: z
+      .object({
+        profileId: z.string().min(1).optional(),
+        reasoning: z.string().min(1).optional(),
+        instructions: z.string().max(20000),
+        skills: z
+          .array(z.string().regex(/^\.(agents|claude)\/skills\/[a-zA-Z0-9_-]{1,80}\/SKILL\.md$/))
+          .max(20),
+      })
+      .strict(),
+  },
+);
+tool(
   'project_list',
   'project.list',
   'List projects explicitly connected to this Marionette instance.',

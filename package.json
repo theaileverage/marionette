@@ -59,6 +59,7 @@
     "dist/cli.js",
     "dist/mcp.js",
     "dist/harness-guard.js",
+    "dist/marionette-skills.json",
     "public/",
     "README.md",
     "THIRD_PARTY_NOTICES.md",

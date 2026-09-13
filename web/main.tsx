@@ -24,7 +24,7 @@ import {
   X,
 } from 'lucide-react';
 import './style.css';
-import { OutcomeBoard, type OutcomeBoardData } from './outcome-board';
+import { OutcomeBoard, presentTask, type OutcomeBoardData } from './outcome-board';
 import { CleanupPanel } from './cleanup-panel';
 
 type Task = {
@@ -90,7 +90,6 @@ type AssignmentLinks = {
 const short = (id: string) => id.slice(0, 8);
 const pretty = <Value,>(v: Value) => JSON.stringify(v, null, 2);
 const active = new Set(['preparing', 'running', 'redirecting', 'cancelling', 'verifying']);
-const needsAttention = new Set(['blocked', 'uncertain', 'failed']);
 function download<Value>(name: string, value: Value) {
   const url = URL.createObjectURL(new Blob([pretty(value)], { type: 'application/json' }));
   const a = document.createElement('a');
@@ -499,9 +498,9 @@ function App() {
             {connected ? 'Supervisor connected' : 'Reconnecting…'}
           </div>
           <p>
-            Workers keep moving.
-            <br />
-            Your conversation stays open.
+            {brief
+              ? `${brief.tasks.filter((task) => active.has(task.status)).length} active tasks`
+              : 'No project loaded'}
           </p>
           <button
             className="subtle"
@@ -647,7 +646,16 @@ function App() {
                       },
                       {
                         label: 'Needs attention',
-                        value: brief.tasks.filter((t) => needsAttention.has(t.status)).length,
+                        value: brief.tasks.filter(
+                          (task) =>
+                            presentTask(
+                              task,
+                              !brief.outcomes.some(
+                                (outcome) =>
+                                  outcome.id === task.outcomeId && outcome.status === 'open',
+                              ),
+                            ).group === 'Needs attention',
+                        ).length,
                         icon: Bell,
                         color: 'amber',
                       },

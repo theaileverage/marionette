@@ -18,6 +18,8 @@ import { guardHookEffect, readGuardPolicy } from './harness-guard.js';
 import { cliCommands, commandHelp, fullHelp } from './cli-help.js';
 import { configurationCommandEffect } from './configuration-cli.js';
 import { findBinding } from './project-binding.js';
+import { kindSchema } from './types.js';
+import { listClientReceipts, mcpCommand, mcpServerName } from './mcp-registration.js';
 const args = process.argv.slice(2);
 function flag(name: string) {
   const i = args.indexOf('--' + name);
@@ -125,7 +127,7 @@ const mainEffect = Effect.fn('main')(function* () {
     if (args.includes('--help')) {
       yield* sync('main.main', () =>
         console.log(
-          'Usage: marionette setup [--yes] [--json] [--config FILE] [--dry-run]\n  --project DIR --home DIR --name TEXT --session NAME --socket PATH --workspace ID\n  --lead codex-desktop|codex|claude|agy|omp --lead-name TEXT --lead-profile PROFILE_ID --port NUMBER\n  --agent-access inherit|full-access (all harnesses; use config for per-harness settings)\n  --no-trust-workspaces --mcp install|print|skip --takeover --install-tools --upgrade\n  --takeover replaces the current lead and invalidates its credentials; init accepts the same flags.\n  --schema prints the accepted JSON configuration. --yes accepts defaults without prompts.',
+          'Usage: marionette setup [--yes] [--json] [--config FILE] [--dry-run]\n  --project DIR --home DIR --name TEXT --session NAME --socket PATH --workspace ID\n  --lead codex-desktop|codex|claude|agy|omp --lead-name TEXT --lead-profile PROFILE_ID --port NUMBER\n  --agent-access inherit|full-access (all harnesses; use config for per-harness settings)\n  --authority-mode conversation|external\n  --no-trust-workspaces --mcp install|print|skip --takeover --install-tools --install-skills --no-install-skills --upgrade\n  --takeover replaces the current lead and invalidates its credentials; init accepts the same flags.\n  --schema prints the accepted JSON configuration. --yes accepts defaults without prompts.',
         ),
       );
       return;
@@ -154,6 +156,8 @@ const mainEffect = Effect.fn('main')(function* () {
           mcp: ['install', 'print', 'skip'],
           takeover: false,
           installTools: false,
+          installSkills: false,
+          authorityMode: ['conversation', 'external'],
           upgrade: false,
         }),
       );
@@ -177,6 +181,7 @@ const mainEffect = Effect.fn('main')(function* () {
           '--lead-name',
           '--lead-profile',
           '--agent-access',
+          '--authority-mode',
           '--port',
           '--no-trust-agy',
           '--no-trust-workspaces',
@@ -184,6 +189,8 @@ const mainEffect = Effect.fn('main')(function* () {
           '--mcp',
           '--takeover',
           '--install-tools',
+          '--install-skills',
+          '--no-install-skills',
           '--upgrade',
         ]),
     );
@@ -202,6 +209,8 @@ const mainEffect = Effect.fn('main')(function* () {
           '--trust-workspaces',
           '--takeover',
           '--install-tools',
+          '--install-skills',
+          '--no-install-skills',
           '--upgrade',
         ]),
     );
@@ -223,6 +232,11 @@ const mainEffect = Effect.fn('main')(function* () {
     }));
     for (const key of ['project', 'home', 'name', 'session', 'socket', 'workspace', 'lead', 'mcp'])
       if (flag(key)) yield* sync('main.main', () => (input[key] = flag(key)));
+    if (args.includes('--install-skills') && args.includes('--no-install-skills'))
+      throw new Error('Choose --install-skills or --no-install-skills');
+    if (args.includes('--install-skills')) input.installSkills = true;
+    if (args.includes('--no-install-skills')) input.installSkills = false;
+    if (flag('authority-mode')) input.authorityMode = flag('authority-mode');
     if (flag('lead-name')) yield* sync('main.main', () => (input.leadName = flag('lead-name')));
     if (flag('lead-profile'))
       yield* sync('main.main', () => (input.leadProfile = flag('lead-profile')));
@@ -339,12 +353,81 @@ const mainEffect = Effect.fn('main')(function* () {
     return;
   }
   if (cmd === 'mcp-config') {
-    const server = yield* sync('main.main', () => resolve(installRuntime(home), 'dist/mcp.js'));
-    yield* sync('main.main', () =>
-      console.log(
-        `[mcp_servers.marionette]\ncommand = ${JSON.stringify(process.execPath)}\nargs = [${JSON.stringify(server)}, "--home", ${JSON.stringify(home)}]\n`,
-      ),
-    );
+    const values = parseArgs({
+      args: args.slice(1),
+      options: {
+        home: { type: 'string' },
+        project: { type: 'string' },
+        agent: { type: 'string' },
+        format: { type: 'string' },
+      },
+    }).values;
+    yield* sync('MCP.printConfiguration', () => {
+      const selected =
+        values.agent === 'all'
+          ? 'all'
+          : values.agent === undefined
+            ? undefined
+            : Schema.decodeUnknownSync(kindSchema)(values.agent);
+      if (values.format !== undefined && values.format !== 'toml' && values.format !== 'command')
+        throw new Error('Expected --format command or toml');
+      const binding = (() => {
+        try {
+          return findBinding(values.project ?? process.cwd()).binding;
+        } catch (error) {
+          if (
+            !values.project &&
+            error instanceof Error &&
+            error.message.startsWith('No configured Marionette project found.')
+          )
+            return undefined;
+          throw error;
+        }
+      })();
+      if (binding && values.home && resolve(values.home) !== binding.home)
+        throw new Error(
+          '--home must match the project binding. Run outside the project for an instance configuration.',
+        );
+      const agent = selected ?? binding?.lead ?? 'codex';
+      const format = values.format ?? (selected === undefined && !binding ? 'toml' : 'command');
+      if (format === 'toml' && agent !== 'codex' && agent !== 'codex-desktop')
+        throw new Error('--format toml requires --agent codex');
+      const runtime = binding?.runtime ?? installRuntime(home);
+      const name = binding ? mcpServerName(binding.projectId, binding.leadName) : 'marionette';
+      const server = binding
+        ? {
+            command: binding.runtimeExecutable ?? process.execPath,
+            args: [
+              resolve(runtime, 'dist/mcp.js'),
+              '--lead-lease',
+              binding.leasePath,
+              '--url',
+              `http://127.0.0.1:${loadConfig(binding.home).port}`,
+            ],
+          }
+        : undefined;
+      const agents = agent === 'all' ? kindSchema.literals : [agent];
+      for (const client of agents) {
+        const binary = client === 'codex-desktop' ? 'codex' : client;
+        const registeredName = binding
+          ? listClientReceipts(binding.home, binary).find(
+              ({ receipt }) => receipt.projectId === binding.projectId,
+            )?.receipt.name
+          : undefined;
+        const command = mcpCommand(
+          client,
+          registeredName ?? name,
+          runtime,
+          binding?.home ?? home,
+          server,
+        );
+        if (format === 'toml')
+          console.log(
+            `[mcp_servers.${command.name}]\ncommand = ${JSON.stringify(command.server.command)}\nargs = ${JSON.stringify(command.server.args)}\n`,
+          );
+        else console.log(command.shell);
+      }
+    });
     return;
   }
   if (cmd === 'call') {

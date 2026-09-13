@@ -17,6 +17,7 @@ export const projectSchema = Schema.Struct({
     Schema.optionalKey(Schema.mutable(Schema.Array(Schema.String))),
   ),
   coordinatorOnly: Schema.optional(Schema.Boolean),
+  authorityMode: Schema.optional(Schema.Literals(['conversation', 'external'])),
   trustWorkspaces: Schema.optional(Schema.Boolean),
   agentAccess: Schema.optionalKey(agentAccessSchema),
   trustAgyWorkspaces: Schema.optional(Schema.Boolean),

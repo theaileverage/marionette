@@ -54,12 +54,17 @@ export function mcpAddArgs(binary: string, name: string, server: McpServer) {
 export function mcpRemoveArgs(binary: string, name: string) {
   return binary === 'claude' ? ['mcp', 'remove', '--scope', 'user', name] : ['mcp', 'remove', name];
 }
-export function mcpCommand(agent: LeadAgent, name: string, runtime: string, home: string) {
-  const binary = agent === 'codex-desktop' ? 'codex' : agent;
-  const server = {
+export function mcpCommand(
+  agent: LeadAgent,
+  name: string,
+  runtime: string,
+  home: string,
+  server: McpServer = {
     command: process.execPath,
     args: [resolve(runtime, 'dist/mcp.js'), '--home', home],
-  };
+  },
+) {
+  const binary = agent === 'codex-desktop' ? 'codex' : agent;
   const args = mcpAddArgs(binary, name, server);
   return {
     binary,

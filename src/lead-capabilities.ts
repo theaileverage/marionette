@@ -26,6 +26,9 @@ export const leadActions = new Set([
   'plan.revise',
   'role.list',
   'authority.get',
+  'authority.record-user-request',
+  'lead.preferences.get',
+  'lead.preferences.set',
   'lead.wait',
   'lead.waits',
   'lead.wait-ack',
@@ -88,7 +91,7 @@ export function scopeLeadInput<Input>(
   if (!leadActions.has(action))
     throw new AppError({
       code: 'lead_capability',
-      message: `The coordinator cannot call ${action}. Use the user CLI for configuration or authority changes.`,
+      message: `The coordinator cannot call ${action}. Use scoped lead preferences for your own configuration and record-user-request for user-directed authority. Other administrative changes require the user CLI.`,
       status: 403,
     });
   const input = Schema.decodeUnknownSync(object)(raw);
