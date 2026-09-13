@@ -26,11 +26,15 @@ bunx --bun @theaileverage/marionette setup
 
 You can also use `npx @theaileverage/marionette setup`. Bun must still be installed and on PATH; `npx` downloads the package but does not install Bun.
 
-The interactive setup uses editable defaults and arrow-key choices. It offers to install missing required tools, then starts the supervisor, connects the shared Herdr `default` session and a project workspace, and configures a guarded lead with Codex CLI (the default), Claude Code, or oh-my-pi. Codex desktop and AGY integrations require the explicit legacy configuration described in the [coordinator guide](documentation/coordinator.md).
+The interactive setup uses editable defaults and arrow-key choices. It asks where to store state, whether to install the project skill, and how the lead records authority. It then starts the supervisor, connects a project workspace in the shared Herdr `default` session, and configures a guarded lead with Codex CLI (the default), Claude Code, or oh-my-pi. Codex desktop and AGY integrations require the explicit legacy configuration described in the [coordinator guide](documentation/coordinator.md).
 
 Setup installs Herdr through Homebrew when available, or its [official installer](https://herdr.dev/docs/install/); Git through existing Homebrew; Codex through npm when available; Claude Code through its official installer; and oh-my-pi through Bun. AGY and Git without Homebrew require manual installation. Agent sign-in remains a separate step. Setup does not install every optional worker or change existing agent integrations.
 
-New projects use Herdr’s existing `default` session, with a separate workspace per project so every Marionette project appears in the same Herdr window. `--session NAME` explicitly selects an isolated session. Existing project bindings keep their saved session, workspace, and running conversations across updates. The project defaults to your current directory. To select Menderly from another directory, for example, pass `setup --project /path/to/menderly`.
+New projects use Herdr's existing `default` session. Each project gets its own workspace in the same Herdr window. Pass `--session NAME` during setup to select and save a named session. An existing binding with a reachable saved endpoint resumes its session and workspace unchanged. If an old legacy named-session endpoint has disappeared, `setup` and `lead` can reconnect the project through `default` while preserving its project ID, lead lease, authority, and history. Recovery stops before changing the connection when the project has active tasks, unfinished operations, or a Herdr-bound or reserved wait.
+
+Passing `setup --session default` for a reachable named-session binding requests a migration. Stop its lead and close the original Herdr workspace first; setup refuses the migration while that workspace exists. A running supervisor that predates the safe reconnect protocol must be upgraded and restarted before recovery. In both cases, setup leaves the binding and credentials unchanged and does not create a replacement workspace.
+
+The project defaults to your current directory. To select Menderly from another directory, for example, pass `setup --project /path/to/menderly`.
 
 For a terminal lead:
 
@@ -42,6 +46,16 @@ The terminal lead opens in a dedicated tab in the project’s Herdr session. Rep
 
 Setup names each project’s MCP entry `mnett-<project>-<lead>`, such as `mnett-menderly-mendy`. Names use lowercase words and hyphens, with a numeric suffix when needed to avoid collisions. `--mcp install` installs the entry and migrates owned older names; `--mcp print` prints a command with shell quoting only where needed.
 
+To print MCP configuration without changing a client, run the command from a configured project:
+
+```sh
+marionette mcp-config
+marionette mcp-config --agent all --format command
+marionette mcp-config --project /path/to/project --agent codex --format toml
+```
+
+A project binding produces scoped commands for that project's lead lease and supervisor. `--agent all` prints Codex, Claude Code, and AGY commands plus the oh-my-pi merge instructions for the same binding. Codex is the only supported TOML format. Outside a configured project, plain `mcp-config` retains the legacy unbound Codex TOML output; pass `--home DIR` to select its instance. If you pass both `--project` and `--home`, the home must match the binding.
+
 For an explicitly prompt-only Codex desktop setup, set `coordinatorOnly: false` in the setup configuration, refresh MCP in Settings, and give your conversation the prompt file printed by setup.
 
 ```sh
@@ -49,7 +63,41 @@ bunx --bun @theaileverage/marionette dashboard  # Print the private dashboard UR
 bunx --bun @theaileverage/marionette doctor     # Diagnose connections
 ```
 
-For scripted setup, use `setup --yes --json`. Add `--install-tools` to explicitly allow installation of missing required tools; `--yes` alone only accepts configuration defaults. `--dry-run` prints the plan without installations or writes; `setup --help` and `setup --schema` describe the available options. Install globally with `bun add --global @theaileverage/marionette` for the shorter `marionette` command.
+For scripted setup, use `setup --yes --json`. Add `--install-tools` to allow installation of missing required tools. Add `--install-skills` to copy the Marionette skill into both `.agents/skills/marionette` and `.claude/skills/marionette`. Existing customized files are preserved; JSON output reports them as conflicts. `--yes` alone authorizes neither tool nor skill installation. Pass `--no-install-skills` to state an explicit skip in scripts. `--dry-run` prints the plan without installations or writes; `setup --help` and `setup --schema` describe the available options. Install globally with `bun add --global @theaileverage/marionette` for the shorter `marionette` command.
+
+The setup wizard offers shared instance storage, project-local storage, or a custom directory. The `--home` option accepts a directory path. Use this command for project-local state:
+
+```sh
+marionette setup --home .marionette
+```
+
+Project-local state is private machine state. It contains authentication tokens and absolute paths, so do not commit it. Setup creates `.marionette/.gitignore` when one does not exist.
+
+For repeatable setup across repositories or computers, keep machine paths and credentials out of the JSON file. Run this example from the target project directory:
+
+```json
+{
+  "lead": "codex",
+  "leadName": "Lead",
+  "coordinatorOnly": true,
+  "authorityMode": "conversation",
+  "installSkills": true,
+  "trustWorkspaces": true,
+  "agentAccess": {
+    "codex": "inherit",
+    "claude": "inherit",
+    "agy": "inherit",
+    "omp": "inherit"
+  },
+  "mcp": "install"
+}
+```
+
+```sh
+marionette setup --config marionette.setup.json --yes
+```
+
+The omitted `project` field uses the current directory. The omitted `home` field uses an existing binding, `MARIONETTE_HOME`, or the shared state default. The file also omits socket, workspace, lease, and token values.
 
 If `lead` says the saved lead no longer controls the project, or setup says a lead already controls it, run this from the project directory:
 
@@ -97,7 +145,7 @@ For different policies per harness, save a setup JSON file and pass it with `mar
 }
 ```
 
-Set a harness to `inherit` to restore its native policy for future launches. Setup saves these choices with the project. A lead can also apply a user-authorized change through `project_configure` with `agentAccess`; this patches only the named harnesses. Conflicting permission flags in legacy `agentArgs` must be removed, or managed through `inherit`.
+Set a harness to `inherit` to restore its native policy for future launches. Setup saves these choices with the project. Change launch access through setup or an administrative CLI client. The scoped lead cannot change its coordinator guard or launch access. Conflicting permission flags in legacy `agentArgs` must be removed or managed through `inherit`.
 
 Full access uses Codex's `--dangerously-bypass-approvals-and-sandbox`, Claude Code's `--dangerously-skip-permissions` with `sandbox.enabled: false`, AGY's `--dangerously-skip-permissions --sandbox=false`, and OMP's `--approval-mode yolo`. Coordinator, inspection, and documentation restrictions take precedence over full-access worker preferences. These launch arguments leave global CLI settings intact. They allow the agent to act with the launching user's permissions; task ownership remains a coordination contract, not filesystem isolation.
 
@@ -112,11 +160,11 @@ marionette upgrade                  # Alias for update
 marionette update --from /path/to/built/marionette  # Use a local build
 ```
 
-An instance can serve several projects. Updating moves all its saved project bindings and owned MCP registrations together, restarts the supervisor, and preserves worker terminals, assignments, and lead leases. A failed restart restores the previous runtime and database. Recovery files are retained only if rollback needs attention. Existing MCP processes continue calling the updated supervisor; no agent restart is required for routine updates. Repeating `marionette lead` reconnects to the original conversation, including leads launched before 0.5.2. Running leads retain their launch settings, model, and guard files. A newly added or changed MCP tool catalog may need the client’s tool refresh; it does not require replacing the lead conversation. `--runtime-only` leaves the global CLI package unchanged; `--home DIR` selects another instance. Global package-manager failures are reported separately from the runtime migration and can be retried.
+An instance can serve several projects. Updating moves all its saved project bindings and owned MCP registrations together, restarts the supervisor, and preserves worker terminals, assignments, and lead leases. A failed restart restores the previous runtime and database. Recovery files are retained only if rollback needs attention. An existing MCP process continues calling the updated supervisor, but keeps the runtime binary and tool catalog it loaded at startup. Restart or reconnect that MCP server in its client to load a changed binary or catalog; refreshing tools inside the old process does not load new code. The native lead conversation can remain in place when the client reconnects its MCP server. Repeating `marionette lead` reconnects to the original conversation, including leads launched before 0.5.2. Running leads retain their launch settings, model, and guard files. A newly permitted method requires a new lead launch unless the existing guard already allows it. `--runtime-only` leaves the global CLI package unchanged; `--home DIR` selects another instance. Global package-manager failures are reported separately from the runtime migration and can be retried.
 
 Setup detects a different saved or running runtime and offers the same migration. For scripts, use `setup --yes --upgrade`; without `--upgrade`, setup reports the required update command before changing project state.
 
-`setup --upgrade` also refreshes a changed local build with the same version number. If a saved Herdr workspace no longer exists, setup finds or creates its replacement and reconnects the existing project while preserving its ID, lead lease, and history. Active tasks and unresolved operations must be resolved first. An explicitly supplied `--workspace` must exist.
+`setup --upgrade` also refreshes a changed local build with the same version number. If a saved Herdr workspace no longer exists, setup finds or creates its replacement and reconnects the existing project while preserving its ID, lead lease, authority, and history. Active tasks and unresolved operations must be resolved first. Herdr-bound or reserved waits also block recovery. An explicitly supplied `--workspace` must exist. A supervisor without the safe reconnect protocol must be upgraded and restarted before this recovery can proceed.
 
 ```sh
 marionette remove --dry-run         # Preview removal of the current project
@@ -155,11 +203,32 @@ marionette roles remove reviewer
 
 `set` adds or edits one entry while retaining the others. Model and effort changes invalidate previous availability evidence. Profiles referenced by roles cannot be removed. `roles --global` edits instance defaults; project overrides take precedence, and removing an override reveals its instance default. Append `--project DIR` to target another project. JSON replacement remains available through `profiles --file FILE` (array or `{profiles, defaults}`) and `roles --file FILE` (array).
 
+### Choose how the lead records authority
+
+Setup stores one of two authority modes:
+
+- `conversation` lets the lead record the actual user request, current outcome revision, activities, and bounded paths with `authority_record_user_request`. This removes the separate `marionette authorize` step for work that the user already requested. The record is the lead's reading of the conversation; the supervisor does not independently authenticate the message.
+- `external` requires `marionette authorize` for each outcome.
+
+Interactive setup asks which mode to use. Scripted setup defaults to `conversation`; select the strict mode with `--authority-mode external`. Projects created before this setting existed remain in external mode until setup saves a choice. A lead cannot change the project's authority mode.
+
+Planning requests, skill instructions, and intent amendments do not grant implementation or command execution. Conversation records remain lease-fenced, revision-checked, and limited to the outcome's existing scope.
+
+### Save lead preferences
+
+A scoped lead can use `lead_preferences_get` and `lead_preferences_set` to save its project preferences. The preferences can select an available exact profile for the configured lead adapter, a supported reasoning level, up to 20,000 characters of additional instructions, and up to 20 existing project skill files under `.agents/skills/*/SKILL.md` or `.claude/skills/*/SKILL.md`.
+
+Profile and reasoning changes apply to the next new lead launch. Repeating `marionette lead` preserves and resumes the current native conversation with its current model. Additional instructions and selected skills can be read by the current lead and are included in a new launch. Preferences do not restart the lead, change instance settings, edit a skill file, or update Marionette or an agent CLI. To change a skill file, the lead delegates an authorized task with that file in scope.
+
+Lead launch and `lead --print` remain compatible with a supervisor that predates the preference API: they continue with empty preferences. Upgrade the supervisor to read or save preferences. Authentication and permission errors still stop the command.
+
 ## How it runs
 
 The supervisor keeps working when you close the lead or dashboard. `stop` drains operations and preserves Herdr workers; `start` resumes the supervisor. Task completion preserves branches and worktrees until explicit delivery and cleanup.
 
-State defaults to `~/.local/share/marionette` (or `$XDG_DATA_HOME/marionette`), with a project-local binding. Keep dashboard links and lease files private.
+The installed `marionette` command can address several instances. Each selected state directory owns one supervisor and database and can serve several projects; `--home DIR` selects the instance. State defaults to `~/.local/share/marionette` (or `$XDG_DATA_HOME/marionette`), with a project-local binding. Keep dashboard links and lease files private.
+
+Marionette copies each packaged runtime into a content-addressed, immutable directory. Project bindings, MCP registrations, running conversations, and rollback can still refer to an older directory. Do not delete runtime directories by hand.
 
 Herdr leads can resume from meaningful worker events. **Idle Codex desktop conversations resume on your next message**; the dashboard and durable inbox retain updates meanwhile.
 
@@ -167,7 +236,7 @@ Codex workers receive a task-scoped STDIO MCP server at launch for inspection an
 
 ## Agent skill and SDK
 
-Copy [skills/marionette](skills/marionette/SKILL.md) into your agent's skill directory for coordination and recovery guidance.
+Interactive setup offers to install [skills/marionette](skills/marionette/SKILL.md) into both supported project skill directories. For scripted setup, pass `--install-skills`. Pass `--no-install-skills` to skip it explicitly. A repeated installation leaves customized files unchanged; JSON output reports the conflicts.
 
 The dependency-free Herdr SDK provides typed requests, event subscriptions, and graphics streams:
 
@@ -201,4 +270,4 @@ The source uses Effect v4, TypeScript diagnostics from `@effect/tsgo`, and anti-
 
 ## Coordinator-only leads and oh-my-pi
 
-New setups use a coordinator-only lead with session guards, scoped MCP, explicit outcome authority, and role-to-model profiles. oh-my-pi is available as `--lead omp` and worker kind `omp`. Configure role defaults and project overrides through `marionette roles`; record authorized writes through `marionette authorize`. See [coordinator setup, authority, and harness limits](documentation/coordinator.md). The dashboard has not changed.
+New setups use a coordinator-only lead with session guards, scoped MCP, conversation authority, and role-to-model profiles. oh-my-pi is available as `--lead omp` and worker kind `omp`. Configure role defaults and project overrides through `marionette roles`. Choose external authority during setup when every outcome must use `marionette authorize`. See [coordinator setup, authority, and harness limits](documentation/coordinator.md).

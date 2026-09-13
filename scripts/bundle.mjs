@@ -1,6 +1,24 @@
 import { build } from 'esbuild';
 import { chmodSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+const skillFiles = {};
+function bundleSkills(directory, prefix = '') {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const name = prefix + entry.name;
+    const path = resolve(directory, entry.name);
+    if (entry.isDirectory()) bundleSkills(path, name + '/');
+    else if (entry.isFile()) skillFiles[name] = readFileSync(path).toString('base64');
+    else throw new Error(`Unsupported skill bundle source: ${path}`);
+  }
+}
+bundleSkills('skills/marionette');
+writeFileSync(
+  'dist/marionette-skills.json',
+  JSON.stringify({
+    version: JSON.parse(readFileSync('package.json', 'utf8')).version,
+    files: skillFiles,
+  }),
+);
 const packages = new Set([
   'node_modules/react',
   'node_modules/react-dom',

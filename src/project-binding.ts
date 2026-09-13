@@ -2,7 +2,7 @@ import { agentAccessSchema } from './agent-access.js';
 import { Schema } from 'effect';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
-import { leadAgentSchema } from './types.js';
+import { leadAgentSchema, workspaceIdSchema } from './types.js';
 
 const identifier = Schema.String.check(Schema.isPattern(/^[a-zA-Z0-9_-]+$/));
 export const bindingSchema = Schema.Struct({
@@ -12,12 +12,14 @@ export const bindingSchema = Schema.Struct({
   projectId: identifier,
   root: Schema.String,
   session: identifier,
+  sessionSelection: Schema.optional(Schema.Literals(['default', 'named', 'legacy'])),
   socket: Schema.String,
-  workspace: Schema.String.check(Schema.isPattern(/^w\d+$/)),
+  workspace: workspaceIdSchema,
   lead: leadAgentSchema,
   leadName: Schema.String,
   leadProfile: Schema.optional(Schema.String),
   coordinatorOnly: Schema.optional(Schema.Boolean),
+  authorityMode: Schema.optional(Schema.Literals(['conversation', 'external'])),
   leasePath: Schema.String,
   runtime: Schema.String,
   runtimeExecutable: Schema.optional(Schema.String),

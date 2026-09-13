@@ -35,6 +35,7 @@ export function installRuntime(home: string, source = packageRoot) {
     throw new Error('Build Marionette first with bun run build');
   walk('dist');
   walk('public');
+  if (existsSync(resolve(source, 'skills'))) walk('skills');
   const version = JSON.parse(readFileSync(resolve(source, 'package.json'), 'utf8')).version;
   const guard = 'dist/harness-guard.js';
   const embeddedGuard = version === VERSION ? bundledGuard() : undefined;

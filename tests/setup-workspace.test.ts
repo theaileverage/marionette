@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test, onTestFinished } from 'bun:test';
 import { Effect } from 'effect';
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { setupWorkspaceEffect } from '../src/setup-workspace.js';
@@ -108,7 +108,7 @@ test('explicit missing IDs, ambiguous labels and connection errors never select 
   assert.equal(disconnected.calls.includes('workspace.create'), false);
 });
 
-async function projectFixture() {
+async function projectFixture(workspaceId = 'w1') {
   const f = workspaceFixture(),
     root = realpathSync(mkdtempSync(resolve(tmpdir(), 'marionette-reconnect-')));
   const store = new Store(resolve(root, 'state.sqlite')),
@@ -117,13 +117,13 @@ async function projectFixture() {
     store.close();
     rmSync(root, { recursive: true, force: true });
   });
-  f.workspaces.push({ workspace_id: 'w1', label: f.plan.workspaceLabel });
+  f.workspaces.push({ workspace_id: workspaceId, label: f.plan.workspaceLabel });
   const project = await service.invoke('project.register', {
     name: 'Menderly',
     root,
     session: 'test',
     socketPath: resolve(root, 'herdr.sock'),
-    workspaceId: 'w1',
+    workspaceId,
   });
   const { lease } = await service.invoke('lead.acquire', {
     projectId: project.id,
@@ -133,7 +133,7 @@ async function projectFixture() {
     reason: 'Workspace recovery test',
   });
   f.workspaces.splice(0, 1, { workspace_id: 'w7', label: f.plan.workspaceLabel });
-  const input = { lease, expectedWorkspaceId: 'w1', workspaceId: 'w7' };
+  const input = { lease, expectedWorkspaceId: workspaceId, workspaceId: 'w7' };
   return { ...f, store, service, project, lease, input };
 }
 
@@ -151,6 +151,14 @@ test('reconnection preserves project identity, lead authority and historical rec
   assert.equal(f.store.all('project').length, 1);
   assert.equal(f.service.guard(f.lease).epoch, f.lease.epoch);
   assert.deepEqual(await f.service.invoke('project.reconnect', f.input), updated);
+});
+
+test('registration and subsequent recovery accept Herdr alphanumeric source IDs', async () => {
+  const f = await projectFixture('wG');
+  assert.equal(f.project.workspaceId, 'wG');
+  const updated = await f.service.invoke('project.reconnect', f.input);
+  assert.equal(updated.workspaceId, 'w7');
+  assert.equal(updated.id, f.project.id);
 });
 
 test('reconnection refuses active work, a surviving original workspace and another project ownership', async () => {
@@ -190,4 +198,230 @@ test('a handover during workspace verification fences the reconnect commit', asy
     /Control belongs to another lead/,
   );
   assert.equal(f.service.project(f.project.id).workspaceId, 'w1');
+});
+
+test('preflight rejects busy projects before contacting Herdr or allocating workspaces', async () => {
+  const f = await projectFixture();
+  f.store.put('task', 'active', { id: 'active', projectId: f.project.id, status: 'running' });
+  f.calls.length = 0;
+  await assert.rejects(
+    f.service.invoke('project.reconnect', {
+      ...f.input,
+      workspaceId: f.project.workspaceId,
+      preflight: true,
+    }),
+    /Resolve active tasks/,
+  );
+  assert.deepEqual(f.calls, []);
+});
+
+test('explicit session migration preserves identity even when workspace IDs match', async () => {
+  const f = await projectFixture();
+  f.workspaces.push({ workspace_id: 'w1', label: 'destination' });
+  const input = {
+    ...f.input,
+    workspaceId: 'w1',
+    session: 'default',
+    socketPath: resolve(f.project.root, 'default.sock'),
+    expectedSocketPath: f.project.socketPath,
+    expectedSession: f.project.session,
+  };
+  await f.service.invoke('project.reconnect', { ...input, preflight: true });
+  const updated = await f.service.invoke('project.reconnect', input);
+  assert.equal(updated.id, f.project.id);
+  assert.equal(updated.session, 'default');
+  assert.equal(updated.socketPath, input.socketPath);
+  assert.equal(f.service.guard(f.lease).epoch, f.lease.epoch);
+  assert.deepEqual(await f.service.invoke('project.reconnect', input), updated);
+  assert.equal(f.calls.includes('workspace.close'), false);
+});
+
+test('session migration accepts a Herdr alphanumeric workspace ID and reuses it on retry', async () => {
+  const f = await projectFixture();
+  f.workspaces.push({ workspace_id: 'wG', label: f.plan.workspaceLabel });
+  const input = {
+    ...f.input,
+    workspaceId: 'wG',
+    session: 'default',
+    socketPath: resolve(f.project.root, 'default.sock'),
+    expectedSocketPath: f.project.socketPath,
+    expectedSession: f.project.session,
+  };
+  const preflight = await f.service.invoke('project.reconnect', {
+    ...input,
+    workspaceId: f.project.workspaceId,
+    preflight: true,
+  });
+  assert.equal(preflight.reconnectProtocol, 1);
+  const updated = await f.service.invoke('project.reconnect', input);
+  assert.equal(updated.workspaceId, 'wG');
+  assert.equal(updated.session, 'default');
+  assert.equal(updated.id, f.project.id);
+  assert.equal(f.service.guard(f.lease).epoch, f.lease.epoch);
+  assert.deepEqual(await f.service.invoke('project.reconnect', input), updated);
+});
+
+test('session migration fences a stale source connection and refuses occupied destinations', async () => {
+  const f = await projectFixture();
+  await assert.rejects(
+    f.service.invoke('project.reconnect', {
+      ...f.input,
+      expectedSocketPath: '/stale.sock',
+      expectedSession: f.project.session,
+      session: 'default',
+      socketPath: '/new.sock',
+    }),
+    /connection changed/,
+  );
+  f.store.put('project', 'other', {
+    ...f.project,
+    id: 'other',
+    socketPath: '/new.sock',
+    workspaceId: 'w7',
+  });
+  await assert.rejects(
+    f.service.invoke('project.reconnect', {
+      ...f.input,
+      session: 'default',
+      socketPath: '/new.sock',
+      expectedSocketPath: f.project.socketPath,
+      expectedSession: f.project.session,
+    }),
+    /already bound/,
+  );
+});
+
+for (const state of ['waiting', 'ready']) {
+  test(`recovery preserves a ${state} next-message wait and inbox without invalidation`, async () => {
+    const f = await projectFixture();
+    const wait = {
+      id: 'pending',
+      projectId: f.project.id,
+      owner: f.lease.owner,
+      epoch: f.lease.epoch,
+      adapter: { type: 'next-message' },
+      state,
+      cursor: 12,
+      eventIds: [13, 14],
+      reservation: false,
+    };
+    const inbox = { projectId: f.project.id, body: 'Read this after reconnecting' };
+    f.store.put('lead-wait', wait.id, wait);
+    f.store.put('inbox', 'message', inbox);
+    f.store.put('task', 'finished', { projectId: f.project.id, status: 'completed' });
+    await f.service.invoke('project.reconnect', { ...f.input, preflight: true });
+    await f.service.invoke('project.reconnect', f.input);
+    assert.deepEqual(f.store.get('lead-wait', wait.id), wait);
+    assert.deepEqual(f.store.get('inbox', 'message'), inbox);
+    assert.equal(f.service.guard(f.lease).epoch, f.lease.epoch);
+  });
+}
+
+test('recovery still refuses Herdr waits, reserved waits, uncertain waits and pending operations', async () => {
+  for (const wait of [
+    { adapter: { type: 'herdr' }, state: 'waiting', reservation: false },
+    { adapter: { type: 'next-message' }, state: 'ready', reservation: true },
+    { adapter: { type: 'next-message' }, state: 'uncertain', reservation: false },
+  ]) {
+    const f = await projectFixture();
+    const record = { id: 'pending', projectId: f.project.id, ...wait };
+    f.store.put('lead-wait', record.id, record);
+    await assert.rejects(f.service.invoke('project.reconnect', f.input), /Resolve active tasks/);
+    assert.deepEqual(f.store.get('lead-wait', record.id), record);
+  }
+  const f = await projectFixture();
+  f.store.put('operation', 'pending', { projectId: f.project.id, phase: 'intent' });
+  await assert.rejects(f.service.invoke('project.reconnect', f.input), /Resolve active tasks/);
+});
+
+test('reconnect rejects partial connections and relative socket paths before Herdr access', async () => {
+  const f = await projectFixture();
+  f.calls.length = 0;
+  for (const connection of [
+    { session: 'default' },
+    { socketPath: '/new.sock' },
+    { session: 'default', socketPath: '/new.sock' },
+    { session: 'default', socketPath: '/new.sock', expectedSocketPath: f.project.socketPath },
+    {
+      session: 'default',
+      socketPath: 'new.sock',
+      expectedSocketPath: f.project.socketPath,
+      expectedSession: f.project.session,
+    },
+    {
+      session: 'default',
+      socketPath: '/new.sock',
+      expectedSocketPath: 'old.sock',
+      expectedSession: f.project.session,
+    },
+  ]) {
+    await assert.rejects(f.service.invoke('project.reconnect', { ...f.input, ...connection }));
+  }
+  assert.deepEqual(f.calls, []);
+  assert.deepEqual(f.service.project(f.project.id), f.project);
+});
+
+test('source session changes fence migration before and during destination verification', async () => {
+  const f = await projectFixture();
+  const input = {
+    ...f.input,
+    session: 'default',
+    socketPath: '/new.sock',
+    expectedSocketPath: f.project.socketPath,
+    expectedSession: f.project.session,
+  };
+  await assert.rejects(
+    f.service.invoke('project.reconnect', { ...input, expectedSession: 'stale' }),
+    /connection changed/,
+  );
+  f.beforeGet(() => f.store.put('project', f.project.id, { ...f.project, session: 'changed' }));
+  await assert.rejects(f.service.invoke('project.reconnect', input), /connection changed/);
+  assert.equal(f.service.project(f.project.id).socketPath, f.project.socketPath);
+});
+
+test('session-only destination differences are not treated as completed reconnects', async () => {
+  const f = await projectFixture();
+  const updated = await f.service.invoke('project.reconnect', f.input);
+  await assert.rejects(
+    f.service.invoke('project.reconnect', {
+      ...f.input,
+      expectedWorkspaceId: updated.workspaceId,
+      session: 'renamed',
+      socketPath: updated.socketPath,
+      expectedSession: updated.session,
+      expectedSocketPath: updated.socketPath,
+    }),
+    /original workspace still exists/,
+  );
+});
+
+test('migration rejects an existing source workspace before destination allocation', async () => {
+  const f = await projectFixture();
+  writeFileSync(f.project.socketPath, 'source endpoint fixture');
+  f.workspaces.push({ workspace_id: 'w1', label: 'original lead workspace' });
+  const input = {
+    ...f.input,
+    session: 'default',
+    socketPath: '/new.sock',
+    expectedSocketPath: f.project.socketPath,
+    expectedSession: f.project.session,
+  };
+  await assert.rejects(
+    f.service.invoke('project.reconnect', { ...input, preflight: true }),
+    /Stop its lead and close/,
+  );
+  assert.equal(f.service.project(f.project.id).socketPath, f.project.socketPath);
+  assert.equal(f.service.guard(f.lease).epoch, f.lease.epoch);
+  assert.equal(f.calls.includes('workspace.create'), false);
+});
+
+test('recovery preflight advertises its protocol without rebinding the project', async () => {
+  const f = await projectFixture();
+  const response = await f.service.invoke('project.reconnect', {
+    ...f.input,
+    workspaceId: f.project.workspaceId,
+    preflight: true,
+  });
+  assert.equal(response.reconnectProtocol, 1);
+  assert.deepEqual(f.service.project(f.project.id), f.project);
 });

@@ -1,4 +1,5 @@
-import { grantAuthority, taskAuthority } from './authority.js';
+import { getLeadPreferences, setLeadPreferences } from './lead-preferences.js';
+import { grantAuthority, recordUserRequest, taskAuthority } from './authority.js';
 import { agentAccessSchema, agentAccessArgs } from './agent-access.js';
 import { Effect, Schema } from 'effect';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -19,6 +20,7 @@ import {
   credentialsSchema,
   kindSchema,
   leadAgentSchema,
+  workspaceIdSchema,
   now,
   type Credentials,
   type Decision,
@@ -197,6 +199,12 @@ export class Service {
     Effect.fn('Service.invoke')(
       { self: this },
       function* (this: Service, action: string, raw: any = {}) {
+        if (action === 'authority.record-user-request')
+          return yield* sync('Authority.recordUserRequest', () => recordUserRequest(this, raw));
+        if (action === 'lead.preferences.get')
+          return yield* sync('LeadPreferences.get', () => getLeadPreferences(this, raw));
+        if (action === 'lead.preferences.set')
+          return yield* sync('LeadPreferences.set', () => setLeadPreferences(this, raw));
         if (action === 'authority.grant')
           return yield* sync('Authority.grant', () => grantAuthority(this, raw));
         if (action === 'authority.get')
@@ -223,7 +231,7 @@ export class Service {
                     Schema.String.check(Schema.isPattern(/^[a-zA-Z0-9_-]+$/)),
                   ),
                   socketPath: Schema.mutableKey(Schema.String),
-                  workspaceId: Schema.mutableKey(Schema.String.check(Schema.isPattern(/^w\d+$/))),
+                  workspaceId: Schema.mutableKey(workspaceIdSchema),
                   maxConcurrency: Schema.mutableKey(
                     Schema.Finite.check(Schema.isInt())
                       .check(Schema.isGreaterThanOrEqualTo(1))
@@ -239,6 +247,7 @@ export class Service {
                     ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
                   ),
                   coordinatorOnly: Schema.optionalKey(Schema.Boolean),
+                  authorityMode: Schema.optionalKey(Schema.Literals(['conversation', 'external'])),
                   agentAccess: Schema.optionalKey(agentAccessSchema),
                   trustWorkspaces: Schema.mutableKey(Schema.optional(Schema.Boolean)),
                   trustAgyWorkspaces: Schema.mutableKey(
@@ -313,20 +322,51 @@ export class Service {
             );
           }
           case 'project.reconnect': {
+            const common = {
+              lease: credentialsSchema,
+              expectedWorkspaceId: workspaceIdSchema,
+              workspaceId: workspaceIdSchema,
+              preflight: Schema.optional(Schema.Boolean),
+            };
+            const session = Schema.String.check(Schema.isPattern(/^[a-zA-Z0-9_-]+$/));
             const i = yield* sync('Project.reconnectInput', () =>
               Schema.decodeUnknownSync(
-                Schema.Struct({
-                  lease: credentialsSchema,
-                  expectedWorkspaceId: Schema.String.check(Schema.isPattern(/^w\d+$/)),
-                  workspaceId: Schema.String.check(Schema.isPattern(/^w\d+$/)),
-                }),
+                Schema.Union([
+                  Schema.Struct(common).annotate({ parseOptions: { onExcessProperty: 'error' } }),
+                  Schema.Struct({
+                    ...common,
+                    session,
+                    expectedSession: session,
+                    socketPath: Schema.String,
+                    expectedSocketPath: Schema.String,
+                  }).annotate({ parseOptions: { onExcessProperty: 'error' } }),
+                ]),
               )(raw),
             );
+            const connection = 'session' in i ? i : undefined;
+            if (
+              connection &&
+              (!isAbsolute(connection.socketPath) || !isAbsolute(connection.expectedSocketPath))
+            )
+              return yield* new AppError({
+                code: 'project_connection_invalid',
+                message: 'Project connection socket paths must be absolute.',
+                status: 400,
+              });
+            const atDestination = (p: Project) =>
+              p.workspaceId === i.workspaceId &&
+              (!connection ||
+                (p.socketPath === connection.socketPath && p.session === connection.session));
             const check = () => {
               const c = this.guard(i.lease),
                 p = this.project(c.projectId);
-              if (p.workspaceId === i.workspaceId) return p;
-              if (p.workspaceId !== i.expectedWorkspaceId)
+              if (!i.preflight && atDestination(p)) return p;
+              if (
+                p.workspaceId !== i.expectedWorkspaceId ||
+                (connection &&
+                  (p.socketPath !== connection.expectedSocketPath ||
+                    p.session !== connection.expectedSession))
+              )
                 throw new AppError({
                   code: 'project_connection_changed',
                   message:
@@ -340,7 +380,15 @@ export class Service {
                   .some((op) => op.projectId === p.id && op.phase !== 'done') ||
                 this.continuation
                   .waits(p.id)
-                  .some((w) => !['acknowledged', 'invalidated'].includes(w.state))
+                  .some(
+                    (w) =>
+                      !['acknowledged', 'invalidated'].includes(w.state) &&
+                      !(
+                        w.adapter.type === 'next-message' &&
+                        ['waiting', 'ready'].includes(w.state) &&
+                        !w.reservation
+                      ),
+                  )
               )
                 throw new AppError({
                   code: 'project_reconnect_busy',
@@ -353,8 +401,9 @@ export class Service {
                   .all<Project>('project')
                   .some(
                     (other) =>
+                      !i.preflight &&
                       other.id !== p.id &&
-                      other.socketPath === p.socketPath &&
+                      other.socketPath === (connection?.socketPath ?? p.socketPath) &&
                       other.workspaceId === i.workspaceId,
                   )
               )
@@ -366,13 +415,47 @@ export class Service {
               return p;
             };
             const p = yield* sync('Project.reconnectPreflight', check);
-            if (p.workspaceId === i.workspaceId) return p;
-            const h = this.port(p);
+            if (!i.preflight && atDestination(p)) return p;
+            if (connection && connection.socketPath !== p.socketPath) {
+              const sourceExists = yield* sync('Project.sourceEndpoint', () => {
+                try {
+                  statSync(p.socketPath);
+                  return true;
+                } catch (error) {
+                  if (error instanceof Error && 'code' in error && error.code === 'ENOENT')
+                    return false;
+                  throw error;
+                }
+              });
+              if (sourceExists) {
+                const { workspaces }: { workspaces: { workspace_id: string }[] } = yield* herdrCall(
+                  this.port(p),
+                  'workspace.list',
+                );
+                if (workspaces.some((w) => w.workspace_id === p.workspaceId))
+                  return yield* new AppError({
+                    code: 'project_migration_live',
+                    message:
+                      'The original Herdr workspace still exists. Stop its lead and close that workspace before changing sessions. Its credentials and history were preserved.',
+                    status: 409,
+                  });
+              }
+            }
+            if (i.preflight) return { ...p, reconnectProtocol: 1 };
+            const destination = {
+              ...p,
+              session: connection?.session ?? p.session,
+              socketPath: connection?.socketPath ?? p.socketPath,
+            };
+            const h = this.port(destination);
             const { workspaces }: { workspaces: { workspace_id: string }[] } = yield* herdrCall(
               h,
               'workspace.list',
             );
-            if (workspaces.some((w) => w.workspace_id === p.workspaceId))
+            if (
+              destination.socketPath === p.socketPath &&
+              workspaces.some((w) => w.workspace_id === p.workspaceId)
+            )
               return yield* new AppError({
                 code: 'workspace_still_exists',
                 message:
@@ -383,8 +466,13 @@ export class Service {
             return yield* sync('Project.reconnectCommit', () =>
               this.store.transaction(() => {
                 const current = check();
-                if (current.workspaceId === i.workspaceId) return current;
-                const updated = { ...current, workspaceId: i.workspaceId };
+                if (atDestination(current)) return current;
+                const updated = {
+                  ...current,
+                  session: destination.session,
+                  socketPath: destination.socketPath,
+                  workspaceId: i.workspaceId,
+                };
                 this.store.put('project', p.id, updated);
                 this.store.event(
                   p.id,
@@ -401,6 +489,7 @@ export class Service {
                 Schema.Struct({
                   lease: Schema.mutableKey(credentialsSchema),
                   coordinatorOnly: Schema.optionalKey(Schema.Boolean),
+                  authorityMode: Schema.optionalKey(Schema.Literals(['conversation', 'external'])),
                   agentAccess: Schema.optionalKey(agentAccessSchema),
                   trustWorkspaces: Schema.mutableKey(Schema.optional(Schema.Boolean)),
                   trustAgyWorkspaces: Schema.mutableKey(Schema.optional(Schema.Boolean)),
@@ -421,6 +510,7 @@ export class Service {
               p = yield* sync('Service.invoke', () => this.project(c.projectId));
             const updated = { ...p };
             if (i.coordinatorOnly !== undefined) updated.coordinatorOnly = i.coordinatorOnly;
+            if (i.authorityMode !== undefined) updated.authorityMode = i.authorityMode;
             if (i.trustWorkspaces !== undefined) updated.trustWorkspaces = i.trustWorkspaces;
             if (i.trustAgyWorkspaces !== undefined)
               updated.trustAgyWorkspaces = i.trustAgyWorkspaces;

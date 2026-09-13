@@ -20,6 +20,7 @@ import { installRuntime } from '../src/runtime.js';
 import { Service } from '../src/service.js';
 import { mcpCommand, privateJson, setupPlan } from '../src/setup.js';
 import { Store } from '../src/store.js';
+import { readBinding } from '../src/project-binding.js';
 
 function fixture() {
   const root = realpathSync(mkdtempSync(resolve(tmpdir(), 'marionette-setup-')));
@@ -85,6 +86,30 @@ test('setup dry plan is read-only, validates input and retains saved lead prefer
   assert.equal(repeat.workspaceExplicit, false);
   assert.equal(setupPlan({ project: root, workspace: 'w9' }).workspaceExplicit, true);
   assert.equal(statSync(resolve(root, '.marionette/project.json')).mode & 0o777, 0o600);
+});
+test('setup and saved bindings preserve alphanumeric Herdr workspace IDs', () => {
+  const root = fixture();
+  assert.equal(setupPlan({ project: root, workspace: 'wG' }).workspace, 'wG');
+  const binding = {
+    version: 1,
+    home: resolve(root, 'state'),
+    instanceId: 'instance',
+    projectId: 'project',
+    root,
+    session: 'default',
+    socket: resolve(root, 'herdr.sock'),
+    workspace: 'wG',
+    lead: 'codex',
+    leadName: 'Mendy',
+    leasePath: resolve(root, 'lease.json'),
+    runtime: resolve(root, 'runtime'),
+    mcp: 'print',
+  };
+  privateJson(resolve(root, '.marionette/project.json'), binding);
+  assert.equal(readBinding(root).binding.workspace, 'wG');
+  assert.equal(setupPlan({ project: root }).workspace, 'wG');
+  for (const workspace of ['w', 'wG:p1', '../wG', 'wG;true', 'w G'])
+    assert.throws(() => setupPlan({ project: root, workspace }));
 });
 test('durable runtime survives deletion of the Bun package cache and reuses identical content', () => {
   const root = fixture(),
@@ -423,7 +448,11 @@ test('lead reconnects a legacy receipt after update without rewriting live guard
       if (!buffer.includes('\n')) return;
       const request = JSON.parse(buffer.slice(0, buffer.indexOf('\n')));
       methods.push(request.method);
-      if (!['ping', 'workspace.get', 'agent.list', 'tab.focus'].includes(request.method)) {
+      if (
+        !['ping', 'workspace.list', 'workspace.get', 'agent.list', 'tab.focus'].includes(
+          request.method,
+        )
+      ) {
         stream.end(
           JSON.stringify({
             id: request.id,
@@ -432,7 +461,19 @@ test('lead reconnects a legacy receipt after update without rewriting live guard
         );
         return;
       }
-      const result = request.method === 'agent.list' ? { agents: [agent] } : { type: 'ok' };
+      const result =
+        request.method === 'agent.list'
+          ? { agents: [agent] }
+          : request.method === 'workspace.list'
+            ? {
+                workspaces: [
+                  {
+                    workspace_id: 'w1',
+                    label: `Marionette ${createHash('sha256').update(root).digest('hex').slice(0, 10)}`,
+                  },
+                ],
+              }
+            : { type: 'ok' };
       stream.end(JSON.stringify({ id: request.id, result }) + '\n');
     });
   });
@@ -441,6 +482,9 @@ test('lead reconnects a legacy receipt after update without rewriting live guard
     herdr.listen(socket, ok);
   });
   onTestFinished(() => new Promise<void>((ok) => herdr.close(() => ok())));
+  let reconnectProtocol = true;
+  let session = 'default';
+  let savedSocket = socket;
   const calls: string[] = [];
   const http = Bun.serve({
     hostname: '127.0.0.1',
@@ -448,25 +492,40 @@ test('lead reconnects a legacy receipt after update without rewriting live guard
     async fetch(request) {
       const input = await request.json();
       calls.push(input.action);
-      assert.equal(input.action, 'project.briefing');
+      if (input.action === 'project.reconnect' && !input.input.preflight) {
+        session = input.input.session;
+        savedSocket = input.input.socketPath;
+      }
+      if (input.action === 'lead.preferences.get')
+        return Response.json(
+          { error: { code: 'skill_missing', message: 'Selected skill was deleted' } },
+          { status: 400 },
+        );
+      assert.ok(['project.briefing', 'project.reconnect'].includes(input.action));
+      const project = {
+        id: projectId,
+        name: 'Legacy project',
+        root,
+        session,
+        socketPath: savedSocket,
+        workspaceId: 'w1',
+        maxConcurrency: 1,
+        agentArgs: {},
+        coordinatorOnly: true,
+        trustWorkspaces: false,
+        createdAt: 'now',
+      };
       return Response.json({
-        result: {
-          project: {
-            id: projectId,
-            name: 'Legacy project',
-            root,
-            session: 'default',
-            socketPath: socket,
-            workspaceId: 'w1',
-            maxConcurrency: 1,
-            agentArgs: {},
-            coordinatorOnly: true,
-            trustWorkspaces: false,
-            createdAt: 'now',
-          },
-          lead: { owner: 'Ada', epoch: 1, agent: 'codex' },
-          profiles: [],
-        },
+        result:
+          input.action === 'project.reconnect'
+            ? input.input.preflight && reconnectProtocol
+              ? { ...project, reconnectProtocol: 1 }
+              : project
+            : {
+                project,
+                lead: { owner: 'Ada', epoch: 1, agent: 'codex' },
+                profiles: [],
+              },
       });
     },
   });
@@ -485,7 +544,12 @@ test('lead reconnects a legacy receipt after update without rewriting live guard
   const policy = resolve(home, 'guards/legacy-project/lead-1/policy.json');
   privateJson(policy, { marker: 'original-live-policy' });
   const originalPolicy = readFileSync(policy, 'utf8');
-  for (const version of ['0.5.2', '0.5.3']) {
+  for (const version of ['0.5.2', '0.5.3', 'old-supervisor', 'dead-legacy']) {
+    reconnectProtocol = version !== 'old-supervisor';
+    if (version === 'dead-legacy' || version === 'old-supervisor') {
+      session = 'marionette-legacy';
+      savedSocket = resolve(xdg, 'herdr/sessions/marionette-legacy/herdr.sock');
+    }
     privateJson(resolve(root, '.marionette/project.json'), {
       root,
       home,
@@ -493,14 +557,14 @@ test('lead reconnects a legacy receipt after update without rewriting live guard
       leasePath,
       lead: 'codex',
       leadName: 'Ada',
-      session: 'default',
-      socket,
+      session,
+      socket: savedSocket,
       workspace: 'w1',
       runtime: resolve(home, 'runtimes', version),
       leadProfile: 'not-validated-yet',
     });
     const cli = resolve(process.env.MARIONETTE_TEST_CLI ?? 'src/cli.ts');
-    const output = await promisify(execFile)(
+    const launch = promisify(execFile)(
       process.execPath,
       [
         '--eval',
@@ -510,20 +574,82 @@ test('lead reconnects a legacy receipt after update without rewriting live guard
         env: { ...process.env, XDG_CONFIG_HOME: xdg, HERDR_ENV: '1', HERDR_SOCKET_PATH: socket },
       },
     );
+    if (version === 'old-supervisor') {
+      await assert.rejects(launch, /does not support safe workspace recovery/);
+      assert.equal(
+        JSON.parse(readFileSync(resolve(root, '.marionette/project.json'), 'utf8')).session,
+        'marionette-legacy',
+      );
+      continue;
+    }
+    const output = await launch;
     assert.match(output.stdout, /Reconnected to the existing lead conversation/);
     assert.equal(readFileSync(receiptPath, 'utf8'), receipt);
     assert.equal(readFileSync(policy, 'utf8'), originalPolicy);
     assert.equal(existsSync(resolve(root, '.marionette/lead.lock')), false);
   }
-  assert.deepEqual(methods, [
-    'ping',
-    'workspace.get',
-    'agent.list',
-    'tab.focus',
-    'ping',
-    'workspace.get',
-    'agent.list',
-    'tab.focus',
-  ]);
-  assert.deepEqual(calls, Array(4).fill('project.briefing'));
+  assert.equal(calls.includes('lead.preferences.get'), false);
+  assert.equal(methods.filter((m) => m === 'tab.focus').length, 3);
+  assert.equal(methods.includes('workspace.create'), false);
+  assert.equal(calls.filter((m) => m === 'project.reconnect').length, 4);
+  const binding = JSON.parse(readFileSync(resolve(root, '.marionette/project.json'), 'utf8'));
+  assert.equal(binding.session, 'default');
+  assert.equal(binding.sessionSelection, 'default');
+});
+
+test('lead print supports pre-preferences supervisors and preserves permission failures', async () => {
+  const { Effect } = await import('effect');
+  const { initConfig } = await import('../src/config.js');
+  const { launchLeadEffect } = await import('../src/setup.js');
+  const root = fixture();
+  const home = resolve(root, 'state');
+  mkdirSync(home);
+  const store = new Store(resolve(home, 'state.sqlite'));
+  onTestFinished(() => store.close());
+  const service = new Service(store, () => ({ call: async () => ({}) }));
+  const project = await service.invoke('project.register', {
+    name: 'Previous supervisor',
+    root,
+    session: 'default',
+    socketPath: '/tmp/test.sock',
+    workspaceId: 'w1',
+  });
+  const acquired = await service.invoke('lead.acquire', {
+    projectId: project.id,
+    owner: 'Lead',
+    agent: 'codex',
+    expectedEpoch: 0,
+    reason: 'setup',
+  });
+  let failure = 'unknown_action';
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    async fetch(request) {
+      const body = await request.json();
+      if (body.action === 'lead.preferences.get')
+        return Response.json(
+          { error: { code: failure, message: failure } },
+          { status: failure === 'unknown_action' ? 404 : 403 },
+        );
+      return Response.json({ result: await service.invoke(body.action, body.input) });
+    },
+  });
+  onTestFinished(() => server.stop(true));
+  initConfig(home, server.port!);
+  const leasePath = resolve(home, 'leads', project.id + '.json');
+  privateJson(leasePath, acquired.lease);
+  privateJson(resolve(root, '.marionette/project.json'), {
+    root,
+    home,
+    projectId: project.id,
+    leasePath,
+    lead: 'codex',
+    leadName: 'Lead',
+  });
+  await Effect.runPromise(launchLeadEffect(root, true));
+  for (const code of ['stale_lead', 'unauthorized', 'internal_error']) {
+    failure = code;
+    await assert.rejects(Effect.runPromise(launchLeadEffect(root, true)), new RegExp(code));
+  }
 });

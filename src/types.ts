@@ -1,5 +1,6 @@
 import type { AgentAccess } from './agent-access.js';
 import { Effect, Schema } from 'effect';
+export const workspaceIdSchema = Schema.String.check(Schema.isPattern(/^w[0-9A-Za-z]+$/));
 export const leadAgentSchema = Schema.Literals(['codex-desktop', 'codex', 'claude', 'agy', 'omp']);
 export type LeadAgent = Schema.Schema.Type<typeof leadAgentSchema>;
 export const kindSchema = Schema.Literals(['codex', 'claude', 'agy', 'omp']);
@@ -131,6 +132,7 @@ export interface Project {
   agentArgs: Partial<Record<Kind, string[]>>;
   agentAccess?: AgentAccess;
   coordinatorOnly?: boolean;
+  authorityMode?: 'conversation' | 'external';
   trustWorkspaces?: boolean;
   /** Legacy AGY-only opt-in; retained when reading older state. */
   trustAgyWorkspaces?: boolean;

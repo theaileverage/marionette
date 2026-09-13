@@ -85,9 +85,12 @@ test('real HTTP and STDIO MCP enforce instance auth and expose the same durable 
       }),
     );
     const tools = await client.listTools();
-    assert.equal(tools.tools.length, 71);
+    assert.equal(tools.tools.length, 74);
     for (const name of [
       'project_configure',
+      'authority_record_user_request',
+      'lead_preferences_get',
+      'lead_preferences_set',
       'outcome_create',
       'outcome_complete',
       'plan_revise',

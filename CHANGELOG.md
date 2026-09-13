@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0-alpha.1 — 2026-09-13
+
+- Add setup choices for conversation or external authority, project skill installation, and lead startup, with preview and scripted options.
+- Save project lead profiles, reasoning levels, instructions, and selected skills through scoped MCP tools. Preserve existing conversations when preferences change.
+- Record bounded user requests as revision-checked conversation authority while retaining external authorization for projects that require it.
+- Rework the outcome dashboard and add rendering regressions.
+- Stop STDIO MCP processes when clients disconnect and improve MCP registration and transport handling.
+- Bundle Marionette skills with the runtime and preserve customized project skill files during installation.
+
 ## 0.5.3 — 2026-09-10
 
 - Reconnect existing terminal leads across runtime updates, including pre-0.5.2 launch receipts, without changing the native conversation, replaying startup prompts, or rewriting live guard files. Continue checking project, lease, workspace, pane, terminal, and native session identity.

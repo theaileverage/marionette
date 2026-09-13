@@ -1,3 +1,4 @@
+import { leadPreferencesSchema } from './lead-preferences.js';
 import { agentAccessSchema, agentAccessArgs } from './agent-access.js';
 import { prepareGuardLaunchEffect, verifyGuardHarnessEffect } from './harness-guard.js';
 import { Effect, Config as Environment, Option, Result, Schedule, Schema, Struct } from 'effect';
@@ -34,7 +35,13 @@ import { profileArgs } from './profiles.js';
 import { renderLeadPrompt } from './prompts.js';
 import { briefingSchema, leaseResponseSchema, projectSchema } from './response-schemas.js';
 import { installRuntime } from './runtime.js';
-import { AppError, credentialsSchema, leadAgentSchema, type Project } from './types.js';
+import {
+  AppError,
+  credentialsSchema,
+  leadAgentSchema,
+  workspaceIdSchema,
+  type Project,
+} from './types.js';
 import { privateJson } from './private-json.js';
 export { privateJson } from './private-json.js';
 import {
@@ -51,6 +58,7 @@ import { packageRoot } from './runtime.js';
 import { SETUP_VERSION } from './version.js';
 import { herdrSessionSocket } from './herdr-session.js';
 import { setupWorkspaceEffect } from './setup-workspace.js';
+import { installProjectSkills } from './project-skills.js';
 export const setupSchema = Schema.Struct({
   project: Schema.mutableKey(Schema.optional(Schema.String)),
   home: Schema.mutableKey(Schema.optional(Schema.String)),
@@ -61,7 +69,7 @@ export const setupSchema = Schema.Struct({
     Schema.optional(Schema.String.check(Schema.isPattern(/^[a-zA-Z0-9_-]+$/))),
   ),
   socket: Schema.mutableKey(Schema.optional(Schema.String)),
-  workspace: Schema.mutableKey(Schema.optional(Schema.String.check(Schema.isPattern(/^w\d+$/)))),
+  workspace: Schema.mutableKey(Schema.optional(workspaceIdSchema)),
   port: Schema.mutableKey(
     Schema.optional(
       Schema.Finite.check(Schema.isInt())
@@ -93,6 +101,14 @@ export const setupSchema = Schema.Struct({
   ),
   upgrade: Schema.mutableKey(
     Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  ),
+  installSkills: Schema.mutableKey(
+    Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  ),
+  authorityMode: Schema.mutableKey(
+    Schema.Literals(['conversation', 'external']).pipe(
+      Schema.withDecodingDefault(Effect.succeed('conversation')),
+    ),
   ),
   installTools: Schema.mutableKey(
     Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
@@ -127,6 +143,7 @@ export function setupPlan<Input extends object>(input: Input) {
     leadName: binding?.leadName,
     leadProfile: binding?.leadProfile,
     coordinatorOnly: binding?.coordinatorOnly,
+    authorityMode: binding?.authorityMode,
     trustAgy: binding?.trustAgy,
     mcp: binding?.mcp,
     ...supplied,
@@ -151,6 +168,12 @@ export function setupPlan<Input extends object>(input: Input) {
       (existsSync(resolve(legacy, 'config.json')) ? legacy : resolve(dataHome, 'marionette')),
   );
   const session = options.session ?? binding?.session ?? 'default';
+  const sessionSelection =
+    supplied.session !== undefined
+      ? session === 'default'
+        ? 'default'
+        : 'named'
+      : (binding?.sessionSelection ?? (session === 'default' ? 'default' : 'legacy'));
   const socket = resolve(
     options.socket ??
       (options.session && options.session !== binding?.session ? undefined : binding?.socket) ??
@@ -162,6 +185,8 @@ export function setupPlan<Input extends object>(input: Input) {
     home,
     name: options.name ?? basename(root),
     session,
+    sessionSelection,
+    sessionExplicit: supplied.session !== undefined,
     socket,
     workspace: options.workspace ?? (socket === binding?.socket ? binding.workspace : undefined),
     workspaceExplicit: supplied.workspace !== undefined,
@@ -184,6 +209,11 @@ export function setupPlan<Input extends object>(input: Input) {
         ),
       ...(options.installTools
         ? ['Install missing required tools using supported installers']
+        : []),
+      ...(options.installSkills
+        ? [
+            'Install the Marionette project skill in .agents/skills and .claude/skills, preserving customized files',
+          ]
         : []),
       'Install a durable local runtime and start the loopback supervisor',
       'Create or reuse the selected Herdr session and project workspace',
@@ -224,6 +254,64 @@ export const wizardEffect = Effect.fn('Setup.wizard')(function* (input: Partial<
     }
   });
   const defaults = yield* sync('Setup.defaults', () => setupPlan(input));
+  if (input.home === undefined) {
+    if (existsSync(defaults.bindingPath)) input.home = defaults.home;
+    else {
+      const storage = yield* promptEffect((signal) =>
+        prompts.select({
+          message: 'Where should Marionette store this project’s data?',
+          initialValue: 'shared',
+          signal,
+          output: process.stderr,
+          options: [
+            { value: 'shared' as const, label: 'Shared instance', hint: defaults.home },
+            {
+              value: 'local' as const,
+              label: 'Inside this project',
+              hint: '.marionette, private state excluded from Git',
+            },
+            { value: 'custom' as const, label: 'Choose a directory' },
+          ],
+        }),
+      );
+      input.home =
+        storage === 'local'
+          ? resolve(defaults.root, '.marionette')
+          : storage === 'custom'
+            ? yield* ask('State directory', defaults.home, (value) =>
+                value ? undefined : 'Enter a directory.',
+              )
+            : defaults.home;
+    }
+  }
+  input.installSkills ??= yield* promptEffect((signal) =>
+    prompts.confirm({
+      message: 'Add the Marionette skill to this project in .agents/skills and .claude/skills?',
+      initialValue: true,
+      signal,
+      output: process.stderr,
+    }),
+  );
+  input.authorityMode ??= yield* promptEffect((signal) =>
+    prompts.select({
+      message: 'How should the lead record permission for requested work?',
+      initialValue: defaults.authorityMode,
+      signal,
+      output: process.stderr,
+      options: [
+        {
+          value: 'conversation' as const,
+          label: 'Use your requests in conversation',
+          hint: 'Trust the lead to record the activities and paths you authorize',
+        },
+        {
+          value: 'external' as const,
+          label: 'Require external authorization',
+          hint: 'Use marionette authorize for each outcome',
+        },
+      ],
+    }),
+  );
   const nameError = (value: string) =>
     value.trim().length > 0 && value.trim().length <= 100 ? undefined : 'Enter 1–100 characters.';
   input.name ??= yield* ask('Project name', defaults.name, nameError);
@@ -339,13 +427,57 @@ export const startDaemonEffect = Effect.fn('Setup.startDaemon')(function* (
 const ensureHerdrEffect = Effect.fn('Setup.ensureHerdr')(function* (
   plan: ReturnType<typeof setupPlan>,
 ) {
-  const h = new Herdr(plan.socket);
+  let h = new Herdr(plan.socket);
   const connected = yield* Effect.result(herdrCall(h, 'ping'));
   if (Result.isSuccess(connected)) return h;
-  if (plan.socket !== herdrSessionSocket(plan.session))
+  if (plan.socket !== herdrSessionSocket(plan.session) && plan.sessionSelection !== 'legacy')
     return yield* boundaryError('Setup.ensureHerdr')(
       new Error(`Cannot connect to supplied socket ${plan.socket}; start its Herdr session first`),
     );
+  if (plan.sessionSelection === 'legacy' && plan.session !== 'default') {
+    const absent = yield* sync('Setup.sessionAbsent', () => {
+      try {
+        statSync(plan.socket);
+        return false;
+      } catch (error) {
+        if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return true;
+        throw error;
+      }
+    });
+    if (!absent) return yield* connected.failure;
+    if (plan.savedProjectId && plan.workspace) {
+      const lease = yield* sync('Setup.migrationLease', () =>
+        Schema.decodeUnknownSync(credentialsSchema)(
+          JSON.parse(
+            readFileSync(resolve(plan.home, 'leads', plan.savedProjectId + '.json'), 'utf8'),
+          ),
+        ),
+      );
+      yield* verifyReconnectProtocolEffect(plan.home, {
+        lease,
+        expectedWorkspaceId: plan.workspace,
+        workspaceId: plan.workspace,
+        expectedSocketPath: plan.socket,
+        expectedSession: plan.session,
+        session: 'default',
+        socketPath: herdrSessionSocket('default'),
+        preflight: true,
+      });
+    }
+    plan.session = 'default';
+    plan.socket = herdrSessionSocket('default');
+    plan.workspace = undefined;
+    plan.sessionSelection = 'default';
+    plan.ownsSession = false;
+    plan.ownsWorkspace = false;
+    h = new Herdr(plan.socket);
+    const shared = yield* Effect.result(herdrCall(h, 'ping'));
+    if (Result.isSuccess(shared)) return h;
+  }
+  const ownsSession =
+    plan.session !== 'default' &&
+    plan.sessionSelection === 'named' &&
+    !existsSync(dirname(plan.socket));
   yield* startDaemonEffect(
     'herdr',
     ['--session', plan.session, 'server'],
@@ -354,7 +486,82 @@ const ensureHerdrEffect = Effect.fn('Setup.ensureHerdr')(function* (
   yield* herdrCall(h, 'ping', {}, 500).pipe(
     Effect.retry(Schedule.spaced(100).pipe(Schedule.upTo({ times: 99 }))),
   );
+  plan.ownsSession ||= ownsSession;
   return h;
+});
+const verifyReconnectProtocolEffect = Effect.fn('Setup.reconnectProtocol')(function* (
+  home: string,
+  input: Schema.MutableJson,
+) {
+  const value = yield* callEffect(home, 'project.reconnect', input);
+  if (
+    Schema.decodeUnknownOption(Schema.Struct({ reconnectProtocol: Schema.Literal(1) }))(value)
+      ._tag === 'None'
+  )
+    return yield* new AppError({
+      code: 'supervisor_upgrade_required',
+      message:
+        'The running supervisor does not support safe workspace recovery. Upgrade and restart this Marionette instance before retrying. No replacement workspace was created.',
+      status: 409,
+    });
+});
+const recoverProjectWorkspaceEffect = Effect.fn('Setup.recoverProjectWorkspace')(function* (
+  home: string,
+  project: Project,
+  h: Herdr,
+  plan: ReturnType<typeof setupPlan>,
+) {
+  const migrating = project.socketPath !== plan.socket || project.session !== plan.session;
+  const { workspaces } = yield* herdrCall(h, 'workspace.list');
+  if (
+    !migrating &&
+    workspaces.some((w: { workspace_id: string }) => w.workspace_id === project.workspaceId) &&
+    (!plan.workspaceExplicit || plan.workspace === project.workspaceId)
+  ) {
+    yield* herdrCall(h, 'workspace.get', { workspace_id: project.workspaceId });
+    return { project, ownsWorkspace: plan.ownsWorkspace };
+  }
+  const lease = yield* sync('Setup.reconnectLease', () =>
+    Schema.decodeUnknownSync(credentialsSchema)(
+      JSON.parse(readFileSync(resolve(home, 'leads', project.id + '.json'), 'utf8')),
+    ),
+  );
+  if (lease.projectId !== project.id)
+    return yield* new AppError({
+      code: 'project_lease_mismatch',
+      message: 'The saved lease belongs to another project.',
+      status: 409,
+    });
+  const request = {
+    lease,
+    expectedWorkspaceId: project.workspaceId,
+    expectedSocketPath: project.socketPath,
+    expectedSession: project.session,
+    session: plan.session,
+    socketPath: plan.socket,
+  };
+  yield* verifyReconnectProtocolEffect(home, {
+    ...request,
+    workspaceId: project.workspaceId,
+    preflight: true,
+  });
+  if (
+    !migrating &&
+    workspaces.some((w: { workspace_id: string }) => w.workspace_id === project.workspaceId)
+  )
+    return yield* new AppError({
+      code: 'workspace_still_exists',
+      message: 'The original workspace still exists. Setup will not replace an active connection.',
+      status: 409,
+    });
+  const selected = yield* setupWorkspaceEffect(h, {
+    ...plan,
+    workspace: migrating && !plan.workspaceExplicit ? undefined : plan.workspace,
+  });
+  const updated = yield* Schema.decodeUnknownEffect(projectSchema)(
+    yield* callEffect(home, 'project.reconnect', { ...request, workspaceId: selected.workspaceId }),
+  ).pipe(Effect.mapError(boundaryError('setup.decode')));
+  return { project: updated, ownsWorkspace: selected.ownsWorkspace };
 });
 export function leadPrompt(
   projectId: string,
@@ -439,6 +646,9 @@ export const runSetupEffect = Effect.fn('runSetup')(function* (
       }),
   );
   const runtime = yield* sync('runSetup.runSetup', () => installRuntime(p.home));
+  const skills = p.installSkills
+    ? yield* sync('Setup.installProjectSkills', () => installProjectSkills(p.root, runtime))
+    : [];
   if (!existsSync(resolve(p.home, 'config.json')))
     initConfig(p.home, yield* availablePortEffect(p.port));
   const config = yield* sync('runSetup.runSetup', () => loadConfig(p.home));
@@ -461,76 +671,49 @@ export const runSetupEffect = Effect.fn('runSetup')(function* (
       ),
     );
   progress?.message('Connecting the project’s Herdr workspace');
-  const ownsSession =
-    p.session !== 'default' &&
-    (p.ownsSession ||
-      (p.socket === herdrSessionSocket(p.session) && !existsSync(dirname(p.socket))));
-  const h = yield* ensureHerdrEffect(p);
-  const { workspaceId, ownsWorkspace, recovered } = yield* setupWorkspaceEffect(h, p);
-  if (recovered && interactive)
-    prompts.log.info(
-      `Saved workspace ${p.workspace} is gone; reconnecting this project to ${workspaceId}.`,
-      { output: process.stderr },
-    );
-  yield* sync('runSetup.runSetup', () =>
-    privateJson(
-      resolve(
-        p.home,
-        'setup-project-' + createHash('sha256').update(p.root).digest('hex').slice(0, 10) + '.json',
-      ),
-      { root: p.root, session: p.session, socket: p.socket, workspace: workspaceId },
-    ),
-  );
-  let project: Project;
+  let savedProject: Project | undefined;
   if (p.savedProjectId) {
     const saved = yield* Schema.decodeUnknownEffect(briefingSchema)(
       yield* callEffect(p.home, 'project.briefing', { projectId: p.savedProjectId }),
     ).pipe(Effect.mapError(boundaryError('setup.decode')));
-    if (
-      saved.project.root !== p.root ||
-      saved.project.socketPath !== p.socket ||
-      saved.project.session !== p.session
-    )
+    savedProject = saved.project;
+    if (savedProject.root !== p.root)
       return yield* new AppError({
         code: 'project_connection_changed',
-        message:
-          'The saved project belongs to another root or session. Preserve that connection and explicitly remove it before setting up a different session.',
+        message: 'The saved project belongs to another root.',
         status: 409,
       });
-    project = saved.project;
-    if (project.workspaceId !== workspaceId) {
-      const reconnectLease = yield* sync('Setup.reconnectLease', () =>
-        Schema.decodeUnknownSync(credentialsSchema)(
-          JSON.parse(readFileSync(resolve(p.home, 'leads', project.id + '.json'), 'utf8')),
-        ),
-      );
-      if (reconnectLease.projectId !== project.id)
-        return yield* new AppError({
-          code: 'project_lease_mismatch',
-          message:
-            'The saved lease belongs to another project. Restore this project’s lease before reconnecting its workspace.',
-          status: 409,
-        });
-      project = yield* Schema.decodeUnknownEffect(projectSchema)(
-        yield* callEffect(p.home, 'project.reconnect', {
-          lease: reconnectLease,
-          expectedWorkspaceId: project.workspaceId,
-          workspaceId,
-        }),
-      ).pipe(Effect.mapError(boundaryError('setup.decode')));
+    if (!p.sessionExplicit) {
+      p.session = savedProject.session;
+      p.socket = savedProject.socketPath;
+      if (!p.workspaceExplicit) p.workspace = savedProject.workspaceId;
+      if (p.session === 'default') p.sessionSelection = 'default';
     }
-  } else
+  }
+  const h = yield* ensureHerdrEffect(p);
+  let project: Project;
+  let ownsWorkspace = p.ownsWorkspace;
+  if (savedProject) {
+    const recovered = yield* recoverProjectWorkspaceEffect(p.home, savedProject, h, p);
+    project = recovered.project;
+    ownsWorkspace = recovered.ownsWorkspace;
+  } else {
+    const selected = yield* setupWorkspaceEffect(h, p);
+    ownsWorkspace = selected.ownsWorkspace;
     project = yield* Schema.decodeUnknownEffect(projectSchema)(
       yield* callEffect(p.home, 'project.register', {
         name: p.name,
         root: p.root,
         session: p.session,
         socketPath: p.socket,
-        workspaceId,
+        workspaceId: selected.workspaceId,
         trustWorkspaces: p.trustWorkspaces,
         agentAccess: p.agentAccess ?? {},
       }),
     ).pipe(Effect.mapError(boundaryError('setup.decode')));
+  }
+  const workspaceId = project.workspaceId;
+  const ownsSession = p.session !== 'default' && p.ownsSession;
   const leasePath = yield* sync('runSetup.runSetup', () =>
     resolve(p.home, 'leads', project.id + '.json'),
   );
@@ -589,6 +772,7 @@ export const runSetupEffect = Effect.fn('runSetup')(function* (
   }
   yield* callEffect(p.home, 'project.configure', {
     lease,
+    authorityMode: p.authorityMode,
     coordinatorOnly: p.coordinatorOnly,
     trustWorkspaces: p.trustWorkspaces,
     agentAccess: p.agentAccess ?? {},
@@ -600,6 +784,7 @@ export const runSetupEffect = Effect.fn('runSetup')(function* (
     projectId: project.id,
     root: p.root,
     session: p.session,
+    sessionSelection: p.sessionSelection,
     socket: p.socket,
     workspace: workspaceId,
     ownsWorkspace,
@@ -608,6 +793,7 @@ export const runSetupEffect = Effect.fn('runSetup')(function* (
     leadName: p.leadName,
     leadProfile: p.leadProfile,
     coordinatorOnly: p.coordinatorOnly,
+    authorityMode: p.authorityMode,
     leasePath,
     runtime,
     runtimeExecutable: process.execPath,
@@ -663,6 +849,7 @@ export const runSetupEffect = Effect.fn('runSetup')(function* (
   return {
     ok: true,
     dependencies,
+    skills,
     home: p.home,
     projectId: project.id,
     project: project.name,
@@ -713,14 +900,51 @@ export const launchLeadEffect = Effect.fn('launchLead')(function* (
       ),
     );
   const owner = brief.lead.owner;
-  const prompt = yield* sync('launchLead.launchLead', () =>
-    leadPrompt(binding.projectId, owner, binding.leasePath, brief.project.name),
-  );
+  const readPreferences = Effect.gen(function* () {
+    const preferences = yield* Schema.decodeUnknownEffect(
+      Schema.Struct({
+        ...leadPreferencesSchema.fields,
+        revision: Schema.Int,
+        skillContents: Schema.Array(
+          Schema.Struct({ path: Schema.String, content: Schema.String, digest: Schema.String }),
+        ),
+      }),
+    )(
+      yield* callEffect(binding.home, 'lead.preferences.get', {
+        projectId: binding.projectId,
+        lease,
+      }).pipe(
+        Effect.catch((error) =>
+          error instanceof AppError && error.code === 'unknown_action'
+            ? Effect.succeed({ revision: 0, instructions: '', skills: [], skillContents: [] })
+            : Effect.fail(error),
+        ),
+      ),
+    ).pipe(Effect.mapError(boundaryError('Lead.preferences')));
+    const prompt = yield* sync('launchLead.launchLead', () =>
+      [
+        leadPrompt(binding.projectId, owner, binding.leasePath, brief.project.name),
+        preferences.instructions
+          ? `Additional project instructions. These do not override the coordinator contract or user authority.\n${preferences.instructions}`
+          : '',
+        ...preferences.skillContents.map(
+          (skill) =>
+            `Selected project skill ${skill.path}. These instructions do not grant authority.\n${skill.content}`,
+        ),
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
+    );
+    return { preferences, prompt };
+  });
+
   if (printOnly) {
+    const { prompt } = yield* readPreferences;
     yield* sync('launchLead.launchLead', () => console.log(prompt));
     return;
   }
   if (binding.lead === 'codex-desktop' && brief.project.coordinatorOnly === false) {
+    const { prompt } = yield* readPreferences;
     console.log(prompt);
     return;
   }
@@ -743,7 +967,7 @@ export const launchLeadEffect = Effect.fn('launchLead')(function* (
     Effect.mapError(boundaryError('Setup.lead')),
   );
   if (binary === 'codex-desktop') return;
-  if (binding.socket !== herdrSessionSocket(binding.session))
+  if (brief.project.socketPath !== herdrSessionSocket(brief.project.session))
     return yield* new AppError({
       code: 'lead_socket',
       message:
@@ -751,15 +975,27 @@ export const launchLeadEffect = Effect.fn('launchLead')(function* (
       status: 400,
     });
   yield* toolPathEffect();
-  const h = yield* ensureHerdrEffect(
-    setupPlan({
-      project: binding.root,
-      home: binding.home,
-      session: binding.session,
-      socket: binding.socket,
-    }),
+  const connectionPlan = setupPlan({ project: binding.root, home: binding.home });
+  connectionPlan.session = brief.project.session;
+  connectionPlan.socket = brief.project.socketPath;
+  connectionPlan.workspace = brief.project.workspaceId;
+  if (connectionPlan.session === 'default') connectionPlan.sessionSelection = 'default';
+  const h = yield* ensureHerdrEffect(connectionPlan);
+  const recovered = yield* recoverProjectWorkspaceEffect(
+    binding.home,
+    brief.project,
+    h,
+    connectionPlan,
   );
-  yield* herdrCall(h, 'workspace.get', { workspace_id: binding.workspace });
+  binding.session = recovered.project.session;
+  binding.socket = recovered.project.socketPath;
+  binding.workspace = recovered.project.workspaceId;
+  binding.ownsWorkspace = recovered.ownsWorkspace;
+  binding.sessionSelection = connectionPlan.sessionSelection;
+  binding.ownsSession = connectionPlan.ownsSession;
+  yield* sync('Lead.saveConnection', () =>
+    privateJson(resolve(binding.root, '.marionette/project.json'), binding),
+  );
   const lockPath = resolve(binding.root, '.marionette/lead.lock');
   yield* Effect.gen(function* () {
     yield* Effect.acquireRelease(
@@ -814,14 +1050,15 @@ export const launchLeadEffect = Effect.fn('launchLead')(function* (
     );
     if (resumed) {
       console.log('Reconnected to the existing lead conversation.');
-      if (profileId)
-        console.log(
-          'The running lead keeps its model. Use --profile again after this lead exits to launch with a different profile.',
-        );
+      console.log(
+        'The running lead keeps its model and reasoning. Saved preferences apply on the next new launch. Read lead_preferences_get in the conversation to apply updated instructions and skills.',
+      );
       return;
     }
+    const { preferences, prompt } = yield* readPreferences;
     const requestedProfile =
       profileId ??
+      preferences.profileId ??
       binding.leadProfile ??
       current.roles?.find((r) => r.id === 'lead')?.profileId ??
       current.profileDefaults?.orchestration;
@@ -840,7 +1077,20 @@ export const launchLeadEffect = Effect.fn('launchLead')(function* (
           'The requested profile runtime differs from the configured lead. Select the intended lead explicitly.',
         ),
       );
-    const model = yield* sync('launchLead.launchLead', () => (profile ? profileArgs(profile) : []));
+    const reasoning =
+      !profileId && preferences.profileId === profile?.id
+        ? (preferences.reasoning ?? profile?.reasoning)
+        : profile?.reasoning;
+    if (profile && reasoning && !profile.supportedReasoning.includes(reasoning))
+      return yield* new AppError({
+        code: 'reasoning_unsupported',
+        message:
+          'Saved reasoning is no longer supported by the selected profile. Update lead preferences before launch.',
+        status: 400,
+      });
+    const model = yield* sync('launchLead.launchLead', () =>
+      profile ? profileArgs({ ...profile, reasoning }) : [],
+    );
     const promptPath = resolve(binding.home, 'leads', binding.projectId + '.md');
     yield* sync('Lead.promptFile', () => writeFileSync(promptPath, prompt + '\n', { mode: 0o600 }));
     const guarded = current.project.coordinatorOnly !== false;
