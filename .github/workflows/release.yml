@@ -18,6 +18,10 @@ jobs:
     name: Verify release artifact
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
     env:
       RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
@@ -45,3 +49,8 @@ jobs:
           mkdir release-assets
           npm pack --pack-destination release-assets
           node scripts/release.mjs smoke "release-assets/theaileverage-marionette-$(node -p 'require("./package.json").version').tgz"
+      - name: Publish CLI alpha through npm trusted publishing
+        if: env.RELEASE_TAG == 'v1.0.0-alpha.1'
+        run: |
+          npm install --global npm@11.19.1
+          npm publish release-assets/theaileverage-marionette-1.0.0-alpha.1.tgz --tag alpha --access public --provenance
