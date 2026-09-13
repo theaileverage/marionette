@@ -141,3 +141,68 @@ test('the real watcher settles its ownership before closing on abort', async (t)
     client.close();
   }
 });
+
+test('workflow control receipts replay across SDK connections and parsed operations', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'marionette-v1-control-client-'));
+  const repo = join(root, 'repo');
+  const stateHome = join(root, 'state');
+  mkdirSync(repo);
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const first = Marionette.init({ repositoryRoot: repo, stateHome });
+  const workspace = await execute(
+    first,
+    operationSchema.parse({
+      operation: 'workspace.register',
+      id: 'workspace-control',
+      kind: 'existing',
+      path: repo,
+      repositoryRoot: repo,
+      baseCommit: null,
+      access: 'inspect',
+      writes: [],
+      idempotencyKey: 'workspace',
+    }),
+  );
+  const workflow = await execute(
+    first,
+    operationSchema.parse({
+      operation: 'workflow.create',
+      stableKey: 'control',
+      package: 'direct',
+      request: { text: 'Inspect', digest: '0'.repeat(64), inputSnapshots: [] },
+      brief: {
+        objective: 'Inspect',
+        scope: [],
+        ownership: [],
+        constraints: [],
+        standingOrders: [],
+        inputSnapshots: [],
+      },
+      workspaceId: workspace.id,
+      delivery: 'report',
+      boundary: 'all',
+      idempotencyKey: 'workflow',
+    }),
+  );
+  const input = {
+    workflowId: workflow.id,
+    expectedWorkflowRevision: workflow.revision,
+    expectedControlRevision: workflow.controlRevision,
+    operation: { kind: 'cancel' as const },
+    idempotencyKey: 'cancel',
+  };
+  const receipt = first.controlWorkflow(input);
+  first.close();
+  const second = Marionette.connect({ cwd: repo, env: { MARIONETTE_STATE_HOME: stateHome } });
+  t.after(() => second.close());
+  const replay = await execute(second, {
+    operation: 'workflow.control',
+    workflowId: input.workflowId,
+    expectedWorkflowRevision: input.expectedWorkflowRevision,
+    expectedControlRevision: input.expectedControlRevision,
+    control: input.operation,
+    idempotencyKey: input.idempotencyKey,
+  });
+  assert.deepEqual(replay, receipt);
+  assert.equal(second.workflow(input.workflowId).phase, 'cancelled');
+});

@@ -49,6 +49,8 @@ A live AGY fixture accepted one journaled prompt through the Herdr adapter and r
 
 The current desktop-owned Codex app-server has private stdio and no reachable registered endpoint. Desktop notifications are unavailable in this environment. No substitute app-server was used as evidence.
 
-Unit 4 remains blocked on the pending source-implementation authorization following automatic approval review rejection. Its stubs reject brief revisions, workflow transitions, pause/cancel/resume, and limit changes. Automatic workflow scheduling depends on those operations. Alpha naming does not count as completing that scope.
+Unit 4 implementation resumed under explicit task authorization on September 13. Durable drain/now pause and cancellation now persist revisioned, idempotent receipts and fence registered descendants in the same SQLite transaction. Pending attempts settle before launch; active attempts receive durable control intent. Native reconciliation journals interruption, waits for positive settlement, and retains uncertainty rather than replaying an ambiguous dispatch. The shared CLI/SDK operation is `workflow.control` / `controlWorkflow`.
+
+Unit 4 is still incomplete. Safe-pause checkpoint proof, typed resume decisions, and managed child inheritance/admission require explicit contracts before those paths can be implemented safely. Brief revisions, workflow transitions, and limit changes remain stubs. Automatic workflow scheduling still depends on those operations. Alpha naming does not count as completing that scope. See [Unit 4 control implementation](unit-4-controls.md) for the verified slice and remaining gaps.
 
 Remaining acceptance work includes the complete native assignment lifecycle, automatic workflow progression and controls, and final integration review. No version tag, npm publication, or stable-release claim has been made.

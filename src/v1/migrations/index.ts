@@ -1,3 +1,4 @@
+import { controlDispatchSql } from './006_control_dispatch.js';
 import { collaborationHandoffSql } from './003_collaboration_handoff.js';
 import { coreSql } from './001_core.js';
 import { workflowsSql } from './002_workflows.js';
@@ -16,4 +17,5 @@ export const migrations = [
   { version: 3, name: '003_collaboration_handoff', sql: collaborationHandoffSql },
   { version: 4, name: '004_native_runtime', sql: nativeRuntimeSql },
   { version: 5, name: '005_artifact_media_type', sql: artifactMediaTypeSql },
+  { version: 6, name: '006_control_dispatch', sql: controlDispatchSql },
 ] satisfies readonly Migration[];

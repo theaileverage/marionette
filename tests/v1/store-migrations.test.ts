@@ -100,6 +100,7 @@ if (!isMainThread) {
           [3, '003_collaboration_handoff'],
           [4, '004_native_runtime'],
           [5, '005_artifact_media_type'],
+          [6, '006_control_dispatch'],
         ],
       );
       first.close();

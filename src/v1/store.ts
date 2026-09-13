@@ -9,6 +9,7 @@ import {
   AgentSessionIdSchema,
   AttemptIdSchema,
   BriefContentSchema,
+  ControlOperationSchema,
   BriefIdSchema,
   DigestSchema,
   EvidenceSchema,
@@ -1771,8 +1772,112 @@ export class Store {
     throw new StoreError('not-implemented', 'Workflow transition is not implemented');
   }
 
-  controlWorkflow(_input: ControlWorkflowInput): never {
-    throw new StoreError('not-implemented', 'Workflow control is not implemented');
+  controlWorkflow(input: ControlWorkflowInput) {
+    this.#requireActor(input.actor, ['user', 'controller']);
+    ControlOperationSchema.parse(input.operation);
+    if (input.operation.kind === 'pause' && input.operation.mode === 'safe')
+      throw new StoreError(
+        'not-implemented',
+        'Safe pause requires a defined checkpoint proof contract',
+      );
+    const receiptSchema = z.object({
+      id: z.string(),
+      controlRevision: z.number(),
+      workflowIds: z.array(WorkflowIdSchema),
+    });
+    return this.idempotent(
+      'control-workflow',
+      input.idempotencyKey,
+      input,
+      receiptSchema,
+      (database) => {
+        const root = this.#requireWorkflow(database, input.workflowId);
+        if (
+          root.revision !== input.expectedWorkflowRevision ||
+          root.controlRevision !== input.expectedControlRevision
+        )
+          throw new StoreError('stale-revision', 'Workflow or control revision changed');
+        if (['finished', 'cancelled', 'cancelling'].includes(root.phase))
+          throw new StoreError('invalid-state', `Workflow is ${root.phase}`);
+        const workflows = database
+          .prepare(
+            `WITH RECURSIVE descendants(id) AS (
+        SELECT id FROM workflow_runs WHERE project_id=? AND id=? UNION ALL
+        SELECT w.id FROM workflow_runs w JOIN descendants d ON w.parent_workflow_id=d.id WHERE w.project_id=?
+      ) SELECT id FROM descendants`,
+          )
+          .all(this.project.id, root.id, this.project.id)
+          .map((row) => WorkflowIdSchema.parse(row.id));
+        const id = this.#newId('control', z.string());
+        const now = this.#now();
+        const operation = input.operation.kind === 'cancel' ? 'cancel' : input.operation.mode;
+        database
+          .prepare(
+            `INSERT INTO control_intents(id,project_id,workflow_id,kind,pause_mode,control_revision,payload_digest,created_at) VALUES(?,?,?,?,?,?,?,?)`,
+          )
+          .run(
+            id,
+            this.project.id,
+            root.id,
+            input.operation.kind,
+            input.operation.kind === 'pause' ? input.operation.mode : null,
+            root.controlRevision + 1,
+            payloadDigest(input),
+            now,
+          );
+        for (const workflowId of workflows) {
+          database
+            .prepare('INSERT INTO control_workflows(control_intent_id,workflow_id) VALUES(?,?)')
+            .run(id, workflowId);
+          database
+            .prepare(
+              `UPDATE workflow_runs SET phase=CASE WHEN phase='cancelling' THEN phase ELSE ? END, revision=revision+1,control_revision=control_revision+1,updated_at=? WHERE id=? AND phase NOT IN ('finished','cancelled')`,
+            )
+            .run(input.operation.kind === 'cancel' ? 'cancelling' : 'pausing', now, workflowId);
+          database
+            .prepare(
+              `UPDATE native_approvals SET state='obsolete',updated_at=? WHERE project_id=? AND attempt_id IN (SELECT id FROM attempts WHERE workflow_id=?) AND state='pending'`,
+            )
+            .run(now, this.project.id, workflowId);
+          const attempts = database
+            .prepare(
+              "SELECT id,phase FROM attempts WHERE workflow_id=? AND phase NOT IN ('settled','closed')",
+            )
+            .all(workflowId);
+          for (const row of attempts) {
+            const attemptId = AttemptIdSchema.parse(row.id);
+            database
+              .prepare(
+                `INSERT INTO attempt_control_intents(id,project_id,attempt_id,cause_kind,cause_id,operation,state,created_at) VALUES(?,?,?,'workflow-control',?,?,'requested',?)`,
+              )
+              .run(
+                this.#newId('attempt-control', z.string()),
+                this.project.id,
+                attemptId,
+                id,
+                operation,
+                now,
+              );
+            if (row.phase === 'pending') {
+              this.settleAttempt({
+                actor: input.actor,
+                attemptId,
+                observation: {
+                  kind: 'settled',
+                  outcome: 'interrupted',
+                  reason: 'Control closed admission before launch was claimed',
+                },
+                idempotencyKey: `control-pending/${id}/${attemptId}`,
+              });
+            } else if (row.phase !== 'unconfirmed') {
+              database.prepare("UPDATE attempts SET phase='stopping' WHERE id=?").run(attemptId);
+            }
+          }
+        }
+        this.#finishSettledControls(database);
+        return { id, controlRevision: root.controlRevision + 1, workflowIds: workflows };
+      },
+    ).value;
   }
 
   resumeWorkflow(_input: ResumeWorkflowInput): never {

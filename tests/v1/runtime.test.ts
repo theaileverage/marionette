@@ -11,6 +11,7 @@ import {
   DigestSchema,
   ProjectBindingSchema,
   WorkspaceIdSchema,
+  WorkflowPackageSnapshotSchema,
 } from '../../src/v1/model.js';
 import {
   HerdrNativeAdapter,
@@ -27,7 +28,11 @@ import { Settings, profileSchema } from '../../src/v1/settings.js';
 import { Store } from '../../src/v1/store.js';
 import { Runtime } from '../../src/v1/runtime.js';
 
-function fixture(t: TestContext, crashAt: 'launch' | 'prompt' | null = null) {
+function fixture(
+  t: TestContext,
+  crashAt: 'launch' | 'prompt' | 'interrupt' | null = null,
+  managed = false,
+) {
   const root = mkdtempSync(join(tmpdir(), 'marionette-v1-runtime-'));
   const repo = join(root, 'repo');
   mkdirSync(repo);
@@ -92,6 +97,48 @@ function fixture(t: TestContext, crashAt: 'launch' | 'prompt' | null = null) {
     dependencies: [],
     idempotencyKey: 'job',
   });
+  const workflow = managed
+    ? store.createWorkflow({
+        actor,
+        stableKey: 'workflow',
+        request: {
+          text: 'Read-only check',
+          digest: DigestSchema.parse('0'.repeat(64)),
+          inputSnapshots: [],
+        },
+        brief: store.getBrief(job.id).content,
+        workspaceId: workspace.id,
+        delivery: 'report',
+        boundary: 'all',
+        idempotencyKey: 'workflow',
+        package: WorkflowPackageSnapshotSchema.parse({
+          name: 'fixture',
+          version: '1',
+          digest: '1'.repeat(64),
+          sourceDigests: [],
+          entryStep: 'work',
+          steps: [
+            {
+              name: 'work',
+              phase: 'analysis',
+              resources: [],
+              outputContract: 'report',
+              permittedMethods: ['direct'],
+              requiredEvidence: [],
+              requiresDistinctRole: false,
+            },
+          ],
+          transitions: [{ kind: 'finish', from: 'work' }],
+          limits: {
+            maxAttempts: 3,
+            maxRepeats: 1,
+            deadlineMs: 60000,
+            parallelism: 1,
+            innerLoopDeadlineMs: 30000,
+          },
+        }),
+      })
+    : null;
   const settings = new Settings(store, actor);
   settings.set({
     key: 'profile/test',
@@ -126,6 +173,8 @@ function fixture(t: TestContext, crashAt: 'launch' | 'prompt' | null = null) {
   });
   let launches = 0;
   let prompts = 0;
+  let interrupts = 0;
+  let duringLaunch: (() => void) | undefined;
   let nativeSettled = false;
   let ambiguous = false;
   class Adapter extends HerdrNativeAdapter {
@@ -137,6 +186,7 @@ function fixture(t: TestContext, crashAt: 'launch' | 'prompt' | null = null) {
       launches++;
       const prepared = await this.effects.prepare({ kind: 'create-tab', workspaceId: 'w1' });
       assert.equal(prepared.kind, 'prepared');
+      duringLaunch?.();
       if (crashAt === 'launch') throw new Error('Simulated process loss after durable claim');
       return {
         kind: 'launched',
@@ -165,6 +215,13 @@ function fixture(t: TestContext, crashAt: 'launch' | 'prompt' | null = null) {
       if (crashAt === 'prompt') throw new Error('Simulated process loss after durable claim');
       return { kind: 'submitted', operationId: prepared.operationId };
     }
+    override async interrupt(identity: NativeIdentity): Promise<NativeSubmission> {
+      const prepared = await this.effects.prepare({ kind: 'interrupt', paneId: identity.paneId });
+      if (prepared.kind === 'rejected') return { kind: 'unsupported', reason: prepared.reason };
+      interrupts++;
+      if (crashAt === 'interrupt') throw new Error('Simulated interrupt process loss');
+      return { kind: 'submitted', operationId: prepared.operationId };
+    }
     override async observe(identity: NativeIdentity): Promise<NativeObservation> {
       if (ambiguous) return { kind: 'unconfirmed', reason: 'Fixture could not confirm identity' };
       return nativeSettled
@@ -176,7 +233,7 @@ function fixture(t: TestContext, crashAt: 'launch' | 'prompt' | null = null) {
     composeHerdrAdapter(new Adapter(journal)),
   );
   const input = {
-    jobId: job.id,
+    jobId: workflow?.rootJobId ?? job.id,
     profile: 'test',
     nativeWorkspaceId: 'w1',
     inputResultIds: [],
@@ -185,6 +242,11 @@ function fixture(t: TestContext, crashAt: 'launch' | 'prompt' | null = null) {
   };
   return {
     runtime,
+    workflow,
+    interruptCount: () => interrupts,
+    onLaunch: (callback: () => void) => {
+      duringLaunch = callback;
+    },
     store,
     input,
     actor,
@@ -342,4 +404,161 @@ test('native idle releases execution only after a durable result exists', async 
     db.prepare('SELECT state FROM execution_reservations WHERE attempt_id=?').get(id),
   );
   assert.equal(reservation?.state, 'released');
+});
+
+function stop(
+  f: ReturnType<typeof fixture>,
+  operation: { kind: 'cancel' } | { kind: 'pause'; mode: 'now' | 'drain' | 'safe' } = {
+    kind: 'pause',
+    mode: 'now',
+  },
+) {
+  const workflow = f.store.getWorkflow(f.workflow!.id);
+  return f.store.controlWorkflow({
+    actor: f.actor,
+    workflowId: workflow.id,
+    expectedWorkflowRevision: workflow.revision,
+    expectedControlRevision: workflow.controlRevision,
+    operation,
+    idempotencyKey: 'stop',
+  });
+}
+
+test('control closes pending launches and returns an immutable replayable receipt', async (t) => {
+  const f = fixture(t, null, true);
+  const id = f.runtime.admit(f.input);
+  const w = f.store.getWorkflow(f.workflow!.id);
+  const input = {
+    actor: f.actor,
+    workflowId: w.id,
+    expectedWorkflowRevision: w.revision,
+    expectedControlRevision: w.controlRevision,
+    operation: { kind: 'pause' as const, mode: 'now' as const },
+    idempotencyKey: 'stop',
+  };
+  const receipt = f.store.controlWorkflow(input);
+  assert.deepEqual(f.store.controlWorkflow(input), receipt);
+  assert.equal(f.store.getWorkflow(w.id).phase, 'paused');
+  await f.runtime.start(id);
+  assert.equal(f.counts().launches, 0);
+  assert.equal(f.store.getAttempt(id).phase, 'settled');
+  assert.throws(
+    () => f.runtime.admit({ ...f.input, idempotencyKey: 'new' }),
+    /not running|admit|Workflow/i,
+  );
+  assert.throws(
+    () => f.store.controlWorkflow({ ...input, idempotencyKey: 'stale' }),
+    /revision changed/,
+  );
+});
+
+test('immediate pause interrupts once and waits for positive settlement without a result', async (t) => {
+  const f = fixture(t, null, true);
+  const id = f.runtime.admit(f.input);
+  await f.runtime.start(id);
+  stop(f);
+  assert.equal(f.store.getWorkflow(f.workflow!.id).phase, 'pausing');
+  await Promise.all([f.runtime.reconcile(id), f.runtime.reconcile(id)]);
+  assert.equal(f.interruptCount(), 1);
+  assert.equal(f.store.getWorkflow(f.workflow!.id).phase, 'pausing');
+  f.settleNative();
+  await f.runtime.reconcile(id);
+  assert.equal(f.store.getWorkflow(f.workflow!.id).phase, 'paused');
+});
+
+test('drain sends no interrupt; cancellation is terminal after native settlement', async (t) => {
+  for (const cancel of [false, true]) {
+    const f = fixture(t, null, true);
+    const id = f.runtime.admit(f.input);
+    await f.runtime.start(id);
+    stop(f, cancel ? { kind: 'cancel' } : { kind: 'pause', mode: 'drain' });
+    await f.runtime.reconcile(id);
+    assert.equal(f.interruptCount(), cancel ? 1 : 0);
+    f.settleNative();
+    await f.runtime.reconcile(id);
+    assert.equal(f.store.getWorkflow(f.workflow!.id).phase, cancel ? 'cancelled' : 'paused');
+  }
+});
+
+test('ambiguous interrupt survives reconciliation without replay or false settlement', async (t) => {
+  const f = fixture(t, 'interrupt', true);
+  const id = f.runtime.admit(f.input);
+  await f.runtime.start(id);
+  stop(f);
+  await assert.rejects(f.runtime.reconcile(id), /Inspect the outcome/);
+  f.settleNative();
+  await f.runtime.reconcile(id);
+  assert.equal(f.interruptCount(), 1);
+  assert.equal(f.store.getAttempt(id).phase, 'unconfirmed');
+  assert.equal(f.store.getWorkflow(f.workflow!.id).phase, 'pausing');
+  assert.ok(f.runtime.activeAttempts().includes(id));
+});
+
+test('safe pause fails before storing intent', (t) => {
+  const f = fixture(t, null, true);
+  assert.throws(() => stop(f, { kind: 'pause', mode: 'safe' }), /checkpoint proof/);
+  assert.equal(f.store.getWorkflow(f.workflow!.id).controlRevision, 1);
+});
+
+test('stop racing an admitted launch reconciles its identity without sending the work prompt', async (t) => {
+  const f = fixture(t, null, true);
+  const id = f.runtime.admit(f.input);
+  f.onLaunch(() => {
+    stop(f);
+  });
+  await f.runtime.start(id);
+  assert.equal(f.counts().launches, 1);
+  assert.equal(f.counts().prompts, 0);
+  assert.equal(f.interruptCount(), 1);
+  f.settleNative();
+  await f.runtime.reconcile(id);
+  assert.equal(f.store.getWorkflow(f.workflow!.id).phase, 'paused');
+});
+
+test('stop with an uncertain prompt cannot settle on idle or replay work', async (t) => {
+  const f = fixture(t, 'prompt', true);
+  const id = f.runtime.admit(f.input);
+  await assert.rejects(f.runtime.start(id));
+  stop(f);
+  f.settleNative();
+  await f.runtime.reconcile(id);
+  assert.equal(f.store.getAttempt(id).phase, 'unconfirmed');
+  assert.equal(f.store.getWorkflow(f.workflow!.id).phase, 'pausing');
+  assert.equal(f.counts().prompts, 1);
+});
+
+test('control covers registered descendants and preserves an independent workflow', async (t) => {
+  const f = fixture(t, null, true);
+  const root = f.workflow!;
+  const job = f.store.getJob(root.rootJobId);
+  const make = (key: string) =>
+    f.store.createWorkflow({
+      actor: f.actor,
+      stableKey: key,
+      package: root.package,
+      request: { text: key, digest: DigestSchema.parse('0'.repeat(64)), inputSnapshots: [] },
+      brief: f.store.getBrief(job.id).content,
+      workspaceId: job.workspaceId,
+      delivery: 'report',
+      boundary: 'all',
+      idempotencyKey: key,
+    });
+  const child = make('child');
+  const independent = make('independent');
+  // Fixture relationship only: child admission/inheritance remains a separate blocked contract.
+  f.store.transaction((db) =>
+    db.prepare('UPDATE workflow_runs SET parent_workflow_id=? WHERE id=?').run(root.id, child.id),
+  );
+  const id = f.runtime.admit({ ...f.input, jobId: child.rootJobId });
+  await f.runtime.start(id);
+  const receipt = stop(f, { kind: 'cancel' });
+  assert.deepEqual(new Set(receipt.workflowIds), new Set([root.id, child.id]));
+  assert.equal(f.store.getWorkflow(root.id).phase, 'cancelling');
+  assert.equal(f.store.getWorkflow(child.id).phase, 'cancelling');
+  assert.equal(f.store.getWorkflow(independent.id).phase, 'running');
+  await f.runtime.reconcile(id);
+  f.settleNative();
+  await f.runtime.reconcile(id);
+  assert.equal(f.store.getWorkflow(root.id).phase, 'cancelled');
+  assert.equal(f.store.getWorkflow(child.id).phase, 'cancelled');
 });

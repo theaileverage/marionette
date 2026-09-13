@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { Marionette } from './client.js';
 import { BoardPostKindSchema, BoardReferenceSchema } from './board.js';
 import {
+  ControlOperationSchema,
   AttemptIdSchema,
   BriefContentSchema,
   DeliveryKindSchema,
@@ -90,6 +91,16 @@ export const operationSchema = z.discriminatedUnion('operation', [
       ...jobInput,
       package: key,
       boundary: z.enum(['all', 'design-only']).default('all'),
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('workflow.control'),
+      workflowId: WorkflowIdSchema,
+      expectedWorkflowRevision: z.number().int().positive(),
+      expectedControlRevision: z.number().int().positive(),
+      control: ControlOperationSchema,
+      idempotencyKey: key,
     })
     .strict(),
   z.object({ operation: z.literal('workflow.list') }).strict(),
@@ -274,6 +285,14 @@ export async function execute(client: Marionette, raw: Operation) {
       return client.brief(input.id, input.revision);
     case 'workflow.create':
       return client.createWorkflow(payload(input));
+    case 'workflow.control':
+      return client.controlWorkflow({
+        workflowId: input.workflowId,
+        expectedWorkflowRevision: input.expectedWorkflowRevision,
+        expectedControlRevision: input.expectedControlRevision,
+        operation: input.control,
+        idempotencyKey: input.idempotencyKey,
+      });
     case 'workflow.list':
       return client.workflows();
     case 'workflow.get':

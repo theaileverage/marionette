@@ -313,6 +313,11 @@ export const operationOutputSchemas = {
   'job.get': jobSchema,
   'job.brief': briefSchema,
   'workflow.create': workflowSchema,
+  'workflow.control': z.object({
+    id: z.string(),
+    controlRevision: z.number().int().positive(),
+    workflowIds: z.array(WorkflowIdSchema),
+  }),
   'workflow.list': z.array(workflowSchema),
   'workflow.get': workflowSchema,
   route: z.discriminatedUnion('kind', [

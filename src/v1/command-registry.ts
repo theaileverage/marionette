@@ -71,6 +71,13 @@ export const commandMetadata = {
     effect: 'local-write',
     controller: true,
   },
+  'workflow.control': {
+    summary:
+      'Persist a workflow stop and fence managed admission. Safe pause is unavailable pending checkpoint proof.',
+    effect: 'local-write',
+    controller: true,
+    watcher: true,
+  },
   'workflow.list': { summary: 'List workflow records.', effect: 'read' },
   'workflow.get': { summary: 'Read a workflow record.', effect: 'read' },
   route: { summary: 'Choose the applicable pinned workflow or direct route.', effect: 'read' },

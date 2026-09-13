@@ -117,7 +117,7 @@ Integration completion requires a durable `text/x-diff` artifact whose changes a
 
 Bundled packages include `direct`, `feature`, `bug-fix`, `refactoring`, and `architect`. They pin workflow definitions, role configuration, and imported pstack skill resources by digest. Routing keeps routine requests direct. Package creation stores the chosen resources with the workflow.
 
-Automatic workflow progression, brief revision controls, pause/cancel/resume, and limit changes are not available in this alpha implementation yet. Creating a workflow record does not prove that its stages will execute automatically.
+Workflow controls support drain pause, immediate pause, and cancellation through `workflow.control` (SDK: `controlWorkflow`). The receipt confirms durable admission fencing; the watcher or `attempt.reconcile` confirms native settlement separately. Safe pause, resume, automatic workflow progression, brief revision controls, and limit changes remain unavailable. Creating a workflow record does not prove that its stages will execute automatically.
 
 ## Storage and verification
 

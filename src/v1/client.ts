@@ -35,6 +35,7 @@ import {
 } from './background.js';
 import {
   Store,
+  type ControlWorkflowInput,
   type SessionIdentity,
   type AgentSession,
   type CreateJobInput,
@@ -305,6 +306,10 @@ export class Marionette {
   workflow(id: WorkflowId) {
     this.#authenticate();
     return this.#store.getWorkflow(id);
+  }
+  controlWorkflow(input: Omit<ControlWorkflowInput, 'actor'>) {
+    this.#authenticate();
+    return this.#store.controlWorkflow({ ...input, actor: this.#identity });
   }
   attempt(id: AttemptId) {
     this.#authenticate();

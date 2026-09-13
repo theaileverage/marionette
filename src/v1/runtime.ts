@@ -208,9 +208,12 @@ export class Runtime {
           const attempt = this.store.getAttempt(id);
           const runtime = this.row(id);
           const job = this.store.getJob(attempt.jobId);
-          if (job.currentBriefRevision !== attempt.briefRevision)
+          const interrupt = effect.kind === 'interrupt';
+          if (interrupt && !this.control(id)?.interrupt)
+            return { kind: 'rejected', reason: 'No durable interruption intent' };
+          if (!interrupt && job.currentBriefRevision !== attempt.briefRevision)
             return { kind: 'rejected', reason: 'Brief changed before native effect' };
-          if (attempt.workflowId) {
+          if (!interrupt && attempt.workflowId) {
             const workflow = this.store.getWorkflow(attempt.workflowId);
             if (
               workflow.phase !== 'running' ||
@@ -218,7 +221,13 @@ export class Runtime {
             )
               return { kind: 'rejected', reason: 'Workflow control changed before native effect' };
           }
-          if (!['launching', 'running'].includes(attempt.phase))
+          if (
+            !(
+              interrupt
+                ? ['launching', 'running', 'stopping', 'unconfirmed']
+                : ['launching', 'running']
+            ).includes(attempt.phase)
+          )
             return { kind: 'rejected', reason: `Attempt is ${attempt.phase}` };
           const prior = db
             .prepare('SELECT id FROM native_effects WHERE attempt_id=? AND effect_kind=?')
@@ -268,6 +277,8 @@ export class Runtime {
   async start(id: AttemptId) {
     this.assertController();
     const row = this.row(id);
+    if (this.control(id) || ['settled', 'closed'].includes(this.store.getAttempt(id).phase))
+      return this.reconcile(id);
     if (row.phase === 'launched') return this.submit(id);
     if (row.phase !== 'admitted') return this.inspect(id);
     const attempt = this.store.getAttempt(id);
@@ -319,7 +330,7 @@ export class Runtime {
       });
       this.update(id, 'launched', { identity: launched.identity, launch: launched });
     });
-    return this.submit(id);
+    return this.control(id) ? this.reconcile(id) : this.submit(id);
   }
 
   private prompt(id: AttemptId): string {
@@ -371,6 +382,14 @@ export class Runtime {
       identity,
       text: prompt,
     });
+    if (submitted.kind === 'submitted')
+      this.store.transaction((db) =>
+        db
+          .prepare(
+            "UPDATE native_effects SET completed_at=? WHERE attempt_id=? AND effect_kind='prompt'",
+          )
+          .run(new Date().toISOString(), id),
+      );
     this.update(id, submitted.kind === 'submitted' ? 'active' : 'unconfirmed');
     if (submitted.kind !== 'submitted')
       this.store.settleAttempt({
@@ -430,8 +449,126 @@ export class Runtime {
     });
   }
 
+  private control(id: AttemptId) {
+    return this.store.read((db) => {
+      const rows = db
+        .prepare(
+          "SELECT operation FROM attempt_control_intents WHERE project_id=? AND attempt_id=? AND state IN ('requested','unconfirmed')",
+        )
+        .all(this.store.project.id, id);
+      return rows.length
+        ? {
+            interrupt: rows.some((row) =>
+              ['now', 'cancel', 'supersede'].includes(String(row.operation)),
+            ),
+          }
+        : null;
+    });
+  }
+
+  private effectSnapshot(id: AttemptId) {
+    return this.store.read((db) =>
+      JSON.stringify(
+        db
+          .prepare('SELECT id,completed_at FROM native_effects WHERE attempt_id=? ORDER BY id')
+          .all(id),
+      ),
+    );
+  }
+
   async reconcile(id: AttemptId) {
-    const observed = await this.inspect(id);
+    let effectSnapshot = this.effectSnapshot(id);
+    let observed = await this.inspect(id);
+    const control = this.control(id);
+    if (control && !['settled', 'closed'].includes(observed.attempt.phase)) {
+      const runtime = this.row(id);
+      if (control.interrupt && observed.native.kind === 'working') {
+        const prior = this.store.read((db) =>
+          db
+            .prepare(
+              "SELECT id,completed_at FROM native_effects WHERE attempt_id=? AND effect_kind='interrupt'",
+            )
+            .get(id),
+        );
+        if (!prior && runtime.identity_json) {
+          const submitted = await this.adapterFor(this.journal(id)).invoke('interrupt', {
+            identity: NativeIdentitySchema.parse(JSON.parse(runtime.identity_json)),
+          });
+          if (submitted.kind === 'submitted') {
+            this.store.transaction((db) =>
+              db
+                .prepare(
+                  "UPDATE native_effects SET completed_at=? WHERE attempt_id=? AND effect_kind='interrupt'",
+                )
+                .run(new Date().toISOString(), id),
+            );
+          } else return { ...observed, attempt: this.markUnconfirmed(id, submitted.reason) };
+          effectSnapshot = this.effectSnapshot(id);
+          observed = await this.inspect(id);
+        }
+      }
+      // A prompt claim can still be in flight. Idle observation cannot settle that race.
+      if (
+        runtime.phase === 'prompt-claimed' ||
+        this.store.read(
+          (db) =>
+            !!db
+              .prepare(
+                "SELECT id FROM native_effects WHERE attempt_id=? AND effect_kind='prompt' AND completed_at IS NULL",
+              )
+              .get(id),
+        )
+      )
+        return {
+          ...observed,
+          attempt: this.markUnconfirmed(id, 'Prompt submission may still be in flight'),
+        };
+      const uncertainInterrupt = this.store.read(
+        (db) =>
+          !!db
+            .prepare(
+              "SELECT id FROM native_effects WHERE attempt_id=? AND effect_kind='interrupt' AND completed_at IS NULL",
+            )
+            .get(id),
+      );
+      if (uncertainInterrupt)
+        return {
+          ...observed,
+          attempt: this.markUnconfirmed(
+            id,
+            'Interrupt dispatch is unconfirmed; it will not be replayed',
+          ),
+        };
+      if (observed.native.kind === 'settled') {
+        const result = this.store
+          .listResults(observed.attempt.jobId)
+          .find((candidate) => candidate.attemptId === id);
+        const attempt = this.store.transaction(() => {
+          if (effectSnapshot !== this.effectSnapshot(id))
+            return this.markUnconfirmed(
+              id,
+              'Native dispatch changed during settlement observation',
+            );
+          return this.store.settleAttempt({
+            actor: this.actor,
+            attemptId: id,
+            observation: {
+              kind: 'settled',
+              outcome:
+                !control.interrupt && result
+                  ? result.verification.kind === 'failed'
+                    ? 'failed'
+                    : 'succeeded'
+                  : 'interrupted',
+              reason: 'Native settlement confirmed after durable workflow control',
+            },
+            idempotencyKey: `control-settlement/${id}`,
+          });
+        });
+        if (attempt.phase === 'settled') this.update(id, 'settled');
+        return { ...observed, attempt };
+      }
+    }
     if (['settled', 'closed'].includes(observed.attempt.phase)) return observed;
     if (observed.native.kind === 'working') {
       if (this.row(id).phase === 'prompt-claimed') this.update(id, 'active');
@@ -465,7 +602,7 @@ export class Runtime {
     return this.store.read((db) =>
       db
         .prepare(
-          "SELECT attempt_id FROM native_attempts WHERE project_id=? AND phase IN ('admitted','launch-claimed','launched','prompt-claimed','active')",
+          "SELECT n.attempt_id FROM native_attempts n JOIN attempts a ON a.id=n.attempt_id WHERE n.project_id=? AND a.phase NOT IN ('settled','closed') AND n.phase IN ('admitted','launch-claimed','launched','prompt-claimed','active','unconfirmed')",
         )
         .all(this.store.project.id)
         .map((row) => z.object({ attempt_id: AttemptIdSchema }).parse(row).attempt_id),
