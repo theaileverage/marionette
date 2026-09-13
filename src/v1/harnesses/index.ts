@@ -4,6 +4,7 @@ import { adapterReferenceSchema } from '../adapters.js';
 import { canonicalJson, payloadDigest } from '../database.js';
 import { profileSchema } from '../settings.js';
 import type { Store, SessionIdentity } from '../store.js';
+import { requireControlActor } from '../controllers/controller-store.js';
 
 const name = z.string().min(1);
 export const harnessManifestSchema = z
@@ -99,16 +100,7 @@ export class HarnessCatalog {
     private readonly clock: () => Date = () => new Date(),
   ) {}
   private authorize() {
-    const row = this.store.read((db) =>
-      db
-        .prepare(
-          'SELECT role,state FROM agent_sessions WHERE project_id=? AND id=? AND generation=?',
-        )
-        .get(this.store.project.id, this.actor.id, this.actor.generation),
-    );
-    const session = z.object({ role: z.string(), state: z.string() }).parse(row);
-    if (session.state !== 'active' || !['user', 'controller'].includes(session.role))
-      throw new Error('Harness management requires an active user or controller');
+    this.store.read((db) => requireControlActor(this.store, db, this.actor));
   }
   discover(manifest: z.infer<typeof harnessManifestSchema>, idempotencyKey: string) {
     const parsed = harnessManifestSchema.parse(manifest);

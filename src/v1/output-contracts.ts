@@ -263,6 +263,53 @@ type OperationOutputSchemaMap = { [Name in OperationName]: z.ZodTypeAny };
 
 /** One schema per operation. All schemas cover a successful raw `execute` value. */
 export const operationOutputSchemas = {
+  'project.link-list': z.array(z.record(z.unknown())),
+  'project.rollup-read': z.array(
+    publicObject({ sequence: RevisionSchema, projection: z.unknown() }),
+  ),
+  'project.budget-configure': publicObject({ revision: RevisionSchema }),
+  'project.link-propose': publicObject({ linkId: z.string().min(1) }),
+  'project.link-activate': publicObject({
+    linkId: z.string().min(1),
+    state: z.literal('active'),
+  }),
+  'project.authority-grant': publicObject({
+    revision: RevisionSchema,
+    state: z.literal('active'),
+  }),
+  'project.budget-allocate': publicObject({
+    revision: RevisionSchema,
+    budgetAttempts: z.number().int().nonnegative(),
+  }),
+  'project.command-enqueue': publicObject({ sequence: RevisionSchema }),
+  'project.command-relay': z.array(
+    publicObject({ kind: z.enum(['applied', 'rejected']), value: z.unknown() }),
+  ),
+  'project.event-enqueue': publicObject({ sequence: RevisionSchema }),
+  'project.event-relay': z.array(
+    publicObject({ kind: z.enum(['applied', 'rejected']), value: z.unknown() }),
+  ),
+  'project.link-pause': publicObject({
+    revision: RevisionSchema,
+    state: z.literal('paused'),
+    settlement: z.enum(['confirmed', 'unconfirmed']),
+  }),
+  'project.link-revoke': publicObject({
+    revision: RevisionSchema,
+    state: z.literal('revoked'),
+    settlement: z.enum(['confirmed', 'unconfirmed']),
+  }),
+  'project.workflow-allocation-settle': publicObject({
+    releasedAttempts: z.number().int().nonnegative(),
+    consumedAttempts: z.number().int().nonnegative(),
+    projectBudgetRevision: RevisionSchema,
+    sequence: RevisionSchema,
+  }),
+  'project.link-allocation-settle': publicObject({
+    revision: RevisionSchema,
+    releasedAttempts: z.number().int().nonnegative(),
+    consumedAttempts: z.number().int().nonnegative(),
+  }),
   'harness.list': publicObject({
     installations: z.array(z.record(z.unknown())),
     endpoints: z.array(z.record(z.unknown())),
@@ -297,9 +344,21 @@ export const operationOutputSchemas = {
     generation: z.number().int().positive(),
   }),
   'controller.reconcile': publicObject({ kind: z.string() }),
+  'controller.replace': publicObject({
+    id: z.string().min(1),
+    controllerId: z.string().min(1),
+    generation: z.number().int().positive(),
+    createdAt: TimestampSchema,
+  }),
+  'controller.effect-resolve': publicObject({
+    effectId: z.string().min(1),
+    state: z.literal('settled'),
+    settledAt: TimestampSchema,
+  }),
   'inbox.read': z.array(
     publicObject({ id: z.string(), state: z.string(), claim_revision: z.number() }),
   ),
+  'inbox.release': publicObject({ released: z.literal(true) }),
   'inbox.ack': publicObject({ cycleId: z.string(), receipt: z.unknown(), replayed: z.boolean() }),
   'workflow.bind': publicObject({ revision: RevisionSchema, value: z.record(z.string()) }),
   'service.install': z.union([
@@ -353,7 +412,10 @@ export const operationOutputSchemas = {
   'decision.list': z.array(z.record(z.unknown())),
   'decision.request': z.record(z.unknown()),
   'decision.resolve': z.record(z.unknown()),
-  'approval.list': publicObject({exact:z.array(z.record(z.unknown())),legacy:z.array(z.record(z.unknown()))}),
+  'approval.list': publicObject({
+    exact: z.array(z.record(z.unknown())),
+    legacy: z.array(z.record(z.unknown())),
+  }),
   'approval.request': z.record(z.unknown()),
   'approval.resolve': z.record(z.unknown()),
   'approval.reconcile': z.record(z.unknown()),

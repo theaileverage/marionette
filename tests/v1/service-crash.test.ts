@@ -80,10 +80,11 @@ test('actual SIGKILL service takeover recovers pre-submit claim and preserves su
   const source = `
  import {Store} from './src/v1/store.ts';
  import {runProjectService} from './src/v1/service/project-service.ts';
- import {currentProcessIdentity,localOwnerLiveness} from './src/v1/background.ts';
  const project=JSON.parse(process.argv[2]);const store=Store.open({databasePath:process.argv[3],project});
+ const processIdentity=JSON.stringify({pid:process.pid,startToken:'fixture-'+process.pid});
+ const livenessPort={async confirmAbsent(input){const pid=JSON.parse(input.processIdentity).pid;try{process.kill(pid,0);return false;}catch(error){return error?.code==='ESRCH';}}};
  const signal=new AbortController();process.once('SIGTERM',()=>signal.abort());let first=true;
- try { await runProjectService({store,processIdentity:await currentProcessIdentity(),livenessPort:localOwnerLiveness,signal:signal.signal,watchdogMs:100,async recover(){},async scan(owner){if(!first)return;first=false;if(process.argv[4]==='claim')store.transaction(db=>{for(const [key,state] of [['before-submit','claimed'],['after-submit','submitted']])db.prepare('UPDATE controller_inbox_items SET state=?,service_generation=?,controller_generation=1,claim_revision=1,attempt_count=1 WHERE event_id=(SELECT id FROM domain_events WHERE dedupe_key=?)').run(state,owner.generation,key);});process.stdout.write('READY\\n');}}); } finally {store.close();}
+ try { await runProjectService({store,processIdentity,livenessPort,signal:signal.signal,watchdogMs:100,async recover(){},async scan(owner){if(!first)return;first=false;if(process.argv[4]==='claim')store.transaction(db=>{for(const [key,state] of [['before-submit','claimed'],['after-submit','submitted']])db.prepare('UPDATE controller_inbox_items SET state=?,service_generation=?,controller_generation=1,claim_revision=1,attempt_count=1 WHERE event_id=(SELECT id FROM domain_events WHERE dedupe_key=?)').run(state,owner.generation,key);});process.stdout.write('READY\\n');}}); } finally {store.close();}
  `;
   await build({
     stdin: {

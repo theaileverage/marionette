@@ -311,6 +311,36 @@ function payload<T extends { operation: string }>(input: T): Omit<T, 'operation'
 export async function execute(client: Marionette, raw: Operation) {
   const input = operationSchema.parse(raw);
   switch (input.operation) {
+    case 'project.link-list':
+      return client.projectLinks();
+    case 'project.rollup-read':
+      return client.projectRollups(input.linkId);
+    case 'project.budget-configure':
+      return client.configureProjectBudget(payload(input));
+    case 'project.link-propose':
+      return client.proposeProjectLink(payload(input));
+    case 'project.link-activate':
+      return client.activateProjectLink(payload(input));
+    case 'project.authority-grant':
+      return client.updateProjectGrant(payload(input));
+    case 'project.budget-allocate':
+      return client.allocateProjectBudget(payload(input));
+    case 'project.command-enqueue':
+      return client.enqueueProjectCommand(payload(input));
+    case 'project.command-relay':
+      return client.relayProjectCommands(payload(input));
+    case 'project.event-enqueue':
+      return client.enqueueProjectEvent(payload(input));
+    case 'project.event-relay':
+      return client.relayProjectEvents(payload(input));
+    case 'project.link-pause':
+      return client.controlProjectLink({ ...payload(input), state: 'paused' });
+    case 'project.link-revoke':
+      return client.controlProjectLink({ ...payload(input), state: 'revoked' });
+    case 'project.workflow-allocation-settle':
+      return client.settleProjectWorkflowAllocation(payload(input));
+    case 'project.link-allocation-settle':
+      return client.settleProjectLinkAllocation(payload(input));
     case 'handoff.get':
       return client.handoff(input.id);
     case 'handoff.create':
@@ -347,8 +377,18 @@ export async function execute(client: Marionette, raw: Operation) {
       return client.controllerStatus();
     case 'controller.reconcile':
       return client.reconcileController(payload(input));
+    case 'controller.replace':
+      return client.replaceController(payload(input));
+    case 'controller.effect-resolve':
+      return client.resolveControllerEffect(payload(input));
     case 'inbox.read':
-      return client.readInbox(input.controllerId);
+      return client.readInbox(input.controllerId, {
+        ids: input.ids,
+        afterSequence: input.afterSequence,
+        limit: input.limit,
+      });
+    case 'inbox.release':
+      return client.releaseInbox(payload(input));
     case 'inbox.ack':
       return client.acknowledgeInbox(payload(input));
     case 'workflow.bind':

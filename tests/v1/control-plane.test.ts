@@ -13,6 +13,14 @@ import {
 import { ControllerStore } from '../../src/v1/controllers/controller-store.js';
 import { EventStore } from '../../src/v1/events/event-store.js';
 import { ControllerInbox } from '../../src/v1/inbox/controller-inbox.js';
+import { ControllerRuntime } from '../../src/v1/controllers/controller-runtime.js';
+import {
+  HerdrNativeAdapter,
+  type NativeIdentity,
+  type NativeJournal,
+} from '../../src/v1/native.js';
+import { operationSchema } from '../../src/v1/operations.js';
+import { HarnessCatalog } from '../../src/v1/harnesses/index.js';
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'cos-'));
   const project = ProjectBindingSchema.parse({
@@ -40,10 +48,32 @@ function fixture() {
   });
   const controllers = new ControllerStore(store);
   controllers.configure({ actor, profilePolicyId: 'default', expectedRevision: 0 });
+  const nativeIdentity: NativeIdentity = {
+    binding: {
+      hostId: project.hostId,
+      socketPath: '/fixture/controller.sock',
+      workspaceId: 'controller-workspace',
+      endpoint: {
+        device: 1,
+        inode: 2,
+        birthtimeMs: 3,
+        serverStartToken: 'fixture-generation',
+        protocol: 22,
+      },
+    },
+    tabId: 'controller-workspace:tab',
+    paneId: 'controller-workspace:pane',
+    terminalId: 'controller-terminal',
+    agentKind: 'herdr',
+    agentName: 'fixture-controller',
+    nativeSession: 'fixture-controller-session',
+    identityRevision: 1,
+    ownedTabId: 'controller-workspace:tab',
+  };
   const incarnation = controllers.ensure({
     actor,
     expectedRevision: 1,
-    adapter: { id: 'fixture', version: 1 },
+    adapter: { id: 'herdr', version: 1 },
     endpointGeneration: 'fixture-generation',
     stateDigest: 'digest',
   });
@@ -54,7 +84,11 @@ function fixture() {
     expectedRevision: 2,
     observation: {
       kind: 'active',
-      nativeIdentity: { kind: 'fixture', serverGeneration: 'fixture-generation', locator: 'exact' },
+      nativeIdentity: {
+        kind: 'herdr',
+        serverGeneration: 'fixture-generation',
+        locator: JSON.stringify(nativeIdentity),
+      },
     },
   });
   store.transaction((db) =>
@@ -77,7 +111,86 @@ function fixture() {
     incarnation,
     events: new EventStore(store),
     inbox: new ControllerInbox(store),
+    nativeIdentity,
   };
+}
+
+async function controllerPromptRoute(f: ReturnType<typeof fixture>) {
+  const catalog = new HarnessCatalog(f.store, f.actor, [
+    {
+      reference: { id: 'herdr', version: 1 },
+      probe: async () => [
+        {
+          id: 'controller-endpoint',
+          hostId: f.store.project.hostId,
+          locator: { binding: JSON.stringify(f.nativeIdentity.binding) },
+          nativeVersion: '1',
+          contract: { id: 'herdr', version: 1 },
+          generation: 'fixture-generation',
+          methods: ['launch', 'prompt'],
+          capabilities: ['inspect'],
+          models: ['exact'],
+          health: 'available' as const,
+        },
+      ],
+    },
+  ]);
+  catalog.discover(
+    { id: 'controller-herdr', provider: { id: 'herdr', version: 1 }, source: { kind: 'builtin' } },
+    'discover-controller',
+  );
+  await catalog.probe('controller-herdr');
+  catalog.enable({
+    installationId: 'controller-herdr',
+    expectedRevision: 1,
+    enabled: true,
+    idempotencyKey: 'enable-controller',
+  });
+  catalog.defineProfile({
+    profile: {
+      id: 'controller-profile',
+      endpointId: 'controller-endpoint',
+      adapter: { id: 'herdr', version: 1 },
+      native: {
+        name: 'controller',
+        kind: 'herdr',
+        model: 'exact',
+        args: ['--model', 'exact'],
+      },
+      workspaceAccess: 'inspect',
+      enabled: true,
+    },
+    expectedRevision: 0,
+    idempotencyKey: 'controller-profile',
+  });
+  catalog.bind({
+    policy: {
+      id: 'controller-policy',
+      profileIds: ['controller-profile'],
+      maxProbeAgeMs: 60_000,
+    },
+    expectedRevision: 0,
+    idempotencyKey: 'controller-policy',
+  });
+  const route = catalog.route(
+    {
+      role: 'controller',
+      methods: ['prompt'],
+      requiredCapabilities: ['inspect'],
+      workspaceAccess: 'inspect',
+      modelPreferences: ['exact'],
+    },
+    'controller-policy',
+    'controller-route',
+  );
+  f.store.transaction((db) =>
+    db
+      .prepare(
+        'UPDATE controller_incarnations SET route_decision_id=? WHERE controller_id=? AND generation=?',
+      )
+      .run(route.id, f.incarnation.controllerId, f.incarnation.generation),
+  );
+  return route;
 }
 test('events project atomically and processing receipt is distinct from submission', () => {
   const f = fixture();
@@ -130,7 +243,10 @@ test('events project atomically and processing receipt is distinct from submissi
       }).cycleId,
       first.cycleId,
     );
-    assert.equal(f.inbox.read(f.incarnation.controllerId)[0]?.state, 'acknowledged');
+    assert.equal(
+      f.inbox.read(f.incarnation.controllerId, { ids: [claim.id] })[0]?.state,
+      'acknowledged',
+    );
   } finally {
     f.store.close();
     rmSync(f.root, { recursive: true, force: true });
@@ -155,7 +271,10 @@ test('claim generations fence takeover and retries are finite', () => {
       f.inbox.release({ claim, reason: 'not invoked', retryAt: new Date(0).toISOString() });
       assert.throws(() => f.inbox.markSubmitted(claim));
     }
-    assert.equal(f.inbox.read(f.incarnation.controllerId)[0]?.state, 'dead-letter');
+    assert.equal(
+      f.inbox.read(f.incarnation.controllerId, { afterSequence: 0 })[0]?.state,
+      'dead-letter',
+    );
     assert.throws(() =>
       f.inbox.claim({
         controllerId: f.incarnation.controllerId,
@@ -196,7 +315,11 @@ test('controller recovery requires admitted endpoint and restores authenticated 
         expectedRevision: 4,
         observation: {
           kind: 'active',
-          nativeIdentity: { kind: 'fixture', serverGeneration: 'another-server', locator: 'exact' },
+          nativeIdentity: {
+            kind: 'herdr',
+            serverGeneration: 'another-server',
+            locator: JSON.stringify(f.nativeIdentity),
+          },
         },
       }),
     );
@@ -206,9 +329,9 @@ test('controller recovery requires admitted endpoint and restores authenticated 
       observation: {
         kind: 'active',
         nativeIdentity: {
-          kind: 'fixture',
+          kind: 'herdr',
           serverGeneration: 'fixture-generation',
-          locator: 'exact',
+          locator: JSON.stringify(f.nativeIdentity),
         },
       },
     });
@@ -295,6 +418,574 @@ test('controller policy revision fences decisions already claimed under old auth
       ),
     );
     assert.equal(invoked, false);
+  } finally {
+    f.store.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test('policy changes revoke old controller authority without claiming its native process stopped', () => {
+  const f = fixture();
+  try {
+    f.events.append({
+      kind: 'test.old-submitted',
+      aggregate: { kind: 'fixture', id: 'old-submitted', revision: 1 },
+      payload: {},
+      dedupeKey: 'old-submitted',
+    });
+    const [oldClaim] = f.inbox.claim({
+      controllerId: f.incarnation.controllerId,
+      controllerGeneration: f.incarnation.generation,
+      serviceGeneration: 'service-1',
+    });
+    assert.ok(oldClaim);
+    f.inbox.markSubmitted(oldClaim);
+    f.store.transaction((db) =>
+      db
+        .prepare(
+          "INSERT INTO controller_native_effects(id,project_id,controller_id,generation,effect_json,state,created_at,inbox_claims_json,receipt_json,settled_at) VALUES(?,?,?,?,?,'claimed',?,?,NULL,NULL)",
+        )
+        .run(
+          'ambiguous-old-effect',
+          f.store.project.id,
+          f.incarnation.controllerId,
+          f.incarnation.generation,
+          JSON.stringify({ kind: 'prompt' }),
+          new Date().toISOString(),
+          JSON.stringify([{ id: oldClaim.id, claimRevision: oldClaim.claimRevision }]),
+        ),
+    );
+    f.controllers.configure({
+      actor: f.actor,
+      profilePolicyId: 'replacement',
+      expectedRevision: 3,
+    });
+    assert.throws(() =>
+      f.store.authenticateSession({ ...f.incarnation.session, token: f.incarnation.token }),
+    );
+    const state = f.store.read((db) => ({
+      incarnation: db
+        .prepare('SELECT state FROM controller_incarnations WHERE controller_id=? AND generation=?')
+        .get(f.incarnation.controllerId, f.incarnation.generation),
+      session: db
+        .prepare('SELECT state FROM agent_sessions WHERE id=? AND generation=?')
+        .get(f.incarnation.session.id, f.incarnation.session.generation),
+      retirement: db.prepare('SELECT disposition FROM controller_incarnation_retirements').get(),
+      effect: db.prepare('SELECT state FROM controller_native_effects').get(),
+    }));
+    assert.equal(state.incarnation?.state, 'superseded');
+    assert.equal(state.session?.state, 'unconfirmed');
+    assert.equal(state.retirement?.disposition, 'unconfirmed');
+    assert.equal(state.effect?.state, 'claimed');
+    assert.equal(
+      f.inbox.read(f.incarnation.controllerId, { ids: [oldClaim.id] })[0]?.state,
+      'superseded',
+    );
+    const next = f.controllers.ensure({
+      actor: f.actor,
+      expectedRevision: 4,
+      adapter: { id: 'herdr', version: 1 },
+      endpointGeneration: 'next-endpoint',
+      stateDigest: 'next-digest',
+    });
+    assert.equal(next.generation, 2);
+    const nextIdentity = {
+      ...f.nativeIdentity,
+      binding: {
+        ...f.nativeIdentity.binding,
+        endpoint: { ...f.nativeIdentity.binding.endpoint, serverStartToken: 'next-endpoint' },
+      },
+      nativeSession: 'next-controller-session',
+    };
+    f.controllers.reconcile({
+      actor: f.actor,
+      controllerId: next.controllerId,
+      generation: next.generation,
+      expectedRevision: 5,
+      observation: {
+        kind: 'active',
+        nativeIdentity: {
+          kind: 'herdr',
+          serverGeneration: 'next-endpoint',
+          locator: JSON.stringify(nextIdentity),
+        },
+      },
+    });
+    f.events.append({
+      kind: 'test.new-authority',
+      aggregate: { kind: 'fixture', id: 'new-authority', revision: 1 },
+      payload: {},
+      dedupeKey: 'new-authority',
+    });
+    const nextClaims = f.inbox.claim({
+      controllerId: next.controllerId,
+      controllerGeneration: next.generation,
+      serviceGeneration: 'service-1',
+    });
+    assert.ok(nextClaims.some((claim) => claim.id !== oldClaim.id));
+    const resolution = f.controllers.resolveEffect({
+      actor: f.actor,
+      effectId: 'ambiguous-old-effect',
+      expectedAuthorityRevision: 2,
+      reason: 'Explicitly abandon the superseded controller prompt',
+    });
+    assert.equal(resolution.effectId, 'ambiguous-old-effect');
+    assert.equal(resolution.state, 'settled');
+    assert.match(resolution.settledAt, /^\d{4}-\d{2}-\d{2}T/);
+    assert.deepEqual(
+      f.controllers.resolveEffect({
+        actor: f.actor,
+        effectId: 'ambiguous-old-effect',
+        expectedAuthorityRevision: 2,
+        reason: 'A replay must preserve the first settlement evidence',
+      }),
+      resolution,
+    );
+  } finally {
+    f.store.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test('projector assigns priority and a service claim batch reserves background fairness', () => {
+  const f = fixture();
+  try {
+    for (const event of [
+      { kind: 'recovery.classified', id: 'background' },
+      { kind: 'test.normal', id: 'normal' },
+      { kind: 'approval.requested', id: 'urgent' },
+    ])
+      f.events.append({
+        kind: event.kind,
+        aggregate: { kind: 'fixture', id: event.id, revision: 1 },
+        payload: {},
+        dedupeKey: event.id,
+      });
+    const rows = f.inbox.read(f.incarnation.controllerId);
+    const priorities = new Map(rows.map((row) => [String(row.kind), Number(row.priority)]));
+    assert.equal(priorities.get('approval.requested'), 0);
+    assert.equal(priorities.get('test.normal'), 1);
+    assert.equal(priorities.get('recovery.classified'), 2);
+    const claims = f.inbox.claim({
+      controllerId: f.incarnation.controllerId,
+      controllerGeneration: f.incarnation.generation,
+      serviceGeneration: 'service-1',
+      limit: 2,
+    });
+    assert.deepEqual(
+      claims.map((claim) => rows.find((row) => row.id === claim.id)?.kind),
+      ['approval.requested', 'recovery.classified'],
+    );
+  } finally {
+    f.store.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test('current claims remain readable after more than 500 terminal inbox records', () => {
+  const f = fixture();
+  try {
+    const timestamp = new Date().toISOString();
+    f.store.transaction((db) => {
+      const event = db.prepare('INSERT INTO domain_events VALUES(?,?,?,?,?,?,?,?,?,?,?)');
+      const item = db.prepare(
+        "INSERT INTO controller_inbox_items(id,project_id,controller_id,event_id,dedupe_key,priority,not_before,state) VALUES(?,?,?,?,?,?,?,'superseded')",
+      );
+      for (let sequence = 1; sequence <= 501; sequence++) {
+        const id = `history-${sequence}`;
+        event.run(
+          id,
+          f.store.project.id,
+          sequence,
+          'test.history',
+          'fixture',
+          id,
+          1,
+          '{}',
+          '{}',
+          id,
+          timestamp,
+        );
+        item.run(
+          `item-${id}`,
+          f.store.project.id,
+          f.incarnation.controllerId,
+          id,
+          id,
+          1,
+          timestamp,
+        );
+      }
+    });
+    f.events.append({
+      kind: 'test.current',
+      aggregate: { kind: 'fixture', id: 'current', revision: 1 },
+      payload: { current: true },
+      dedupeKey: 'current',
+    });
+    const current = f.inbox.read(f.incarnation.controllerId);
+    assert.equal(current.length, 1);
+    assert.equal(current[0]?.kind, 'test.current');
+    assert.equal(
+      f.inbox.read(f.incarnation.controllerId, { ids: ['item-history-1'] })[0]?.kind,
+      'test.history',
+    );
+    assert.equal(f.inbox.read(f.incarnation.controllerId, { afterSequence: 500 }).length, 2);
+  } finally {
+    f.store.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test('failures before native claim retry finitely and dead-letter without a prompt effect', async () => {
+  const f = fixture();
+  try {
+    f.events.append({
+      kind: 'test.pre-invocation',
+      aggregate: { kind: 'fixture', id: 'pre-invocation', revision: 1 },
+      payload: {},
+      dedupeKey: 'pre-invocation',
+    });
+    class BeforeClaimFailure extends HerdrNativeAdapter {
+      override async prompt(): Promise<never> {
+        throw new Error('fixture failed before journal claim');
+      }
+    }
+    const runtime = new ControllerRuntime(
+      f.store,
+      join(f.root, 'binding.json'),
+      (journal) => new BeforeClaimFailure(journal),
+    );
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const [claim] = f.inbox.claim({
+        controllerId: f.incarnation.controllerId,
+        controllerGeneration: f.incarnation.generation,
+        serviceGeneration: 'service-1',
+      });
+      assert.ok(claim);
+      await assert.rejects(
+        runtime.submit({ actor: f.actor, claims: [claim], expectedRevision: 3 }),
+        /before journal claim/,
+      );
+      assert.equal(f.inbox.read(f.incarnation.controllerId)[0]?.state, 'claimed');
+      f.inbox.release({
+        claim,
+        reason: 'pre-invocation failure',
+        retryAt: new Date(0).toISOString(),
+      });
+    }
+    assert.equal(
+      f.inbox.read(f.incarnation.controllerId, { afterSequence: 0 })[0]?.state,
+      'dead-letter',
+    );
+    assert.equal(
+      f.store.read(
+        (db) => db.prepare('SELECT count(*) AS n FROM controller_native_effects').get()?.n,
+      ),
+      0,
+    );
+  } finally {
+    f.store.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test('prompt effect claim and submitted state are atomic; ambiguity cannot send a second prompt', async () => {
+  const f = fixture();
+  try {
+    await controllerPromptRoute(f);
+    f.events.append({
+      kind: 'test.prompt',
+      aggregate: { kind: 'fixture', id: 'prompt', revision: 1 },
+      payload: {},
+      dedupeKey: 'prompt-event',
+    });
+    const [claim] = f.inbox.claim({
+      controllerId: f.incarnation.controllerId,
+      controllerGeneration: f.incarnation.generation,
+      serviceGeneration: 'service-1',
+    });
+    assert.ok(claim);
+    let prompts = 0;
+    let atomic = false;
+    class AmbiguousPrompt extends HerdrNativeAdapter {
+      constructor(private readonly effects: NativeJournal) {
+        super(effects);
+      }
+      override async prompt(identity: NativeIdentity, text: string): Promise<never> {
+        const prepared = await this.effects.prepare({
+          kind: 'prompt',
+          paneId: identity.paneId,
+          textDigest: createHash('sha256').update(text).digest('hex'),
+        });
+        assert.equal(prepared.kind, 'prepared');
+        prompts++;
+        atomic = f.store.read((db) => {
+          const effect = db
+            .prepare('SELECT inbox_claims_json FROM controller_native_effects WHERE id=?')
+            .get(prepared.operationId);
+          const item = db
+            .prepare('SELECT state FROM controller_inbox_items WHERE id=?')
+            .get(claim.id);
+          return Boolean(effect?.inbox_claims_json) && item?.state === 'submitted';
+        });
+        throw new Error('fixture response lost after prompt invocation');
+      }
+    }
+    const runtime = new ControllerRuntime(
+      f.store,
+      join(f.root, 'binding.json'),
+      (journal) => new AmbiguousPrompt(journal),
+    );
+    await assert.rejects(
+      runtime.submit({ actor: f.actor, claims: [claim], expectedRevision: 3 }),
+      /response lost after prompt invocation/,
+    );
+    assert.equal(atomic, true);
+    await assert.rejects(
+      runtime.submit({ actor: f.actor, claims: [claim], expectedRevision: 3 }),
+      /requires reconciliation/,
+    );
+    assert.equal(prompts, 1);
+    f.store.transaction((db) => {
+      db.prepare(
+        "UPDATE service_instances SET state='unconfirmed',stopped_at=? WHERE generation='service-1'",
+      ).run(new Date().toISOString());
+      db.prepare("INSERT INTO service_instances VALUES(?,?,?,?,'ready',?,?,NULL)").run(
+        f.store.project.id,
+        f.store.project.hostId,
+        'service-2',
+        '{}',
+        new Date().toISOString(),
+        new Date().toISOString(),
+      );
+    });
+    assert.equal(f.inbox.recoverClaims('service-2'), 0);
+    assert.equal(f.inbox.read(f.incarnation.controllerId)[0]?.state, 'submitted');
+    f.inbox.commitDecision(
+      {
+        actor: f.incarnation.session,
+        claims: [claim],
+        decisionKey: 'prompt-decision',
+        decision: { kind: 'dismiss', reason: 'fixture processed' },
+      },
+      () => ({ processed: true }),
+    );
+    const effect = f.store.read((db) =>
+      db.prepare('SELECT state,receipt_json FROM controller_native_effects').get(),
+    );
+    assert.equal(effect?.state, 'settled');
+    assert.match(String(effect?.receipt_json), /decisionCycleId/);
+  } finally {
+    f.store.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test('explicit replacement requires exact idle observation and revokes the old token durably', async () => {
+  const f = fixture();
+  try {
+    await controllerPromptRoute(f);
+    f.events.append({
+      kind: 'test.before-replacement',
+      aggregate: { kind: 'fixture', id: 'before-replacement', revision: 1 },
+      payload: {},
+      dedupeKey: 'before-replacement',
+    });
+    const [oldClaim] = f.inbox.claim({
+      controllerId: f.incarnation.controllerId,
+      controllerGeneration: f.incarnation.generation,
+      serviceGeneration: 'service-1',
+    });
+    assert.ok(oldClaim);
+    class AmbiguousPrompt extends HerdrNativeAdapter {
+      constructor(private readonly effects: NativeJournal) {
+        super(effects);
+      }
+      override async prompt(identity: NativeIdentity, text: string): Promise<never> {
+        const prepared = await this.effects.prepare({
+          kind: 'prompt',
+          paneId: identity.paneId,
+          textDigest: createHash('sha256').update(text).digest('hex'),
+        });
+        assert.equal(prepared.kind, 'prepared');
+        throw new Error('fixture lost prompt response');
+      }
+    }
+    await assert.rejects(
+      new ControllerRuntime(
+        f.store,
+        join(f.root, 'binding.json'),
+        (journal) => new AmbiguousPrompt(journal),
+      ).submit({ actor: f.actor, claims: [oldClaim], expectedRevision: 3 }),
+      /lost prompt response/,
+    );
+    const oldEffect = f.store.read((db) =>
+      db.prepare("SELECT * FROM controller_native_effects WHERE state='claimed'").get(),
+    );
+    assert.ok(oldEffect);
+    class IdleController extends HerdrNativeAdapter {
+      override async observe(identity: NativeIdentity) {
+        return { kind: 'settled' as const, identity, slotReady: true as const };
+      }
+    }
+    const runtime = new ControllerRuntime(
+      f.store,
+      join(f.root, 'binding.json'),
+      (journal) => new IdleController(journal),
+    );
+    const request = {
+      controllerId: f.incarnation.controllerId,
+      generation: f.incarnation.generation,
+      expectedRevision: 3,
+      reason: 'Explicit fixture replacement',
+      idempotencyKey: 'replace-controller',
+    };
+    assert.equal((await runtime.replace({ ...request, actor: f.actor })).generation, 1);
+    assert.throws(() =>
+      f.store.authenticateSession({ ...f.incarnation.session, token: f.incarnation.token }),
+    );
+    assert.equal(
+      f.store.read(
+        (db) =>
+          db.prepare('SELECT disposition FROM controller_incarnation_retirements').get()
+            ?.disposition,
+      ),
+      'settled',
+    );
+    assert.equal(
+      f.store.read((db) => db.prepare('SELECT state FROM controller_native_effects').get()?.state),
+      'claimed',
+    );
+    assert.equal(
+      f.store.read(
+        (db) =>
+          db.prepare('SELECT state FROM controller_inbox_items WHERE id=?').get(oldClaim.id)?.state,
+      ),
+      'superseded',
+    );
+    const next = f.controllers.ensure({
+      actor: f.actor,
+      expectedRevision: 4,
+      adapter: { id: 'herdr', version: 1 },
+      endpointGeneration: 'replacement-endpoint',
+      stateDigest: 'replacement-digest',
+    });
+    const nextIdentity: NativeIdentity = {
+      ...f.nativeIdentity,
+      binding: {
+        ...f.nativeIdentity.binding,
+        endpoint: {
+          ...f.nativeIdentity.binding.endpoint,
+          serverStartToken: 'replacement-endpoint',
+        },
+      },
+      paneId: 'replacement-pane',
+    };
+    f.controllers.reconcile({
+      actor: f.actor,
+      controllerId: next.controllerId,
+      generation: next.generation,
+      expectedRevision: 5,
+      observation: {
+        kind: 'active',
+        nativeIdentity: {
+          kind: 'herdr',
+          serverGeneration: 'replacement-endpoint',
+          locator: JSON.stringify(nextIdentity),
+        },
+      },
+    });
+    f.events.append({
+      kind: 'test.after-replacement',
+      aggregate: { kind: 'fixture', id: 'after-replacement', revision: 1 },
+      payload: {},
+      dedupeKey: 'after-replacement',
+    });
+    const nextClaims = f.inbox.claim({
+      controllerId: next.controllerId,
+      controllerGeneration: next.generation,
+      serviceGeneration: 'service-1',
+    });
+    assert.ok(nextClaims.some((claim) => claim.id !== oldClaim.id));
+    const resolution = f.controllers.resolveEffect({
+      actor: f.actor,
+      effectId: String(oldEffect.id),
+      expectedAuthorityRevision: 2,
+      reason: 'Explicitly settle the replaced controller prompt',
+    });
+    assert.equal(resolution.effectId, oldEffect.id);
+    assert.equal(resolution.state, 'settled');
+    assert.doesNotThrow(() =>
+      operationSchema.parse({
+        operation: 'controller.replace',
+        ...request,
+      }),
+    );
+  } finally {
+    f.store.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test('confirmed controller launch settles only its launch effects with exact identity evidence', async () => {
+  const f = fixture();
+  try {
+    const route = await controllerPromptRoute(f);
+    f.controllers.reconcile({
+      actor: f.actor,
+      controllerId: f.incarnation.controllerId,
+      generation: f.incarnation.generation,
+      expectedRevision: 3,
+      observation: { kind: 'settled', reason: 'old fixture controller is idle' },
+    });
+    class SuccessfulLaunch extends HerdrNativeAdapter {
+      constructor(private readonly effects: NativeJournal) {
+        super(effects);
+      }
+      override async launch() {
+        const created = await this.effects.prepare({
+          kind: 'create-tab',
+          workspaceId: f.nativeIdentity.binding.workspaceId,
+        });
+        assert.equal(created.kind, 'prepared');
+        const started = await this.effects.prepare({
+          kind: 'start-agent',
+          paneId: f.nativeIdentity.paneId,
+          agentKind: f.nativeIdentity.agentKind,
+        });
+        assert.equal(started.kind, 'prepared');
+        return { kind: 'launched' as const, identity: f.nativeIdentity };
+      }
+    }
+    const runtime = new ControllerRuntime(
+      f.store,
+      join(f.root, 'binding.json'),
+      (journal) => new SuccessfulLaunch(journal),
+    );
+    const result = await runtime.ensure({
+      actor: f.actor,
+      expectedRevision: 4,
+      routeId: route.id,
+      idempotencyKey: 'successful-launch',
+      binding: f.nativeIdentity.binding,
+      request: {
+        cwd: f.root,
+        env: {},
+        agentKind: 'herdr',
+        agentName: 'controller',
+        args: ['--model', 'exact'],
+      },
+    });
+    assert.equal(result.result.kind, 'launched');
+    const effects = f.store.read((db) =>
+      db
+        .prepare('SELECT state,receipt_json FROM controller_native_effects ORDER BY created_at,id')
+        .all(),
+    );
+    assert.equal(effects.length, 2);
+    assert.ok(effects.every((effect) => effect.state === 'settled'));
+    assert.ok(effects.every((effect) => String(effect.receipt_json).includes('identity')));
   } finally {
     f.store.close();
     rmSync(f.root, { recursive: true, force: true });

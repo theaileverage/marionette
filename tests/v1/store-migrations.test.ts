@@ -104,6 +104,8 @@ if (!isMainThread) {
           [7, '007_harness_catalog_profiles'],
           [8, '008_workflow_control_plane'],
           [9, '009_decisions_approvals'],
+          [10, '010_project_hierarchy'],
+          [11, '011_controller_authority'],
         ],
       );
       first.close();
@@ -145,6 +147,129 @@ if (!isMainThread) {
         assert.equal(artifact?.path, '/durable/path');
         assert.equal(artifact?.byte_length, 7);
         assert.equal(artifact?.media_type, 'application/octet-stream');
+      } finally {
+        current.close();
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('v5 upgrade preserves workflows as inactive and performs no external-effect claims', () => {
+    const { directory, databasePath } = fixture();
+    try {
+      const previous = openDatabase({
+        path: databasePath,
+        projectId,
+        migrationSet: migrations.slice(0, 5),
+      });
+      const now = new Date().toISOString();
+      previous.exec('BEGIN');
+      try {
+        previous.prepare('INSERT INTO hosts VALUES (?,?)').run('host', now);
+        previous
+          .prepare('INSERT INTO projects VALUES (?,?,?,?,?)')
+          .run(projectId, 'host', directory, directory, now);
+        previous.prepare('INSERT INTO store_binding VALUES (1,?,?)').run(projectId, 'host');
+        previous
+          .prepare('INSERT INTO workspaces VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+          .run(
+            'main',
+            projectId,
+            'host',
+            'existing',
+            directory,
+            directory,
+            null,
+            'write',
+            '["**"]',
+            now,
+            null,
+          );
+        previous
+          .prepare('INSERT INTO workflow_packages VALUES (?,?,?,?,?,?)')
+          .run(projectId, 'digest', 'legacy', '1', '{}', now);
+        previous
+          .prepare('INSERT INTO workflow_runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+          .run(
+            'workflow',
+            projectId,
+            'digest',
+            null,
+            'job',
+            'step',
+            'running',
+            null,
+            'all',
+            1,
+            1,
+            1,
+            1,
+            2,
+            1,
+            1,
+            1000,
+            new Date(Date.now() + 60_000).toISOString(),
+            now,
+            now,
+          );
+        previous
+          .prepare('INSERT INTO job_requests VALUES (?,?,?,?,?)')
+          .run('request', projectId, '0'.repeat(64), '{}', now);
+        previous
+          .prepare('INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+          .run(
+            'job',
+            projectId,
+            'legacy',
+            'request',
+            'brief',
+            1,
+            'main',
+            'report',
+            'workflow',
+            'workflow',
+            'step',
+            'open',
+            now,
+            now,
+          );
+        previous
+          .prepare('INSERT INTO brief_revisions VALUES (?,?,?,?,?,?,?,?)')
+          .run('brief', projectId, 'job', 1, null, '{}', 'legacy', now);
+        previous
+          .prepare('INSERT INTO step_runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
+          .run(
+            'step',
+            projectId,
+            'workflow',
+            'job',
+            'implementation',
+            'implementation',
+            1,
+            'pending',
+            1,
+            1,
+            null,
+            now,
+            now,
+          );
+        previous.exec('COMMIT');
+      } catch (error) {
+        previous.exec('ROLLBACK');
+        throw error;
+      }
+      previous.close();
+
+      const current = openDatabase({ path: databasePath, projectId });
+      try {
+        assert.equal(current.prepare('SELECT activated FROM workflow_runs').get()?.activated, 0);
+        assert.equal(
+          current.prepare('SELECT count(*) AS n FROM workflow_schedule_intents').get()?.n,
+          0,
+        );
+        assert.equal(current.prepare('SELECT count(*) AS n FROM native_effects').get()?.n, 0);
+        assert.equal(current.prepare('SELECT count(*) AS n FROM service_instances').get()?.n, 0);
       } finally {
         current.close();
       }

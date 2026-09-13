@@ -60,14 +60,29 @@ export class ControllerRuntime {
               reason: 'controller authority changed before native effect',
             };
           const id = randomUUID();
-          db.prepare("INSERT INTO controller_native_effects VALUES(?,?,?,?,?,'claimed',?)").run(
+          db.prepare(
+            `INSERT INTO controller_native_effects(
+              id,project_id,controller_id,generation,effect_json,state,created_at,inbox_claims_json,
+              receipt_json,settled_at
+            ) VALUES(?,?,?,?,?,'claimed',?,?,NULL,NULL)`,
+          ).run(
             id,
             this.store.project.id,
             controllerId,
             generation,
             canonicalJson(effect),
             new Date().toISOString(),
+            claims
+              ? canonicalJson(
+                  claims.map((claim) => ({ id: claim.id, claimRevision: claim.claimRevision })),
+                )
+              : null,
           );
+          if (claims)
+            for (const claim of claims)
+              db.prepare("UPDATE controller_inbox_items SET state='submitted' WHERE id=?").run(
+                claim.id,
+              );
           return { kind: 'prepared' as const, operationId: id };
         }),
     };
@@ -176,18 +191,31 @@ export class ControllerRuntime {
         },
       });
       if (result.kind === 'launched')
-        controllers.reconcile({
-          actor: input.actor,
-          ...incarnation,
-          expectedRevision,
-          observation: {
-            kind: 'active',
-            nativeIdentity: {
-              kind: 'herdr',
-              serverGeneration: result.identity.binding.endpoint.serverStartToken,
-              locator: canonicalJson(result.identity),
+        this.store.transaction((db) => {
+          controllers.reconcile({
+            actor: input.actor,
+            ...incarnation,
+            expectedRevision,
+            observation: {
+              kind: 'active',
+              nativeIdentity: {
+                kind: 'herdr',
+                serverGeneration: result.identity.binding.endpoint.serverStartToken,
+                locator: canonicalJson(result.identity),
+              },
             },
-          },
+          });
+          db.prepare(
+            `UPDATE controller_native_effects
+             SET state='settled',receipt_json=?,settled_at=?
+             WHERE controller_id=? AND generation=? AND state='claimed' AND inbox_claims_json IS NULL
+             AND json_extract(effect_json,'$.kind') IN ('create-tab','start-agent')`,
+          ).run(
+            canonicalJson({ kind: 'launched', identity: result.identity }),
+            new Date().toISOString(),
+            incarnation.controllerId,
+            incarnation.generation,
+          );
         });
       else
         controllers.reconcile({
@@ -229,7 +257,6 @@ export class ControllerRuntime {
           throw new Error(
             'submitted controller turn requires reconciliation before another prompt',
           );
-        inbox.markSubmitted(claim);
       }
       const row = db
         .prepare(
@@ -254,7 +281,7 @@ export class ControllerRuntime {
     );
     return driver.prompt(
       identity,
-      `Run one bounded Chief of Staff decision cycle for inbox claims ${canonicalJson(input.claims)}. Read canonical inbox records. Commit structured decisions with durable receipts; prompt submission is not acknowledgement. State digest ${context.digest}: ${context.text}`,
+      `Run one bounded Chief of Staff decision cycle for inbox claims ${canonicalJson(input.claims)}. Read these canonical records with inbox.read and ids ${canonicalJson(input.claims.map((claim) => claim.id))}. Commit structured decisions with durable receipts; prompt submission is not acknowledgement. State digest ${context.digest}: ${context.text}`,
     );
   }
   async observe(input: {
@@ -288,5 +315,61 @@ export class ControllerRuntime {
         },
       });
     return result;
+  }
+  async replace(input: {
+    actor: SessionIdentity;
+    controllerId: string;
+    generation: number;
+    expectedRevision: number;
+    reason: string;
+    idempotencyKey: string;
+  }) {
+    const request = canonicalJson({
+      controllerId: input.controllerId,
+      generation: input.generation,
+      expectedRevision: input.expectedRevision,
+      reason: input.reason,
+    });
+    const replay = this.store.read((db) =>
+      db
+        .prepare(
+          'SELECT * FROM controller_incarnation_retirements WHERE project_id=? AND idempotency_key=?',
+        )
+        .get(this.store.project.id, input.idempotencyKey),
+    );
+    if (replay) {
+      if (replay.request_json !== request)
+        throw new Error('controller replacement idempotency conflict');
+      return {
+        id: String(replay.id),
+        controllerId: String(replay.controller_id),
+        generation: Number(replay.generation),
+        createdAt: String(replay.created_at),
+      };
+    }
+    const row = this.store.read((db) =>
+      db
+        .prepare(
+          'SELECT native_identity_json FROM controller_incarnations WHERE controller_id=? AND generation=?',
+        )
+        .get(input.controllerId, input.generation),
+    );
+    if (!row?.native_identity_json)
+      throw new Error('controller replacement requires an exact persisted native identity');
+    const encoded = String(row.native_identity_json);
+    const saved = z.object({ locator: z.string().min(1) }).parse(JSON.parse(encoded));
+    const identity = NativeIdentitySchema.parse(JSON.parse(saved.locator));
+    const observation = await this.driverFor(
+      this.journal(input.actor, input.controllerId, input.generation, input.expectedRevision),
+    ).observe(identity);
+    if (
+      observation.kind !== 'settled' ||
+      canonicalJson(observation.identity) !== canonicalJson(identity)
+    )
+      throw new Error('controller replacement requires exact native idle settlement');
+    return new ControllerStore(this.store).replace({
+      ...input,
+      nativeIdentity: encoded,
+    });
   }
 }

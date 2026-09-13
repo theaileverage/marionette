@@ -14,13 +14,47 @@ export type InboxClaim = {
 };
 export class ControllerInbox {
   constructor(readonly store: Store) {}
-  read(controllerId: string) {
+  read(
+    controllerId: string,
+    options: { ids?: readonly string[]; afterSequence?: number; limit?: number } = {},
+  ) {
+    const ids = z
+      .array(z.string().min(1))
+      .max(50)
+      .parse(options.ids ?? []);
+    const limit = z
+      .number()
+      .int()
+      .min(1)
+      .max(500)
+      .parse(options.limit ?? 500);
+    const afterSequence = z.number().int().nonnegative().optional().parse(options.afterSequence);
     return this.store.read((db) =>
-      db
-        .prepare(
-          'SELECT i.*,e.kind,e.payload_json,e.sequence FROM controller_inbox_items i JOIN domain_events e ON e.id=i.event_id WHERE i.project_id=? AND i.controller_id=? ORDER BY e.sequence LIMIT 500',
-        )
-        .all(this.store.project.id, controllerId),
+      ids.length
+        ? db
+            .prepare(
+              `SELECT i.*,e.kind,e.payload_json,e.sequence FROM controller_inbox_items i
+               JOIN domain_events e ON e.id=i.event_id
+               WHERE i.project_id=? AND i.controller_id=? AND i.id IN (${ids.map(() => '?').join(',')})
+               ORDER BY e.sequence LIMIT ?`,
+            )
+            .all(this.store.project.id, controllerId, ...ids, limit)
+        : afterSequence !== undefined
+          ? db
+              .prepare(
+                `SELECT i.*,e.kind,e.payload_json,e.sequence FROM controller_inbox_items i
+                 JOIN domain_events e ON e.id=i.event_id
+                 WHERE i.project_id=? AND i.controller_id=? AND e.sequence>? ORDER BY e.sequence LIMIT ?`,
+              )
+              .all(this.store.project.id, controllerId, afterSequence, limit)
+          : db
+              .prepare(
+                `SELECT i.*,e.kind,e.payload_json,e.sequence FROM controller_inbox_items i
+                 JOIN domain_events e ON e.id=i.event_id
+                 WHERE i.project_id=? AND i.controller_id=?
+                 AND i.state IN ('pending','claimed','submitted') ORDER BY e.sequence LIMIT ?`,
+              )
+              .all(this.store.project.id, controllerId, limit),
     );
   }
   claim(input: {
@@ -37,11 +71,43 @@ export class ControllerInbox {
       .parse(input.limit ?? 10);
     return this.store.transaction((db) => {
       this.fence(db, input);
-      const rows = db
+      const prioritized = db
         .prepare(
-          "SELECT id,claim_revision FROM controller_inbox_items WHERE project_id=? AND controller_id=? AND state='pending' AND not_before<=? ORDER BY priority,not_before,id LIMIT ?",
+          "SELECT id,claim_revision FROM controller_inbox_items WHERE project_id=? AND controller_id=? AND state='pending' AND not_before<=? AND priority<2 ORDER BY priority,not_before,id LIMIT ?",
         )
-        .all(this.store.project.id, input.controllerId, new Date().toISOString(), limit);
+        .all(
+          this.store.project.id,
+          input.controllerId,
+          new Date().toISOString(),
+          limit === 1 ? 1 : limit - 1,
+        );
+      const background =
+        limit > 1
+          ? db
+              .prepare(
+                "SELECT id,claim_revision FROM controller_inbox_items WHERE project_id=? AND controller_id=? AND state='pending' AND not_before<=? AND priority=2 ORDER BY not_before,id LIMIT 1",
+              )
+              .all(this.store.project.id, input.controllerId, new Date().toISOString())
+          : [];
+      const selected = [...prioritized, ...background];
+      const remaining = limit - selected.length;
+      const rows =
+        remaining > 0
+          ? [
+              ...selected,
+              ...db
+                .prepare(
+                  `SELECT id,claim_revision FROM controller_inbox_items WHERE project_id=? AND controller_id=? AND state='pending' AND not_before<=? AND id NOT IN (${selected.map(() => '?').join(',') || "''"}) ORDER BY priority,not_before,id LIMIT ?`,
+                )
+                .all(
+                  this.store.project.id,
+                  input.controllerId,
+                  new Date().toISOString(),
+                  ...selected.map((row) => String(row.id)),
+                  remaining,
+                ),
+            ]
+          : selected;
       return rows.map((row) => {
         db.prepare(
           "UPDATE controller_inbox_items SET state='claimed',claim_revision=claim_revision+1,service_generation=?,controller_generation=?,authority_revision=(SELECT authority_revision FROM controller_definitions WHERE id=controller_id),attempt_count=attempt_count+1 WHERE id=?",
@@ -78,15 +144,20 @@ export class ControllerInbox {
         "SELECT 1 FROM service_instances WHERE project_id=? AND host_id=? AND generation=? AND stopped_at IS NULL AND state IN ('ready','recovering')",
       )
       .get(this.store.project.id, this.store.project.hostId, input.serviceGeneration);
-    const controller = db
-      .prepare(
-        "SELECT 1 FROM controller_definitions c JOIN controller_incarnations i ON i.controller_id=c.id AND i.generation=c.current_generation WHERE c.project_id=? AND c.id=? AND c.current_generation=? AND i.state='active' AND c.state IN ('idle','working')",
-      )
-      .get(this.store.project.id, input.controllerId, input.controllerGeneration);
+    const controller = this.controllerCurrent(db, input);
     if (!service || !controller) throw new Error('stale service/controller generation');
   }
+  private controllerCurrent(
+    db: DatabaseSync,
+    input: { controllerId: string; controllerGeneration: number },
+  ) {
+    return db
+      .prepare(
+        "SELECT 1 FROM controller_definitions c JOIN controller_incarnations i ON i.controller_id=c.id AND i.generation=c.current_generation AND i.authority_revision=c.authority_revision WHERE c.project_id=? AND c.id=? AND c.current_generation=? AND i.state='active' AND c.state IN ('idle','working')",
+      )
+      .get(this.store.project.id, input.controllerId, input.controllerGeneration);
+  }
   requireClaim(db: DatabaseSync, claim: InboxClaim) {
-    this.fence(db, claim);
     const row = db
       .prepare(
         'SELECT * FROM controller_inbox_items WHERE project_id=? AND id=? AND controller_id=? AND controller_generation=? AND service_generation=? AND claim_revision=?',
@@ -99,6 +170,9 @@ export class ControllerInbox {
         claim.serviceGeneration,
         claim.claimRevision,
       );
+    if (row?.state === 'submitted') {
+      if (!this.controllerCurrent(db, claim)) throw new Error('stale controller generation');
+    } else this.fence(db, claim);
     const authority = db
       .prepare('SELECT authority_revision FROM controller_definitions WHERE id=? AND project_id=?')
       .get(claim.controllerId, this.store.project.id)?.authority_revision;
@@ -223,6 +297,20 @@ export class ControllerInbox {
           claim.id,
         );
       }
+      db.prepare(
+        `UPDATE controller_native_effects SET state='settled',receipt_json=?,settled_at=?
+         WHERE project_id=? AND controller_id=? AND generation=? AND state='claimed'
+         AND inbox_claims_json=?`,
+      ).run(
+        canonicalJson({ decisionCycleId: cycleId, disposition: input.disposition ?? 'processed' }),
+        new Date().toISOString(),
+        this.store.project.id,
+        first.controllerId,
+        first.controllerGeneration,
+        canonicalJson(
+          input.claims.map((claim) => ({ id: claim.id, claimRevision: claim.claimRevision })),
+        ),
+      );
       return { cycleId, receipt, replayed: false };
     });
   }

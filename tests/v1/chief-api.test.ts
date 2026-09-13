@@ -10,12 +10,13 @@ import { Marionette } from '../../src/v1/client.js';
 import { execute, operationSchema, type Operation } from '../../src/v1/operations.js';
 import { parseOperationOutput } from '../../src/v1/output-contracts.js';
 import { Store } from '../../src/v1/store.js';
-import { WorkspaceIdSchema, DigestSchema } from '../../src/v1/model.js';
+import { WorkspaceIdSchema, DigestSchema, WorkflowIdSchema } from '../../src/v1/model.js';
 import { ControllerStore } from '../../src/v1/controllers/controller-store.js';
 import { ControllerInbox } from '../../src/v1/inbox/controller-inbox.js';
 import { EventStore } from '../../src/v1/events/event-store.js';
 import { ServiceOwnership } from '../../src/v1/service/ownership.js';
 import { writeSessionContext } from '../../src/v1/context.js';
+import { loadPackage } from '../../src/v1/packages.js';
 const sourceRoot = process.cwd();
 const bundleCliPath = join(sourceRoot, '.v1-test', 'chief-api', 'cli.mjs');
 const bundleSdkPath = join(sourceRoot, '.v1-test', 'chief-api', 'index.mjs');
@@ -141,13 +142,39 @@ test('source CLI service preview and bounded service run share durable SDK state
       .instance.state,
     'stopped',
   );
-  await f.client.runService({ signal: AbortSignal.timeout(30), watchdogMs: 10 });
+  const unbound = f.workflow('unbound-service-route');
+  f.client.activateWorkflow({
+    workflowId: unbound.id,
+    expectedWorkflowRevision: unbound.revision,
+    expectedBriefRevision: unbound.briefRevision,
+    expectedControlRevision: unbound.controlRevision,
+    idempotencyKey: 'unbound-activate',
+  });
+  const controller = new AbortController();
+  const service = f.client.runService({ signal: controller.signal, watchdogMs: 10 });
+  const deadline = Date.now() + 2_000;
+  while (
+    !f.client.events().some((event) => {
+      if (event.kind !== 'service.blocked') return false;
+      return JSON.parse(String(event.payload_json)).reason.includes('No execution route is bound');
+    }) &&
+    Date.now() < deadline
+  )
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  controller.abort();
+  await service;
   assert.equal(
     f.store.read(
       (db) =>
         db.prepare('SELECT count(*) AS n FROM service_instances WHERE stopped_at IS NULL').get()?.n,
     ),
     0,
+  );
+  assert.ok(
+    f.client.events().some((event) => {
+      if (event.kind !== 'service.blocked') return false;
+      return JSON.parse(String(event.payload_json)).reason.includes('No execution route is bound');
+    }),
   );
 });
 test('source workflow facade controls, revisions, limits and transition parse real contracts', async (t) => {
@@ -242,6 +269,230 @@ test('approval and decision list facades parse actual stored-service return valu
   await checked(f.client, { operation: 'approval.list' });
   await checked(f.client, { operation: 'decision.list' });
   f.cli({ operation: 'approval.list' });
+});
+test('public project hierarchy operations link, relay and roll up across CLI and SDK', async (t) => {
+  const f = fixture(t);
+  const childRepository = join(f.root, 'child');
+  mkdirSync(childRepository);
+  assert.equal(spawnSync('git', ['init', '-q', childRepository]).status, 0);
+  const child = Marionette.init({ repositoryRoot: childRepository, stateHome: f.stateHome });
+  t.after(() => child.close());
+  child.registerWorkspace({
+    id: WorkspaceIdSchema.parse('main'),
+    kind: 'existing',
+    path: childRepository,
+    repositoryRoot: childRepository,
+    baseCommit: null,
+    access: 'write',
+    writes: ['**'],
+    idempotencyKey: 'child-workspace',
+  });
+  const childBindingPath = child.context().bindingPath;
+  await checked(f.client, {
+    operation: 'project.budget-configure',
+    capacity: 30,
+    expectedRevision: 0,
+    idempotencyKey: 'root-capacity',
+  });
+  const expiresAt = new Date(Date.now() + 60_000).toISOString();
+  const proposal = f.cli({
+    operation: 'project.link-propose',
+    childBindingPath,
+    grant: {
+      verbs: ['workflow.create', 'workflow.status'],
+      workspaceIds: [WorkspaceIdSchema.parse('main')],
+      expiresAt,
+    },
+    budgetAttempts: 20,
+    expectedBudgetRevision: 1,
+    idempotencyKey: 'link-proposal',
+  });
+  const linkId = z.object({ linkId: z.string() }).parse(proposal).linkId;
+  await checked(f.client, {
+    operation: 'project.link-activate',
+    childBindingPath,
+    linkId,
+    expectedAuthorityRevision: 1,
+    idempotencyKey: 'link-activate',
+  });
+  await checked(f.client, {
+    operation: 'project.authority-grant',
+    childBindingPath,
+    linkId,
+    expectedAuthorityRevision: 1,
+    grant: {
+      verbs: ['workflow.create', 'workflow.status', 'result.read'],
+      workspaceIds: [WorkspaceIdSchema.parse('main')],
+      expiresAt,
+    },
+    idempotencyKey: 'link-grant',
+  });
+  await checked(f.client, {
+    operation: 'project.budget-allocate',
+    childBindingPath,
+    linkId,
+    expectedBudgetRevision: 1,
+    expectedProjectBudgetRevision: 2,
+    budgetAttempts: 25,
+    idempotencyKey: 'link-budget',
+  });
+  const grandchildRepository = join(f.root, 'grandchild');
+  mkdirSync(grandchildRepository);
+  assert.equal(spawnSync('git', ['init', '-q', grandchildRepository]).status, 0);
+  const grandchild = Marionette.init({
+    repositoryRoot: grandchildRepository,
+    stateHome: f.stateHome,
+  });
+  t.after(() => grandchild.close());
+  grandchild.registerWorkspace({
+    id: WorkspaceIdSchema.parse('main'),
+    kind: 'existing',
+    path: grandchildRepository,
+    repositoryRoot: grandchildRepository,
+    baseCommit: null,
+    access: 'write',
+    writes: ['**'],
+    idempotencyKey: 'grandchild-workspace',
+  });
+  const grandchildBindingPath = grandchild.context().bindingPath;
+  const grandchildLink = z.object({ linkId: z.string() }).parse(
+    await checked(child, {
+      operation: 'project.link-propose',
+      childBindingPath: grandchildBindingPath,
+      grant: {
+        verbs: ['workflow.create'],
+        workspaceIds: [WorkspaceIdSchema.parse('main')],
+        expiresAt,
+      },
+      budgetAttempts: 5,
+      expectedBudgetRevision: 2,
+      idempotencyKey: 'grandchild-proposal',
+    }),
+  ).linkId;
+  await checked(child, {
+    operation: 'project.link-activate',
+    childBindingPath: grandchildBindingPath,
+    linkId: grandchildLink,
+    expectedAuthorityRevision: 1,
+    idempotencyKey: 'grandchild-activate',
+  });
+  const command = {
+    kind: 'workflow.create' as const,
+    stableKey: 'delegated',
+    package: loadPackage(join(sourceRoot, 'workflows/direct.json')),
+    request: {
+      text: 'Delegated fixture',
+      digest: DigestSchema.parse('1'.repeat(64)),
+      inputSnapshots: [],
+    },
+    brief: {
+      objective: 'Delegated fixture',
+      scope: ['**'],
+      ownership: ['**'],
+      constraints: [],
+      standingOrders: [],
+      inputSnapshots: [],
+    },
+    workspaceId: WorkspaceIdSchema.parse('main'),
+    delivery: 'report' as const,
+    boundary: 'all' as const,
+  };
+  await checked(f.client, {
+    operation: 'project.command-enqueue',
+    linkId,
+    expectedAuthorityRevision: 2,
+    expectedBudgetRevision: 2,
+    command,
+    idempotencyKey: 'child-workflow',
+  });
+  const commandAbort = new AbortController();
+  const commandService = f.client.runService({ signal: commandAbort.signal, watchdogMs: 10 });
+  const commandDeadline = Date.now() + 2_000;
+  while (!child.workflows().some((workflow) => workflow.rootJobId) && Date.now() < commandDeadline)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  commandAbort.abort();
+  await commandService;
+  const relayed = f.cli({
+    operation: 'project.command-relay',
+    childBindingPath,
+    linkId,
+  });
+  const receipt = z
+    .array(
+      z.object({
+        kind: z.enum(['applied', 'rejected']),
+        value: z.unknown(),
+        reason: z.string().optional(),
+      }),
+    )
+    .parse(relayed)[0];
+  assert.equal(receipt, undefined);
+  const workflowId = child.workflows().find((workflow) => workflow.rootJobId)?.id;
+  assert.ok(workflowId);
+  await checked(child, {
+    operation: 'project.event-enqueue',
+    linkId,
+    expectedAuthorityRevision: 2,
+    expectedBudgetRevision: 2,
+    event: { kind: 'workflow.status', workflowId: WorkflowIdSchema.parse(workflowId) },
+    idempotencyKey: 'child-status',
+  });
+  const eventAbort = new AbortController();
+  const eventService = child.runService({ signal: eventAbort.signal, watchdogMs: 10 });
+  const eventDeadline = Date.now() + 2_000;
+  while (f.client.projectRollups(linkId).length === 0 && Date.now() < eventDeadline)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  eventAbort.abort();
+  await eventService;
+  const alreadyRelayed = await checked(child, {
+    operation: 'project.event-relay',
+    parentBindingPath: f.context.bindingPath,
+    linkId,
+  });
+  assert.deepEqual(alreadyRelayed, []);
+  const rollups = f.cli({ operation: 'project.rollup-read', linkId });
+  assert.equal(
+    z.array(z.object({ sequence: z.number(), projection: z.unknown() })).parse(rollups).length,
+    1,
+  );
+  assert.equal(
+    z.array(z.unknown()).parse(await checked(f.client, { operation: 'project.link-list' })).length,
+    1,
+  );
+  const revoked = await checked(f.client, {
+    operation: 'project.link-revoke',
+    childBindingPath,
+    linkId,
+    expectedAuthorityRevision: 2,
+    idempotencyKey: 'root-revoke',
+  });
+  assert.equal(
+    z.object({ settlement: z.literal('unconfirmed') }).parse(revoked).settlement,
+    'unconfirmed',
+  );
+  const propagationAbort = new AbortController();
+  const propagationService = child.runService({
+    signal: propagationAbort.signal,
+    watchdogMs: 10,
+  });
+  const propagationDeadline = Date.now() + 2_000;
+  while (
+    z
+      .array(z.object({ id: z.string(), state: z.string() }))
+      .parse(await checked(child, { operation: 'project.link-list' }))
+      .some((link) => link.id === grandchildLink && link.state !== 'revoked') &&
+    Date.now() < propagationDeadline
+  )
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  propagationAbort.abort();
+  await propagationService;
+  assert.equal(
+    z
+      .array(z.object({ id: z.string(), state: z.string() }))
+      .parse(await checked(child, { operation: 'project.link-list' }))
+      .find((link) => link.id === grandchildLink)?.state,
+    'revoked',
+  );
 });
 test('controller context can acknowledge a closed decision exactly once through SDK', async (t) => {
   const f = fixture(t);

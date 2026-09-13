@@ -1,4 +1,6 @@
 import { decisionsApprovalsSql } from './009_decisions_approvals.js';
+import { projectHierarchySql } from './010_project_hierarchy.js';
+import { controllerAuthoritySql } from './011_controller_authority.js';
 import { workflowControlPlaneSql } from './008_workflow_control_plane.js';
 import { harnessCatalogProfilesSql } from './007_harness_catalog_profiles.js';
 import { serviceEventsControllerSql } from './006_service_events_controller.js';
@@ -24,4 +26,6 @@ export const migrations = [
   { version: 7, name: '007_harness_catalog_profiles', sql: harnessCatalogProfilesSql },
   { version: 8, name: '008_workflow_control_plane', sql: workflowControlPlaneSql },
   { version: 9, name: '009_decisions_approvals', sql: decisionsApprovalsSql },
+  { version: 10, name: '010_project_hierarchy', sql: projectHierarchySql },
+  { version: 11, name: '011_controller_authority', sql: controllerAuthoritySql },
 ] satisfies readonly Migration[];

@@ -10,6 +10,63 @@ type Metadata = {
   watcher?: boolean;
 };
 export const commandMetadata = {
+  'project.link-list': { summary: 'List explicit parent and child project links.', effect: 'read' },
+  'project.rollup-read': {
+    summary: 'Read immutable child status and result projections.',
+    effect: 'read',
+  },
+  'project.budget-configure': {
+    summary: 'Configure root project attempt capacity at an expected revision.',
+    effect: 'local-write',
+  },
+  'project.link-propose': {
+    summary: 'Propose a same-host child link with an explicit grant and allocation.',
+    effect: 'local-write',
+  },
+  'project.link-activate': {
+    summary: 'Activate both halves of an exact same-host project link.',
+    effect: 'local-write',
+  },
+  'project.authority-grant': {
+    summary: 'Replace a child authority grant at its expected revision.',
+    effect: 'local-write',
+  },
+  'project.budget-allocate': {
+    summary: 'Change a child attempt allocation at its expected revision.',
+    effect: 'local-write',
+  },
+  'project.command-enqueue': {
+    summary: 'Append an authenticated child command to the durable parent outbox.',
+    effect: 'local-write',
+  },
+  'project.command-relay': {
+    summary: 'Relay pending parent commands to the exact same-host child.',
+    effect: 'local-write',
+  },
+  'project.event-enqueue': {
+    summary: 'Append a closed child status or result event to its durable outbox.',
+    effect: 'local-write',
+  },
+  'project.event-relay': {
+    summary: 'Relay pending child events to the exact same-host parent.',
+    effect: 'local-write',
+  },
+  'project.link-pause': {
+    summary: 'Pause descendant admission and request bounded settlement.',
+    effect: 'local-write',
+  },
+  'project.link-revoke': {
+    summary: 'Revoke descendant admission and request bounded settlement.',
+    effect: 'local-write',
+  },
+  'project.workflow-allocation-settle': {
+    summary: 'Settle one terminal delegated workflow allocation in its child.',
+    effect: 'local-write',
+  },
+  'project.link-allocation-settle': {
+    summary: 'Apply a child allocation settlement to the parent budget.',
+    effect: 'local-write',
+  },
   'harness.list': {
     summary: 'List allow-listed installations and probed endpoints.',
     effect: 'read',
@@ -78,7 +135,19 @@ export const commandMetadata = {
     summary: 'Observe the exact controller native identity.',
     effect: 'native',
   },
+  'controller.replace': {
+    summary: 'Replace a controller after exact native idle settlement.',
+    effect: 'native',
+  },
+  'controller.effect-resolve': {
+    summary: 'Explicitly resolve one ambiguous controller native effect.',
+    effect: 'local-write',
+  },
   'inbox.read': { summary: 'Read canonical controller events and claims.', effect: 'read' },
+  'inbox.release': {
+    summary: 'Release a claim only with proof that no native submission occurred.',
+    effect: 'local-write',
+  },
   'inbox.ack': {
     summary: 'Commit a structured decision and its inbox acknowledgement atomically.',
     effect: 'local-write',

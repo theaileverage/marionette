@@ -181,9 +181,13 @@ export function requestTransition(
           !ids.some((id) =>
             db
               .prepare(
-                "SELECT 1 FROM result_acceptances WHERE result_id=? AND decision='rejected' AND json_array_length(issues_json)>0",
+                `SELECT 1 FROM result_acceptances ac
+                 JOIN results r ON r.id=ac.result_id
+                 JOIN attempts a ON a.id=r.attempt_id
+                 WHERE ac.result_id=? AND ac.decision='rejected'
+                   AND json_array_length(ac.issues_json)>0 AND a.step_run_id=?`,
               )
-              .get(id),
+              .get(id, step.id),
           )
         )
           throw new StoreError(
@@ -534,13 +538,43 @@ export function resumeWorkflow(store: Store, input: ResumeWorkflowInput, now: st
     if (parent) throw new StoreError('invalid-state', 'Ancestor is not running');
     if (w.deadlineAt <= now)
       throw new StoreError('limit-exhausted', 'Extend deadline before resume');
-    db.prepare(
-      "UPDATE workflow_runs SET phase='running',revision=revision+1,control_revision=control_revision+1,updated_at=? WHERE id=?",
-    ).run(now, w.id);
-    db.prepare(
-      "UPDATE step_runs SET phase='pending',input_workflow_revision=?,input_brief_revision=?,updated_at=? WHERE id=? AND phase IN ('active','pending','stale')",
-    ).run(w.revision + 1, w.briefRevision, now, w.currentStepRunId);
-    refreshSchedule(store, w.id, now);
+    const pause = db
+      .prepare(
+        `SELECT ci.id FROM control_intents ci JOIN control_workflows cw ON cw.control_intent_id=ci.id
+         WHERE cw.workflow_id=? AND ci.kind='pause' AND cw.expected_control_revision=?
+         ORDER BY ci.created_at DESC,ci.id DESC LIMIT 1`,
+      )
+      .get(w.id, w.controlRevision);
+    if (!pause)
+      throw new StoreError('invalid-state', 'Paused workflow has no matching control closure');
+    const resumable = db
+      .prepare(
+        `WITH RECURSIVE d(id) AS (
+           SELECT id FROM workflow_runs WHERE id=?
+           UNION ALL SELECT child.id FROM workflow_runs child JOIN d ON child.parent_workflow_id=d.id
+         )
+         SELECT wr.id,wr.revision,wr.brief_revision
+         FROM workflow_runs wr JOIN d ON d.id=wr.id
+         JOIN control_workflows cw ON cw.workflow_id=wr.id AND cw.control_intent_id=?
+         WHERE wr.phase='paused' AND wr.control_revision=cw.expected_control_revision
+         ORDER BY wr.created_at,wr.id`,
+      )
+      .all(w.id, pause.id)
+      .map((row) =>
+        z
+          .object({ id: WorkflowIdSchema, revision: z.number(), brief_revision: z.number() })
+          .parse(row),
+      );
+    for (const workflow of resumable) {
+      db.prepare(
+        "UPDATE workflow_runs SET phase='running',revision=revision+1,control_revision=control_revision+1,updated_at=? WHERE id=?",
+      ).run(now, workflow.id);
+      const current = store.getWorkflow(workflow.id);
+      db.prepare(
+        "UPDATE step_runs SET phase='pending',input_workflow_revision=?,input_brief_revision=?,updated_at=? WHERE id=? AND phase IN ('active','pending','stale')",
+      ).run(current.revision, current.briefRevision, now, current.currentStepRunId);
+      refreshSchedule(store, workflow.id, now);
+    }
     return w.id;
   });
   return store.getWorkflow(input.workflowId);
@@ -672,6 +706,7 @@ export function reviseBrief(store: Store, input: ReviseBriefInput, now: string) 
         const id = JobIdSchema.parse(row.id);
         if (id === job.id) continue;
         const previous = store.getJob(id);
+        const previousBrief = store.getBrief(id, previous.currentBriefRevision);
         const derived = BriefIdSchema.parse(fresh('brief'));
         db.prepare('INSERT INTO brief_revisions VALUES(?,?,?,?,?,?,?,?)').run(
           derived,
@@ -679,7 +714,7 @@ export function reviseBrief(store: Store, input: ReviseBriefInput, now: string) 
           id,
           previous.currentBriefRevision + 1,
           previous.currentBriefId,
-          canonicalJson(brief),
+          canonicalJson(previousBrief.content),
           input.changeReason,
           now,
         );

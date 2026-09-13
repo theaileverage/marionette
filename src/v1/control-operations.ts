@@ -14,7 +14,14 @@ import {
   roleRequirementSchema,
   routingPolicySchema,
 } from './harnesses/index.js';
+import {
+  projectCommandSchema,
+  projectEventRequestSchema,
+  projectGrantSchema,
+  projectPrincipalSchema,
+} from './projects/index.js';
 const key = z.string().min(1);
+const bindingPath = z.string().min(1);
 const mutation = { expectedRevision: z.number().int().nonnegative(), idempotencyKey: key };
 export const inboxClaimSchema = z
   .object({
@@ -28,11 +35,144 @@ export const inboxClaimSchema = z
 export const inboxDecisionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('workflow-transition'), request: TransitionRequestSchema }).strict(),
   z
+    .object({
+      kind: z.literal('subproject-command'),
+      linkId: key,
+      expectedAuthorityRevision: z.number().int().positive(),
+      expectedBudgetRevision: z.number().int().positive(),
+      command: projectCommandSchema,
+      idempotencyKey: key,
+    })
+    .strict(),
+  z
     .object({ kind: z.literal('request-human-decision'), request: HumanDecisionRequestSchema })
     .strict(),
   z.object({ kind: z.literal('acknowledge-only'), reason: key }).strict(),
 ]);
 export const controlOperations = [
+  z.object({ operation: z.literal('project.link-list') }).strict(),
+  z.object({ operation: z.literal('project.rollup-read'), linkId: key }).strict(),
+  z
+    .object({
+      operation: z.literal('project.budget-configure'),
+      capacity: z.number().int().nonnegative(),
+      ...mutation,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('project.link-propose'),
+      childBindingPath: bindingPath,
+      linkId: key.optional(),
+      grant: projectGrantSchema,
+      budgetAttempts: z.number().int().positive(),
+      expectedBudgetRevision: z.number().int().positive(),
+      principal: projectPrincipalSchema.optional(),
+      idempotencyKey: key,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('project.link-activate'),
+      childBindingPath: bindingPath,
+      linkId: key,
+      expectedAuthorityRevision: z.number().int().positive(),
+      idempotencyKey: key,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('project.authority-grant'),
+      childBindingPath: bindingPath,
+      linkId: key,
+      expectedAuthorityRevision: z.number().int().positive(),
+      grant: projectGrantSchema,
+      principal: projectPrincipalSchema.optional(),
+      idempotencyKey: key,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('project.budget-allocate'),
+      childBindingPath: bindingPath,
+      linkId: key,
+      expectedBudgetRevision: z.number().int().positive(),
+      expectedProjectBudgetRevision: z.number().int().positive(),
+      budgetAttempts: z.number().int().nonnegative(),
+      idempotencyKey: key,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('project.command-enqueue'),
+      linkId: key,
+      expectedAuthorityRevision: z.number().int().positive(),
+      expectedBudgetRevision: z.number().int().positive(),
+      command: projectCommandSchema,
+      idempotencyKey: key,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('project.command-relay'),
+      childBindingPath: bindingPath,
+      linkId: key,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('project.event-enqueue'),
+      linkId: key,
+      expectedAuthorityRevision: z.number().int().positive(),
+      expectedBudgetRevision: z.number().int().positive(),
+      event: projectEventRequestSchema,
+      idempotencyKey: key,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('project.event-relay'),
+      parentBindingPath: bindingPath,
+      linkId: key,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('project.link-pause'),
+      childBindingPath: bindingPath,
+      linkId: key,
+      expectedAuthorityRevision: z.number().int().positive(),
+      idempotencyKey: key,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('project.link-revoke'),
+      childBindingPath: bindingPath,
+      linkId: key,
+      expectedAuthorityRevision: z.number().int().positive(),
+      idempotencyKey: key,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('project.workflow-allocation-settle'),
+      workflowId: WorkflowIdSchema,
+      expectedBudgetRevision: z.number().int().positive(),
+      idempotencyKey: key,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('project.link-allocation-settle'),
+      childBindingPath: bindingPath,
+      linkId: key,
+      expectedAuthorityRevision: z.number().int().positive(),
+      expectedBudgetRevision: z.number().int().positive(),
+      expectedProjectBudgetRevision: z.number().int().positive(),
+      idempotencyKey: key,
+    })
+    .strict(),
   z
     .object({
       operation: z.literal('service.reconcile'),
@@ -81,7 +221,42 @@ export const controlOperations = [
       ...mutation,
     })
     .strict(),
-  z.object({ operation: z.literal('inbox.read'), controllerId: key }).strict(),
+  z
+    .object({
+      operation: z.literal('controller.replace'),
+      controllerId: key,
+      generation: z.number().int().positive(),
+      reason: key,
+      ...mutation,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('controller.effect-resolve'),
+      effectId: key,
+      expectedAuthorityRevision: z.number().int().positive(),
+      reason: key,
+      idempotencyKey: key,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('inbox.read'),
+      controllerId: key,
+      ids: z.array(key).max(50).optional(),
+      afterSequence: z.number().int().nonnegative().optional(),
+      limit: z.number().int().min(1).max(500).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('inbox.release'),
+      claim: inboxClaimSchema,
+      reason: key,
+      retryAt: z.string().datetime(),
+      confirmedNotSubmitted: z.literal(true),
+    })
+    .strict(),
   z
     .object({
       operation: z.literal('inbox.ack'),

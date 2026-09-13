@@ -15,6 +15,11 @@ const EventInput = z.object({
   dedupeKey: z.string().min(1),
 });
 export type AppendEventInput = z.input<typeof EventInput>;
+export function eventPriority(kind: string): 0 | 1 | 2 {
+  if (/^(approval\.|decision\.|service\.blocked|workflow\.(cancel|pause))/.test(kind)) return 0;
+  if (kind === 'recovery.classified') return 2;
+  return 1;
+}
 export class EventStore {
   constructor(readonly store: Store) {}
   append(input: AppendEventInput): string {
@@ -59,18 +64,34 @@ export class EventStore {
     });
   }
   project(): number {
-    return this.store.transaction((db) =>
-      Number(
-        db
-          .prepare(
-            `INSERT OR IGNORE INTO controller_inbox_items
-   (id,project_id,controller_id,event_id,dedupe_key,not_before,state)
-   SELECT lower(hex(randomblob(16))),e.project_id,c.id,e.id,e.id,e.created_at,'pending'
-   FROM domain_events e JOIN controller_definitions c ON c.project_id=e.project_id WHERE e.project_id=?`,
-          )
-          .run(this.store.project.id).changes,
-      ),
-    );
+    return this.store.transaction((db) => {
+      const events = db
+        .prepare(
+          `SELECT e.id,e.kind,e.created_at,c.id AS controller_id
+           FROM domain_events e JOIN controller_definitions c ON c.project_id=e.project_id
+           LEFT JOIN controller_inbox_items i ON i.controller_id=c.id AND i.event_id=e.id
+           WHERE e.project_id=? AND i.id IS NULL ORDER BY e.sequence`,
+        )
+        .all(this.store.project.id);
+      const insert = db.prepare(
+        `INSERT OR IGNORE INTO controller_inbox_items
+         (id,project_id,controller_id,event_id,dedupe_key,priority,not_before,state)
+         VALUES(lower(hex(randomblob(16))),?,?,?,?,?,?,'pending')`,
+      );
+      let changes = 0;
+      for (const event of events)
+        changes += Number(
+          insert.run(
+            this.store.project.id,
+            String(event.controller_id),
+            String(event.id),
+            String(event.id),
+            eventPriority(String(event.kind)),
+            String(event.created_at),
+          ).changes,
+        );
+      return changes;
+    });
   }
   list(after = 0, limit = 100) {
     z.number().int().nonnegative().parse(after);

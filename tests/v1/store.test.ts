@@ -434,7 +434,7 @@ test('retains evidence-only artifacts and rejects damage before first acceptance
   );
 });
 
-test('rejects new worker results after settlement but replays an already recorded result', (t) => {
+test('retains new worker results as stale after settlement and replays an earlier result', (t) => {
   const current = fixture(t);
   const attempt = admitRunningAttempt(current, {
     jobKey: 'settled-result',
@@ -463,9 +463,36 @@ test('rejects new worker results after settlement but replays an already recorde
   });
 
   assert.equal(current.store.recordResult(command).id, recorded.id);
+  assert.equal(
+    current.store.authenticateResultSession(
+      { id: current.worker.id, generation: current.worker.generation, token: 'worker-token' },
+      attempt.id,
+    ).state,
+    'settled',
+  );
+  const late = current.store.recordResult({
+    ...command,
+    content: { ...command.content, body: 'Retained after settlement.' },
+    idempotencyKey: 'record-after-settlement',
+  });
+  assert.notEqual(late.id, recorded.id);
+  assert.equal(
+    current.store.read(
+      (database) =>
+        database.prepare('SELECT state FROM result_validity WHERE result_id=?').get(late.id)?.state,
+    ),
+    'stale',
+  );
   assert.throws(
-    () => current.store.recordResult({ ...command, idempotencyKey: 'record-after-settlement' }),
-    hasCode('permission-denied'),
+    () =>
+      current.store.decideResult({
+        actor: current.controller,
+        resultId: late.id,
+        expectedBriefRevision: 1,
+        decision: { kind: 'accepted' },
+        idempotencyKey: 'accept-late-result',
+      }),
+    hasCode('result-stale'),
   );
 });
 

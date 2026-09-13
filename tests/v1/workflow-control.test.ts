@@ -13,7 +13,7 @@ import {
   ResultIdSchema,
   WorkflowPackageSnapshotSchema,
 } from '../../src/v1/model.js';
-import { dueSchedules } from '../../src/v1/workflows/scheduler.js';
+import { dueSchedules, requestExpiredDeadlines } from '../../src/v1/workflows/scheduler.js';
 
 function fixture(t: TestContext) {
   const dir = mkdtempSync(join(tmpdir(), 'workflow-control-'));
@@ -82,6 +82,7 @@ function fixture(t: TestContext) {
     transitions: [
       { kind: 'advance', from: 'one', to: 'two' },
       { kind: 'repeat', from: 'one', to: 'one' },
+      { kind: 'repeat', from: 'two', to: 'two' },
       { kind: 'block', from: 'one' },
       { kind: 'finish', from: 'one' },
     ],
@@ -312,6 +313,25 @@ test('accepted result advances atomically and admission debits durable budget on
     decision: { kind: 'accepted' },
     idempotencyKey: 'accept',
   });
+  const oldIssue = store.recordResult({
+    actor: worker,
+    attemptId: attempt.id,
+    content: { kind: 'report', body: 'Unselected issue result', artifactDigests: [] },
+    inputDigest: DigestSchema.parse('2'.repeat(64)),
+    workspaceDigest: DigestSchema.parse('2'.repeat(64)),
+    evidenceClaims: [],
+    evidence: [],
+    verification: { kind: 'not-requested' },
+    upstreamResultIds: [],
+    idempotencyKey: 'old-issue-result',
+  });
+  store.decideResult({
+    actor,
+    resultId: oldIssue.id,
+    expectedBriefRevision: 1,
+    decision: { kind: 'rejected', issues: ['Old unrelated issue'], retainedObservations: [] },
+    idempotencyKey: 'reject-old-issue',
+  });
   const request = {
     workflowId: w.id,
     sourceStepRunId: w.currentStepRunId,
@@ -331,10 +351,209 @@ test('accepted result advances atomically and admission debits durable budget on
     observation: { kind: 'settled', outcome: 'succeeded', reason: 'Fixture exit' },
     idempotencyKey: 'settle',
   });
+  const late = store.recordResult({
+    actor: worker,
+    attemptId: attempt.id,
+    content: { kind: 'report', body: 'Late retained observation', artifactDigests: [] },
+    inputDigest: DigestSchema.parse('1'.repeat(64)),
+    workspaceDigest: DigestSchema.parse('1'.repeat(64)),
+    evidenceClaims: [],
+    evidence: [],
+    verification: { kind: 'not-requested' },
+    upstreamResultIds: [],
+    idempotencyKey: 'late-result',
+  });
+  assert.equal(
+    store.read(
+      (db) => db.prepare('SELECT state FROM result_validity WHERE result_id=?').get(late.id)?.state,
+    ),
+    'stale',
+  );
+  assert.throws(
+    () =>
+      store.decideResult({
+        actor,
+        resultId: late.id,
+        expectedBriefRevision: 1,
+        decision: { kind: 'accepted' },
+        idempotencyKey: 'accept-late',
+      }),
+    /stale/,
+  );
   const advanced = store.requestTransition({ actor, request });
   assert.equal(advanced.createdStepRun?.stepName, 'two');
   assert.equal(dueSchedules(store).length, 1);
   assert.equal(store.requestTransition({ actor, request }).requestId, advanced.requestId);
+
+  const nextJobId = advanced.createdStepRun?.jobId;
+  assert.ok(nextJobId);
+  const nextWorker = store.registerSession({
+    id: AgentSessionIdSchema.parse('next-worker'),
+    generation: 1,
+    workspaceId,
+    role: 'worker',
+    executionRole: 'analysis',
+    tokenHash: 'd'.repeat(64),
+    parentWorkflowId: w.id,
+    attemptId: null,
+    nativeKind: null,
+    nativeServerGeneration: null,
+    nativeLocator: null,
+  });
+  const nextStep = advanced.createdStepRun;
+  assert.ok(nextStep);
+  const nextAttempt = store.admitAttempt({
+    actor,
+    jobId: nextJobId,
+    session: nextWorker,
+    resourceKey: 'next-step',
+    inputResultIds: [result.id],
+    expectedBriefRevision: 1,
+    workflow: {
+      kind: 'managed',
+      workflowId: w.id,
+      stepRunId: nextStep.id,
+      expectedWorkflowRevision: 3,
+      expectedControlRevision: 1,
+    },
+    idempotencyKey: 'admit-next',
+  }).attempt;
+  store.claimAttemptLaunch({
+    actor,
+    attemptId: nextAttempt.id,
+    expectedBriefRevision: 1,
+    expectedControlRevision: 1,
+    idempotencyKey: 'claim-next',
+  });
+  store.observeAttemptRunning({
+    actor,
+    attemptId: nextAttempt.id,
+    nativeKind: 'fixture',
+    nativeServerGeneration: 'one',
+    nativeLocator: 'next-worker',
+    idempotencyKey: 'running-next',
+  });
+  const nextResult = store.recordResult({
+    actor: nextWorker,
+    attemptId: nextAttempt.id,
+    content: { kind: 'report', body: 'Current step observation', artifactDigests: [] },
+    inputDigest: DigestSchema.parse('4'.repeat(64)),
+    workspaceDigest: DigestSchema.parse('4'.repeat(64)),
+    evidenceClaims: [],
+    evidence: [],
+    verification: { kind: 'not-requested' },
+    upstreamResultIds: [result.id],
+    idempotencyKey: 'next-result',
+  });
+  store.settleAttempt({
+    actor,
+    attemptId: nextAttempt.id,
+    observation: { kind: 'settled', outcome: 'succeeded', reason: 'Next fixture exit' },
+    idempotencyKey: 'settle-next',
+  });
+  assert.throws(
+    () =>
+      store.requestTransition({
+        actor,
+        request: {
+          workflowId: w.id,
+          sourceStepRunId: nextStep.id,
+          kind: 'repeat',
+          targetStep: 'two',
+          reason: 'Attempt unrelated repair',
+          evidenceResultIds: [nextResult.id, oldIssue.id],
+          expectedWorkflowRevision: 4,
+          expectedBriefRevision: 1,
+          expectedControlRevision: 1,
+          idempotencyKey: 'unrelated-repair',
+        },
+      }),
+    /rejected result with explicit issues/,
+  );
+  store.reviseBrief({
+    actor,
+    jobId: nextJobId,
+    expectedBriefRevision: 1,
+    brief: { ...store.getBrief(nextJobId, 1).content, objective: 'Step-specific objective' },
+    changeReason: 'Refine only the downstream step',
+    idempotencyKey: 'revise-downstream',
+  });
+  store.reviseBrief({
+    actor,
+    jobId: w.rootJobId,
+    expectedBriefRevision: 1,
+    brief: { ...store.getBrief(w.rootJobId, 1).content, objective: 'Revised root objective' },
+    changeReason: 'Upstream requirement changed',
+    idempotencyKey: 'revise-root-after-downstream',
+  });
+  assert.equal(store.getBrief(nextJobId, 3).content.objective, 'Step-specific objective');
+});
+
+test('resuming a pause closure resumes unchanged descendants but preserves newer child controls', (t) => {
+  const { store, actor, workflow: root, brief, workspaceId } = fixture(t);
+  const makeChild = (key: string) =>
+    store.createWorkflow({
+      actor,
+      stableKey: key,
+      package: root.package,
+      request: {
+        text: key,
+        digest: DigestSchema.parse(key === 'child-one' ? '1'.repeat(64) : '2'.repeat(64)),
+        inputSnapshots: [],
+      },
+      brief,
+      workspaceId,
+      delivery: 'report',
+      boundary: 'all',
+      idempotencyKey: key,
+    });
+  const childOne = makeChild('child-one');
+  const childTwo = makeChild('child-two');
+  store.transaction((db) => {
+    db.prepare('UPDATE workflow_runs SET parent_workflow_id=? WHERE id IN (?,?)').run(
+      root.id,
+      childOne.id,
+      childTwo.id,
+    );
+  });
+  for (const workflow of [root, childOne, childTwo])
+    store.activateWorkflow({
+      actor,
+      workflowId: workflow.id,
+      expectedWorkflowRevision: 1,
+      expectedBriefRevision: 1,
+      expectedControlRevision: 1,
+      idempotencyKey: `activate-${workflow.id}`,
+    });
+  store.controlWorkflow({
+    actor,
+    workflowId: root.id,
+    expectedWorkflowRevision: 1,
+    expectedControlRevision: 1,
+    operation: { kind: 'pause', mode: 'drain' },
+    idempotencyKey: 'pause-tree',
+  });
+  store.controlWorkflow({
+    actor,
+    workflowId: childTwo.id,
+    expectedWorkflowRevision: 2,
+    expectedControlRevision: 2,
+    operation: { kind: 'pause', mode: 'drain' },
+    idempotencyKey: 'newer-child-pause',
+  });
+  store.resumeWorkflow({
+    actor,
+    workflowId: root.id,
+    expectedWorkflowRevision: 2,
+    expectedBriefRevision: 1,
+    expectedControlRevision: 2,
+    decision: null,
+    idempotencyKey: 'resume-tree',
+  });
+  assert.equal(store.getWorkflow(root.id).phase, 'running');
+  assert.equal(store.getWorkflow(childOne.id).phase, 'running');
+  assert.equal(store.getWorkflow(childTwo.id).phase, 'paused');
+  assert.equal(dueSchedules(store).length, 2);
 });
 
 test('issue-bound repair cycles stop at finite repeat limit and retain receipts', (t) => {
@@ -437,6 +656,114 @@ test('issue-bound repair cycles stop at finite repeat limit and retain receipts'
     store.read((db) => db.prepare('SELECT count(*) n FROM workflow_repair_cycles').get()?.n),
     2,
   );
+});
+
+test('confirmed no-result timeout stops at the finite attempt limit and remains extendable', (t) => {
+  const { store, actor, workflow: template, brief, workspaceId } = fixture(t);
+  const w = store.createWorkflow({
+    actor,
+    stableKey: 'deadline-limited',
+    package: WorkflowPackageSnapshotSchema.parse({
+      ...template.package,
+      digest: '3'.repeat(64),
+      limits: { ...template.package.limits, maxAttempts: 1 },
+    }),
+    request: {
+      text: 'Deadline-limited work',
+      digest: DigestSchema.parse('3'.repeat(64)),
+      inputSnapshots: [],
+    },
+    brief,
+    workspaceId,
+    delivery: 'report',
+    boundary: 'all',
+    idempotencyKey: 'create-deadline-limited',
+  });
+  store.activateWorkflow({
+    actor,
+    workflowId: w.id,
+    expectedWorkflowRevision: 1,
+    expectedBriefRevision: 1,
+    expectedControlRevision: 1,
+    idempotencyKey: 'activate-deadline',
+  });
+  const worker = store.registerSession({
+    id: AgentSessionIdSchema.parse('deadline-worker'),
+    generation: 1,
+    workspaceId,
+    role: 'worker',
+    executionRole: 'analysis',
+    tokenHash: 'c'.repeat(64),
+    parentWorkflowId: w.id,
+    attemptId: null,
+    nativeKind: null,
+    nativeServerGeneration: null,
+    nativeLocator: null,
+  });
+  const attempt = store.admitAttempt({
+    actor,
+    jobId: w.rootJobId,
+    session: worker,
+    resourceKey: 'deadline-attempt',
+    inputResultIds: [],
+    expectedBriefRevision: 1,
+    workflow: {
+      kind: 'managed',
+      workflowId: w.id,
+      stepRunId: w.currentStepRunId,
+      expectedWorkflowRevision: 1,
+      expectedControlRevision: 1,
+    },
+    idempotencyKey: 'admit-deadline',
+  }).attempt;
+  store.claimAttemptLaunch({
+    actor,
+    attemptId: attempt.id,
+    expectedBriefRevision: 1,
+    expectedControlRevision: 1,
+    idempotencyKey: 'claim-deadline',
+  });
+  store.transaction((db) =>
+    db
+      .prepare("UPDATE workflow_attempt_deadlines SET deadline_at='2000-01-01T00:00:00.000Z'")
+      .run(),
+  );
+  assert.equal(requestExpiredDeadlines(store, new Date().toISOString()), 1);
+  store.settleAttempt({
+    actor,
+    attemptId: attempt.id,
+    observation: {
+      kind: 'settled',
+      outcome: 'interrupted',
+      reason: 'Deadline interrupt confirmed',
+    },
+    idempotencyKey: 'settle-deadline',
+  });
+  assert.equal(store.getStepRun(w.currentStepRunId).phase, 'pending');
+  assert.equal(store.getWorkflow(w.id).revision, 3);
+  assert.equal(dueSchedules(store).filter((schedule) => schedule.workflow_id === w.id).length, 0);
+  assert.equal(
+    store.read(
+      (db) =>
+        db
+          .prepare(
+            "SELECT count(*) AS n FROM domain_events WHERE aggregate_id=? AND kind='workflow.retry-blocked'",
+          )
+          .get(w.id)?.n,
+    ),
+    1,
+  );
+  const current = store.getWorkflow(w.id);
+  store.extendLimits({
+    actor,
+    workflowId: w.id,
+    expectedLimitsRevision: 1,
+    limits: { ...current.limits, maxAttempts: 2 },
+    deadlineAt: current.deadlineAt,
+    reason: 'Authorize one bounded retry',
+    idempotencyKey: 'extend-after-timeout',
+  });
+  assert.equal(dueSchedules(store).filter((schedule) => schedule.workflow_id === w.id).length, 1);
 });
 
 test('safe pause without exact native evidence remains unconfirmed after service scan', async (t) => {

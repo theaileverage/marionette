@@ -6,14 +6,18 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { ServiceLifecycle, type ServiceActionInput } from './service/lifecycle.js';
 import { serviceDefinition } from './service/installers/index.js';
-import { ServiceControls } from './service/controls.js';
-import { runProjectService } from './service/project-service.js';
-import { RecoveryRegistry } from './service/recovery.js';
+import { runServiceRuntime } from './service/runtime.js';
+import {
+  ProjectHierarchy,
+  projectCommandSchema,
+  projectEventRequestSchema,
+  projectGrantSchema,
+  projectPrincipalSchema,
+} from './projects/index.js';
 import { EventStore } from './events/event-store.js';
 import { ControllerStore } from './controllers/controller-store.js';
 import { ControllerRuntime } from './controllers/controller-runtime.js';
 import { ControllerInbox } from './inbox/controller-inbox.js';
-import { dueSchedules, requestExpiredDeadlines } from './workflows/scheduler.js';
 import { HarnessCatalog } from './harnesses/index.js';
 import { createHerdrProvider } from './harnesses/herdr.js';
 import { createHash } from 'node:crypto';
@@ -30,7 +34,6 @@ import {
   type ResolvedContext,
 } from './context.js';
 import {
-  ResultIdSchema,
   AttemptIdSchema,
   AgentSessionIdSchema,
   ProjectBindingSchema,
@@ -117,12 +120,23 @@ export class Marionette {
           nativeLocator: null,
         });
       }
-      this.#authenticate();
+      if (resolved.session?.attemptId)
+        this.#store.authenticateResultSession(
+          { ...this.#identity, token: this.#token },
+          AttemptIdSchema.parse(resolved.session.attemptId),
+        );
+      else this.#authenticate();
       this.#board = Board.create({ store: this.#store });
       this.#files = new ArtifactFiles(resolved.binding.stateDirectory);
       this.#settings = new Settings(this.#store, this.#identity);
       this.#sql = new SqlQueryService({ board: this.#board });
-      this.#runtime = new Runtime(this.#store, this.#identity, resolved);
+      this.#runtime = new Runtime(
+        this.#store,
+        this.#identity,
+        resolved,
+        undefined,
+        (workflowId, effect) => this.#withWorkflowAuthority(workflowId, effect),
+      );
     } catch (error) {
       this.#store.close();
       throw error;
@@ -202,6 +216,319 @@ export class Marionette {
       id: session.id,
       generation: session.generation,
     };
+  }
+
+  #withPeer<T>(bindingPath: string, operation: (peer: Marionette) => T): T {
+    const session = this.#authenticate();
+    if (session.role !== 'user') throw new Error('Cross-project operations require the local user');
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      MARIONETTE_STATE_HOME: dirname(dirname(this.#store.project.stateDirectory)),
+    };
+    delete env.MARIONETTE_CONTEXT;
+    const peer = Marionette.connect({ bindingPath, env });
+    try {
+      return operation(peer);
+    } finally {
+      peer.close();
+    }
+  }
+
+  #withWorkflowAuthority<T>(workflowId: WorkflowId | null, effect: () => T): T {
+    if (!workflowId) return effect();
+    const configured = this.#settings.get(
+      'hierarchy/ancestor-bindings',
+      z.array(z.string().min(1)),
+    );
+    const ancestors: Marionette[] = [];
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      MARIONETTE_STATE_HOME: dirname(dirname(this.#store.project.stateDirectory)),
+    };
+    delete env.MARIONETTE_CONTEXT;
+    try {
+      for (const bindingPath of configured?.value ?? [])
+        ancestors.push(Marionette.connect({ bindingPath, env }));
+      return this.projectHierarchy().withWorkflowAuthority(
+        workflowId,
+        ancestors.map((ancestor) => ancestor.projectHierarchy()),
+        effect,
+      );
+    } finally {
+      for (const ancestor of ancestors.reverse()) ancestor.close();
+    }
+  }
+
+  #withWorkflowControlAuthority<T>(
+    workflowId: WorkflowId | null,
+    input: { attemptId: AttemptId; controlIntentId: string },
+    effect: () => T,
+  ): T {
+    if (!workflowId) return effect();
+    const configured = this.#settings.get(
+      'hierarchy/ancestor-bindings',
+      z.array(z.string().min(1)),
+    );
+    const ancestors: Marionette[] = [];
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      MARIONETTE_STATE_HOME: dirname(dirname(this.#store.project.stateDirectory)),
+    };
+    delete env.MARIONETTE_CONTEXT;
+    try {
+      for (const bindingPath of configured?.value ?? [])
+        ancestors.push(Marionette.connect({ bindingPath, env }));
+      return this.projectHierarchy().withWorkflowControlAuthority(
+        workflowId,
+        ancestors.map((ancestor) => ancestor.projectHierarchy()),
+        input,
+        effect,
+      );
+    } finally {
+      for (const ancestor of ancestors.reverse()) ancestor.close();
+    }
+  }
+
+  #rememberPeerBinding(key: string, bindingPath: string, idempotencyKey: string) {
+    const schema = z.string().min(1);
+    const existing = this.#settings.get(key, schema);
+    if (existing?.value === bindingPath) return;
+    this.#settings.set({
+      key,
+      expectedRevision: existing?.revision ?? 0,
+      value: bindingPath,
+      schema,
+      idempotencyKey,
+    });
+  }
+
+  #pumpProjectHierarchy() {
+    const failures: unknown[] = [];
+    const links = this.projectLinks().map((raw) =>
+      z
+        .object({
+          id: z.string(),
+          side: z.enum(['parent', 'child']),
+          state: z.enum(['proposed', 'active', 'paused', 'revoked', 'unconfirmed']),
+          authority_revision: z.number().int().positive(),
+        })
+        .parse(raw),
+    );
+    const inbound = links.find((link) => link.side === 'child');
+    const propagated = new Set<string>();
+    if (inbound && (inbound.state === 'paused' || inbound.state === 'revoked')) {
+      for (const link of links) {
+        if (
+          link.side !== 'parent' ||
+          link.state === 'proposed' ||
+          link.state === 'revoked' ||
+          (inbound.state === 'paused' && link.state !== 'active')
+        )
+          continue;
+        try {
+          const child = this.#settings.get(`hierarchy/child-binding/${link.id}`, z.string().min(1));
+          if (!child) throw new Error(`No child binding is recorded for link ${link.id}`);
+          this.controlProjectLink({
+            childBindingPath: child.value,
+            linkId: link.id,
+            expectedAuthorityRevision: link.authority_revision,
+            state: inbound.state,
+            idempotencyKey: `hierarchy-propagate/${inbound.id}/${inbound.authority_revision}/${link.id}/${inbound.state}`,
+          });
+          propagated.add(link.id);
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+    }
+    for (const link of links) {
+      try {
+        if (link.state !== 'active' || propagated.has(link.id)) continue;
+        if (link.side === 'parent') {
+          const child = this.#settings.get(`hierarchy/child-binding/${link.id}`, z.string().min(1));
+          if (!child) throw new Error(`No child binding is recorded for active link ${link.id}`);
+          this.relayProjectCommands({ childBindingPath: child.value, linkId: link.id });
+        } else {
+          const ancestors = this.#settings.get(
+            'hierarchy/ancestor-bindings',
+            z.array(z.string().min(1)),
+          );
+          const parentBindingPath = ancestors?.value.at(-1);
+          if (!parentBindingPath)
+            throw new Error(`No parent binding is recorded for active link ${link.id}`);
+          this.relayProjectEvents({ parentBindingPath, linkId: link.id });
+        }
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length)
+      throw new AggregateError(failures, `${failures.length} project relay operation(s) failed`);
+  }
+
+  projectHierarchy() {
+    this.#authenticate();
+    return new ProjectHierarchy(this.#store, this.#identity);
+  }
+
+  configureProjectBudget(input: {
+    capacity: number;
+    expectedRevision: number;
+    idempotencyKey: string;
+  }) {
+    return this.projectHierarchy().configureBudget(input);
+  }
+
+  proposeProjectLink(input: {
+    childBindingPath: string;
+    linkId?: string;
+    grant: z.infer<typeof projectGrantSchema>;
+    budgetAttempts: number;
+    expectedBudgetRevision: number;
+    principal?: z.infer<typeof projectPrincipalSchema>;
+    idempotencyKey: string;
+  }) {
+    const { childBindingPath, ...proposal } = input;
+    return this.#withPeer(childBindingPath, (child) => {
+      const result = this.projectHierarchy().proposeLink(child.projectHierarchy(), proposal);
+      this.#rememberPeerBinding(
+        `hierarchy/child-binding/${result.linkId}`,
+        childBindingPath,
+        `${input.idempotencyKey}/child-binding`,
+      );
+      return result;
+    });
+  }
+
+  activateProjectLink(input: {
+    childBindingPath: string;
+    linkId: string;
+    expectedAuthorityRevision: number;
+    idempotencyKey: string;
+  }) {
+    const { childBindingPath, ...activation } = input;
+    return this.#withPeer(childBindingPath, (child) => {
+      const result = this.projectHierarchy().activateLink(child.projectHierarchy(), activation);
+      const parentAncestors =
+        this.#settings.get('hierarchy/ancestor-bindings', z.array(z.string().min(1)))?.value ?? [];
+      const value = [...parentAncestors, this.#resolved.bindingPath];
+      const existing = child.#settings.get(
+        'hierarchy/ancestor-bindings',
+        z.array(z.string().min(1)),
+      );
+      if (!existing || JSON.stringify(existing.value) !== JSON.stringify(value))
+        child.#settings.set({
+          key: 'hierarchy/ancestor-bindings',
+          expectedRevision: existing?.revision ?? 0,
+          value,
+          schema: z.array(z.string().min(1)),
+          idempotencyKey: `${input.idempotencyKey}/ancestor-bindings`,
+        });
+      return result;
+    });
+  }
+
+  updateProjectGrant(input: {
+    childBindingPath: string;
+    linkId: string;
+    expectedAuthorityRevision: number;
+    grant: z.infer<typeof projectGrantSchema>;
+    principal?: z.infer<typeof projectPrincipalSchema>;
+    idempotencyKey: string;
+  }) {
+    const { childBindingPath, ...grant } = input;
+    return this.#withPeer(childBindingPath, (child) =>
+      this.projectHierarchy().updateGrant(child.projectHierarchy(), grant),
+    );
+  }
+
+  allocateProjectBudget(input: {
+    childBindingPath: string;
+    linkId: string;
+    expectedBudgetRevision: number;
+    expectedProjectBudgetRevision: number;
+    budgetAttempts: number;
+    idempotencyKey: string;
+  }) {
+    const { childBindingPath, ...allocation } = input;
+    return this.#withPeer(childBindingPath, (child) =>
+      this.projectHierarchy().allocateBudget(child.projectHierarchy(), allocation),
+    );
+  }
+
+  enqueueProjectCommand(input: {
+    linkId: string;
+    expectedAuthorityRevision: number;
+    expectedBudgetRevision: number;
+    command: z.infer<typeof projectCommandSchema>;
+    idempotencyKey: string;
+  }) {
+    return this.projectHierarchy().enqueue(input);
+  }
+
+  relayProjectCommands(input: { childBindingPath: string; linkId: string }) {
+    return this.#withPeer(input.childBindingPath, (child) =>
+      this.projectHierarchy().relay(child.projectHierarchy(), input.linkId),
+    );
+  }
+
+  enqueueProjectEvent(input: {
+    linkId: string;
+    expectedAuthorityRevision: number;
+    expectedBudgetRevision: number;
+    event: z.infer<typeof projectEventRequestSchema>;
+    idempotencyKey: string;
+  }) {
+    return this.projectHierarchy().enqueueEvent(input);
+  }
+
+  relayProjectEvents(input: { parentBindingPath: string; linkId: string }) {
+    return this.#withPeer(input.parentBindingPath, (parent) =>
+      this.projectHierarchy().relayEvents(parent.projectHierarchy(), input.linkId),
+    );
+  }
+
+  projectRollups(linkId: string) {
+    return this.projectHierarchy().rollups(linkId);
+  }
+
+  projectLinks() {
+    return this.projectHierarchy().list();
+  }
+
+  controlProjectLink(input: {
+    childBindingPath: string;
+    linkId: string;
+    expectedAuthorityRevision: number;
+    state: 'paused' | 'revoked';
+    idempotencyKey: string;
+  }) {
+    const { childBindingPath, ...control } = input;
+    return this.#withPeer(childBindingPath, (child) =>
+      this.projectHierarchy().setLinkState(child.projectHierarchy(), control),
+    );
+  }
+
+  settleProjectWorkflowAllocation(input: {
+    workflowId: WorkflowId;
+    expectedBudgetRevision: number;
+    idempotencyKey: string;
+  }) {
+    return this.projectHierarchy().settleWorkflowAllocation(input);
+  }
+
+  settleProjectLinkAllocation(input: {
+    childBindingPath: string;
+    linkId: string;
+    expectedAuthorityRevision: number;
+    expectedBudgetRevision: number;
+    expectedProjectBudgetRevision: number;
+    idempotencyKey: string;
+  }) {
+    const { childBindingPath, ...settlement } = input;
+    return this.#withPeer(childBindingPath, (child) =>
+      this.projectHierarchy().settleLinkAllocation(child.projectHierarchy(), settlement),
+    );
   }
 
   context() {
@@ -390,9 +717,49 @@ export class Marionette {
       actor: this.#identity,
     });
   }
-  readInbox(controllerId: string) {
+  async replaceController(input: {
+    controllerId: string;
+    generation: number;
+    expectedRevision: number;
+    reason: string;
+    idempotencyKey: string;
+  }) {
     this.#authenticate();
-    return new ControllerInbox(this.#store).read(controllerId);
+    return new ControllerRuntime(this.#store, this.#resolved.bindingPath).replace({
+      ...input,
+      actor: this.#identity,
+    });
+  }
+  resolveControllerEffect(input: {
+    effectId: string;
+    expectedAuthorityRevision: number;
+    reason: string;
+    idempotencyKey: string;
+  }) {
+    this.#authenticate();
+    return this.#store.idempotent(
+      'controller.effect-resolve',
+      input.idempotencyKey,
+      input,
+      z.object({
+        effectId: z.string(),
+        state: z.literal('settled'),
+        settledAt: z.string().datetime({ offset: true }),
+      }),
+      () => new ControllerStore(this.#store).resolveEffect({ ...input, actor: this.#identity }),
+    ).value;
+  }
+  readInbox(
+    controllerId: string,
+    options?: { ids?: readonly string[]; afterSequence?: number; limit?: number },
+  ) {
+    this.#authenticate();
+    return new ControllerInbox(this.#store).read(controllerId, options);
+  }
+  releaseInbox(input: Parameters<ControllerInbox['release']>[0]) {
+    this.#authenticate();
+    new ControllerInbox(this.#store).release(input);
+    return { released: true as const };
   }
   acknowledgeInbox(input: {
     claims: Parameters<ControllerInbox['commitDecision']>[0]['claims'];
@@ -417,6 +784,11 @@ export class Marionette {
             });
           case 'request-human-decision':
             return this.humanDecisions().request(decision.request);
+          case 'subproject-command': {
+            const { kind: _, ...command } = decision;
+            void _;
+            return this.enqueueProjectCommand(command);
+          }
           case 'acknowledge-only':
             return { kind: 'dismissed', reason: decision.reason };
         }
@@ -528,7 +900,12 @@ export class Marionette {
   }
 
   recordResult(input: Omit<RecordResultInput, 'actor'>) {
-    this.#authenticate();
+    if (this.#resolved.session?.attemptId)
+      this.#store.authenticateResultSession(
+        { ...this.#identity, token: this.#token },
+        input.attemptId,
+      );
+    else this.#authenticate();
     return this.#store.recordResult({ ...input, actor: this.#identity });
   }
 
@@ -640,134 +1017,18 @@ export class Marionette {
     return input.dryRun ? lifecycle.preview(input.action) : lifecycle.apply(input);
   }
   async runService(options: { signal: AbortSignal; watchdogMs?: number }) {
-    const session = this.#authenticate();
-    if (session.role !== 'user') throw new Error('Project service requires the local user context');
-    let watcher: Watcher | undefined;
-    const recovery = new RecoveryRegistry().register('native_attempts', async (record) => {
-      await this.#runtime.reconcile(AttemptIdSchema.parse(record.id));
+    return runServiceRuntime({
+      store: this.#store,
+      runtime: this.#runtime,
+      actor: this.#identity,
+      bindingPath: this.#resolved.bindingPath,
+      authenticate: () => this.#authenticate(),
+      pumpHierarchy: () => this.#pumpProjectHierarchy(),
+      withWorkflowControlAuthority: (workflowId, input, effect) =>
+        this.#withWorkflowControlAuthority(workflowId, input, effect),
+      signal: options.signal,
+      watchdogMs: options.watchdogMs,
     });
-    try {
-      await runProjectService({
-        store: this.#store,
-        processIdentity: await currentProcessIdentity(),
-        livenessPort: localOwnerLiveness,
-        signal: options.signal,
-        watchdogMs: options.watchdogMs,
-        recover: async (owner) => {
-          new ControllerInbox(this.#store).recoverClaims(owner.generation);
-          await recovery.recover(owner);
-          watcher = await Watcher.start({
-            store: this.#store,
-            deliveryPort: new NativeBoardDelivery(this.#store),
-            livenessPort: localOwnerLiveness,
-            processIdentity: owner.processIdentity,
-          });
-        },
-        scan: async (owner) => {
-          this.#authenticate();
-          this.#store.transaction((db) => {
-            owner.assertCurrent(db);
-            requestExpiredDeadlines(this.#store, new Date().toISOString());
-          });
-          const reportBlocked = (kind: string, id: string, error: Error) =>
-            new EventStore(this.#store).append({
-              kind: 'service.blocked',
-              aggregate: { kind, id, revision: 1 },
-              payload: { reason: error.message },
-              dedupeKey: `service-blocked/${kind}/${id}/${createHash('sha256').update(error.message).digest('hex')}`,
-            });
-          for (const schedule of dueSchedules(this.#store).slice(0, 20)) {
-            if (options.signal.aborted) break;
-            try {
-              const workflow = this.#store.getWorkflow(schedule.workflow_id);
-              const step = this.#store.getStepRun(schedule.step_run_id);
-              if (!step.jobId) continue;
-              const policy = workflow.package.steps.find((value) => value.name === step.stepName);
-              if (!policy) continue;
-              // Explicit role routing is configured per workflow step; missing bindings remain pending.
-              const configured = this.#settings.get(
-                `schedule/${workflow.id}/${step.stepName}`,
-                z.object({
-                  profile: z.string(),
-                  nativeWorkspaceId: z.string(),
-                  routeDecisionId: z.string(),
-                }),
-              );
-              if (!configured) continue;
-              const job = this.#store.getJob(step.jobId);
-              this.#store.transaction((db) => {
-                owner.assertCurrent(db);
-                this.#runtime.admit({
-                  ...configured.value,
-                  jobId: job.id,
-                  inputResultIds: this.#store.read((db) =>
-                    db
-                      .prepare(
-                        'SELECT result_id FROM step_run_inputs WHERE step_run_id=? AND result_id IS NOT NULL ORDER BY ordinal',
-                      )
-                      .all(schedule.step_run_id)
-                      .map((row) => ResultIdSchema.parse(row.result_id)),
-                  ),
-                  expectedBriefRevision: job.currentBriefRevision,
-                  idempotencyKey: `schedule/${schedule.id}`,
-                });
-              });
-            } catch (error) {
-              reportBlocked(
-                'schedule',
-                schedule.id,
-                error instanceof Error ? error : new Error(String(error)),
-              );
-            }
-          }
-          await new ServiceControls(owner, this.#identity).scan();
-          for (const id of this.#runtime.activeAttempts().slice(0, 20)) {
-            if (options.signal.aborted) break;
-            this.#store.read((db) => owner.assertCurrent(db));
-            try {
-              await this.#runtime.start(id);
-              await this.#runtime.reconcile(id);
-            } catch (error) {
-              reportBlocked(
-                'attempt',
-                id,
-                error instanceof Error ? error : new Error(String(error)),
-              );
-            }
-          }
-          if (!options.signal.aborted) await watcher?.pollOnce();
-          new EventStore(this.#store).project();
-          const controller = new ControllerStore(this.#store).status();
-          if (controller?.state === 'idle' && controller.current_generation) {
-            const inbox = new ControllerInbox(this.#store);
-            const outstanding = this.#store.read((db) =>
-              db
-                .prepare(
-                  "SELECT 1 FROM controller_inbox_items WHERE controller_id=? AND state IN ('claimed','submitted') LIMIT 1",
-                )
-                .get(String(controller.id)),
-            );
-            if (!outstanding) {
-              const claims = inbox.claim({
-                controllerId: String(controller.id),
-                controllerGeneration: Number(controller.current_generation),
-                serviceGeneration: owner.generation,
-                limit: 10,
-              });
-              if (claims.length)
-                await new ControllerRuntime(this.#store, this.#resolved.bindingPath).submit({
-                  actor: this.#identity,
-                  claims,
-                  expectedRevision: Number(controller.state_revision),
-                });
-            }
-          }
-        },
-      });
-      return { stopped: true };
-    } finally {
-      watcher?.stop();
-    }
   }
 
   async ensureWatcher() {
