@@ -10,6 +10,178 @@ type Metadata = {
   watcher?: boolean;
 };
 export const commandMetadata = {
+  'project.link-list': { summary: 'List explicit parent and child project links.', effect: 'read' },
+  'project.rollup-read': {
+    summary: 'Read immutable child status and result projections.',
+    effect: 'read',
+  },
+  'project.budget-configure': {
+    summary: 'Configure root project attempt capacity at an expected revision.',
+    effect: 'local-write',
+  },
+  'project.link-propose': {
+    summary: 'Propose a same-host child link with an explicit grant and allocation.',
+    effect: 'local-write',
+  },
+  'project.link-activate': {
+    summary: 'Activate both halves of an exact same-host project link.',
+    effect: 'local-write',
+  },
+  'project.authority-grant': {
+    summary: 'Replace a child authority grant at its expected revision.',
+    effect: 'local-write',
+  },
+  'project.budget-allocate': {
+    summary: 'Change a child attempt allocation at its expected revision.',
+    effect: 'local-write',
+  },
+  'project.command-enqueue': {
+    summary: 'Append an authenticated child command to the durable parent outbox.',
+    effect: 'local-write',
+  },
+  'project.command-relay': {
+    summary: 'Relay pending parent commands to the exact same-host child.',
+    effect: 'local-write',
+  },
+  'project.event-enqueue': {
+    summary: 'Append a closed child status or result event to its durable outbox.',
+    effect: 'local-write',
+  },
+  'project.event-relay': {
+    summary: 'Relay pending child events to the exact same-host parent.',
+    effect: 'local-write',
+  },
+  'project.link-pause': {
+    summary: 'Pause descendant admission and request bounded settlement.',
+    effect: 'local-write',
+  },
+  'project.link-revoke': {
+    summary: 'Revoke descendant admission and request bounded settlement.',
+    effect: 'local-write',
+  },
+  'project.workflow-allocation-settle': {
+    summary: 'Settle one terminal delegated workflow allocation in its child.',
+    effect: 'local-write',
+  },
+  'project.link-allocation-settle': {
+    summary: 'Apply a child allocation settlement to the parent budget.',
+    effect: 'local-write',
+  },
+  'harness.list': {
+    summary: 'List allow-listed installations and probed endpoints.',
+    effect: 'read',
+  },
+  'harness.discover': {
+    summary: 'Register the built-in Herdr provider without enabling execution.',
+    effect: 'local-write',
+    controller: true,
+  },
+  'harness.probe': {
+    summary: 'Probe an explicit Herdr endpoint read-only.',
+    effect: 'local-write',
+    controller: true,
+  },
+  'harness.enable': {
+    summary: 'Change installation authority at its expected revision.',
+    effect: 'local-write',
+    controller: true,
+  },
+  'profile.define': {
+    summary: 'Define a versioned concrete endpoint profile.',
+    effect: 'local-write',
+    controller: true,
+  },
+  'profile.bind': {
+    summary: 'Bind an ordered routing policy to concrete profiles.',
+    effect: 'local-write',
+    controller: true,
+  },
+  'profile.route-preview': {
+    summary: 'Persist an explained routing snapshot; admission rechecks eligibility.',
+    effect: 'local-write',
+    controller: true,
+  },
+  'service.install': {
+    summary: 'Install the user service definition without starting it.',
+    effect: 'native',
+  },
+  'service.start': { summary: 'Start the OS-supervised project service.', effect: 'native' },
+  'service.stop': {
+    summary: 'Stop OS supervision and drain the current service.',
+    effect: 'native',
+  },
+  'service.uninstall': {
+    summary: 'Stop and remove the exact installed service definition.',
+    effect: 'destructive',
+  },
+  'service.status': {
+    summary: 'Read service generation and installation definition.',
+    effect: 'read',
+  },
+  'event.list': { summary: 'Read the durable project event sequence.', effect: 'read' },
+  'controller.configure': {
+    summary: 'Configure the logical Chief of Staff at its expected revision.',
+    effect: 'local-write',
+  },
+  'controller.ensure': {
+    summary: 'Launch a controller using an explicitly selected harness route.',
+    effect: 'native',
+  },
+  'controller.status': {
+    summary: 'Read durable controller identity and lifecycle.',
+    effect: 'read',
+  },
+  'controller.reconcile': {
+    summary: 'Observe the exact controller native identity.',
+    effect: 'native',
+  },
+  'controller.replace': {
+    summary: 'Replace a controller after exact native idle settlement.',
+    effect: 'native',
+  },
+  'controller.effect-resolve': {
+    summary: 'Explicitly resolve one ambiguous controller native effect.',
+    effect: 'local-write',
+  },
+  'inbox.read': { summary: 'Read canonical controller events and claims.', effect: 'read' },
+  'inbox.release': {
+    summary: 'Release a claim only with proof that no native submission occurred.',
+    effect: 'local-write',
+  },
+  'inbox.ack': {
+    summary: 'Commit a structured decision and its inbox acknowledgement atomically.',
+    effect: 'local-write',
+  },
+  'workflow.bind': {
+    summary: 'Bind a workflow step to a selected harness route.',
+    effect: 'local-write',
+  },
+  'decision.list': { summary: 'List durable human decisions.', effect: 'read' },
+  'decision.request': {
+    summary: 'Request a bounded human choice at current workflow revisions.',
+    effect: 'local-write',
+  },
+  'decision.resolve': {
+    summary: 'Apply one current human choice exactly once.',
+    effect: 'local-write',
+  },
+  'approval.list': { summary: 'List exact native approval requests.', effect: 'read' },
+  'approval.request': {
+    summary: 'Record an exact native operation requiring approval.',
+    effect: 'local-write',
+  },
+  'approval.resolve': {
+    summary: 'Record approval action; unsupported forwarding remains manual-required.',
+    effect: 'local-write',
+  },
+  'approval.reconcile': {
+    summary: 'Reconcile exact approval identity and evidence.',
+    effect: 'local-write',
+  },
+  'service.reconcile': {
+    summary: 'Observe the exact OS service action before allowing further lifecycle changes.',
+    effect: 'local-write',
+  },
   context: {
     summary: 'Show the effective project and session without credentials.',
     effect: 'read',
@@ -67,10 +239,46 @@ export const commandMetadata = {
   'job.get': { summary: 'Read a job.', effect: 'read' },
   'job.brief': { summary: 'Read the current or selected brief revision.', effect: 'read' },
   'workflow.create': {
-    summary: 'Record a pinned workflow; automatic progression is unavailable.',
+    summary: 'Record a pinned workflow; scheduling requires explicit activation.',
     effect: 'local-write',
     controller: true,
   },
+  'workflow.activate': {
+    summary: 'Activate scheduling at exact current revisions.',
+    effect: 'local-write',
+    controller: true,
+  },
+  'workflow.transition': {
+    summary: 'Commit an evidence-gated workflow transition.',
+    effect: 'local-write',
+    controller: true,
+  },
+  'workflow.revise': {
+    summary: 'Revise a brief and invalidate affected downstream work.',
+    effect: 'local-write',
+    controller: true,
+  },
+  'workflow.pause': {
+    summary: 'Request pause and retain unsettled effects.',
+    effect: 'local-write',
+    controller: true,
+  },
+  'workflow.cancel': {
+    summary: 'Cancel future admission and track settlement.',
+    effect: 'local-write',
+    controller: true,
+  },
+  'workflow.resume': {
+    summary: 'Resume a confirmed paused workflow at current revisions.',
+    effect: 'local-write',
+    controller: true,
+  },
+  'workflow.extend-limits': {
+    summary: 'Record a revisioned workflow limit change.',
+    effect: 'local-write',
+    controller: true,
+  },
+  'workflow.status': { summary: 'Read workflow scheduling and control state.', effect: 'read' },
   'workflow.list': { summary: 'List workflow records.', effect: 'read' },
   'workflow.get': { summary: 'Read a workflow record.', effect: 'read' },
   route: { summary: 'Choose the applicable pinned workflow or direct route.', effect: 'read' },

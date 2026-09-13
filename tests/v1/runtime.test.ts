@@ -343,3 +343,87 @@ test('native idle releases execution only after a durable result exists', async 
   );
   assert.equal(reservation?.state, 'released');
 });
+
+test('catalog revocation between admission and start invokes no native adapter effects', async (t) => {
+  const { HarnessCatalog } = await import('../../src/v1/harnesses/index.js');
+  const { payloadDigest } = await import('../../src/v1/database.js');
+  const f = fixture(t);
+  const settings = new Settings(f.store, f.actor);
+  const binding = settings.get('native/w1', NativeBindingSchema)!.value;
+  const catalog = new HarnessCatalog(f.store, f.actor, [
+    {
+      reference: { id: 'herdr', version: 1 },
+      probe: async () => [
+        {
+          id: 'test-endpoint',
+          hostId: f.store.project.hostId,
+          locator: { binding: JSON.stringify(binding) },
+          nativeVersion: 'fixture',
+          contract: { id: 'herdr', version: 1 },
+          generation: payloadDigest(binding.endpoint),
+          methods: ['launch', 'prompt'],
+          capabilities: ['inspect'],
+          models: ['configured-model'],
+          health: 'available',
+        },
+      ],
+    },
+  ]);
+  catalog.discover(
+    { id: 'test-install', provider: { id: 'herdr', version: 1 }, source: { kind: 'builtin' } },
+    'route-discover',
+  );
+  await catalog.probe('test-install');
+  catalog.enable({
+    installationId: 'test-install',
+    expectedRevision: 1,
+    enabled: true,
+    idempotencyKey: 'route-enable',
+  });
+  catalog.defineProfile({
+    profile: {
+      id: 'test',
+      endpointId: 'test-endpoint',
+      adapter: { id: 'herdr', version: 1 },
+      native: settings.profile('test'),
+      workspaceAccess: 'inspect',
+      enabled: true,
+    },
+    expectedRevision: 0,
+    idempotencyKey: 'route-profile',
+  });
+  catalog.bind({
+    policy: { id: 'route-policy', profileIds: ['test'], maxProbeAgeMs: 30000 },
+    expectedRevision: 0,
+    idempotencyKey: 'route-policy',
+  });
+  const route = catalog.route(
+    {
+      role: 'test',
+      methods: ['launch'],
+      requiredCapabilities: ['inspect'],
+      workspaceAccess: 'inspect',
+      modelPreferences: ['configured-model'],
+    },
+    'route-policy',
+    'route',
+  );
+  const attempt = f.runtime.admit({ ...f.input, routeDecisionId: route.id });
+  assert.equal(
+    f.store.read(
+      (db) =>
+        db.prepare('SELECT route_id FROM harness_attempt_routes WHERE attempt_id=?').get(attempt)
+          ?.route_id,
+    ),
+    route.id,
+  );
+  catalog.enable({
+    installationId: 'test-install',
+    expectedRevision: 2,
+    enabled: false,
+    idempotencyKey: 'route-revoke',
+  });
+  await assert.rejects(f.runtime.start(attempt), /stale/);
+  assert.deepEqual(f.counts(), { launches: 0, prompts: 0 });
+  assert.equal(f.store.getAttempt(attempt).phase, 'pending');
+});

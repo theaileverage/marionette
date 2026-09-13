@@ -7,7 +7,11 @@
 - Pin workflow packages, entry steps, source resources, and explicit model profiles.
 - Journal native launch and prompt claims before external effects. Keep uncertain reservations and verify exact Herdr process identities during recovery.
 - Add bounded SQL reads, controlled board contributions, durable report content, and protected workspace retirement.
-- This alpha is under implementation. Workflow corrections and transitions remain gated, and the current Codex desktop does not expose a compatible notification endpoint.
+- Add durable project events, controller inbox claims and receipt-linked decisions, replaceable logical controller sessions, and exact native launch/prompt claims.
+- Add OS user-service definitions, fenced ownership, startup/watchdog recovery, and conservative service action reconciliation.
+- Implement workflow activation, evidence-gated transitions, finite repair, brief revisions, pause/cancel/resume, ancestor budgets, and deadlines.
+- Add allow-listed harness discovery, explicit endpoint/profile policies, human decisions, and exact native approval records with manual-required fallback.
+- Live-native and OS reboot acceptance remain separate from fixture evidence. The current Codex desktop does not expose a compatible notification endpoint.
 
 ## 0.5.3 — 2026-09-10
 

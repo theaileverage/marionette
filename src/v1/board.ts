@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { EventStore } from './events/event-store.js';
 import type { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
 import type { Store } from './store.js';
@@ -465,6 +466,12 @@ export class Board {
           JSON.stringify({ threadId, postId: id, sequence: next.sequence }),
         );
       }
+      new EventStore(this.#store).append({
+        kind: `board.${input.kind}`,
+        aggregate: { kind: 'board-post', id, revision: next.sequence },
+        payload: { threadId, postId: id, kind: input.kind },
+        dedupeKey: `board-post:${id}`,
+      });
       return {
         id,
         threadId,

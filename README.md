@@ -101,9 +101,39 @@ Register a Herdr connection and configure an execution profile before admitting 
 
 The runtime journals launch and prompt claims. A crash after a claim leaves the effect unconfirmed. It does not blindly launch another worker. A native idle observation releases a reservation only after the attempt has a durable result. Result acceptance remains a separate decision.
 
-The project watcher owns native launch and prompt execution. `attempt start` ensures that watcher is running and returns the current observation; inspect the attempt until its launch is confirmed. CLI callers do not race the watcher by launching directly. The CLI starts a local background watcher after relevant runtime and board operations. SDK callers can call `ensureWatcher()` explicitly. `marionette watch --stop-after 5000` runs a bounded foreground watcher. Uncertain delivery is retained for reconciliation rather than automatically repeated.
+The project service or legacy watcher owns native launch and prompt execution. `attempt start` ensures that watcher is running and returns the current observation; inspect the attempt until its launch is confirmed. CLI callers do not race the watcher by launching directly. The CLI starts a local background watcher after relevant runtime and board operations. SDK callers can call `ensureWatcher()` explicitly. When a project service is alive, this nudges it instead of starting another watcher. `marionette watch --stop-after 5000` runs a bounded foreground watcher. Uncertain delivery is retained for reconciliation rather than automatically repeated.
 
 Desktop notification support requires a reachable endpoint for the actual desktop-owned Codex app-server. The current local desktop uses private stdio, so delivery to it is unavailable. The board remains readable. A separately started app-server would not establish access to that desktop task.
+
+## Chief of Staff control plane
+
+`service install` writes an OS user-service definition; `service start` starts supervision.
+Both accept expected revisions and idempotency keys. Use `--dry-run` to inspect the definition.
+`service status` reports durable identity, and `service reconcile` observes an uncertain installation
+or OS action before another lifecycle mutation. `service run` is the foreground entry point and
+has no idle timeout. macOS supervision starts after login; Linux requires an available user manager.
+
+The logical controller uses `controller configure`, an explicitly selected harness route, and
+`controller ensure`. Harness discovery is allow-listed and disabled by default; probing does not
+grant execution authority. Exact model availability requires supplied operator evidence.
+Controller replacement and ambiguous native outcomes require reconciliation, never blind replay.
+
+Events and inbox claims are durable. `inbox ack` accepts a closed structured decision and commits
+its receipt with acknowledgement; successful prompt submission alone does not acknowledge work.
+Human choices use `decision request` / `decision resolve`. Native approvals retain exact operation
+identity and remain `manual-required` when a typed adapter action is unavailable.
+
+Same-host child projects keep separate bindings, databases, workflow state, and native effects.
+`project link-propose` / `project link-activate` establish explicit two-party authority;
+`project authority-grant` and `project budget-allocate` revise grants and attempt allocations.
+Commands and return events use authenticated, ordered outboxes and deduplicated receipts.
+A child result roll-up preserves evidence identity and does not imply integration or deployment.
+Cross-host links and reparenting existing portfolios are rejected.
+
+Use `marionette schema OPERATION` for the current nested request contract. The
+[implementation audit](documentation/v1/chief-of-staff/IMPLEMENTATION.md) distinguishes fixture,
+process-crash, packaged, and live-native evidence. Live Herdr restart, OS reboot, and soak acceptance
+remain separate from the unit and integration tests.
 
 ## Handoff and retirement
 
@@ -117,7 +147,7 @@ Integration completion requires a durable `text/x-diff` artifact whose changes a
 
 Bundled packages include `direct`, `feature`, `bug-fix`, `refactoring`, and `architect`. They pin workflow definitions, role configuration, and imported pstack skill resources by digest. Routing keeps routine requests direct. Package creation stores the chosen resources with the workflow.
 
-Automatic workflow progression, brief revision controls, pause/cancel/resume, and limit changes are not available in this alpha implementation yet. Creating a workflow record does not prove that its stages will execute automatically.
+Workflow transitions, issue-bound repair, brief revisions, pause/cancel/resume, and limit changes are implemented. Activate a workflow at its current revisions and explicitly bind its steps to selected harness routes before service scheduling. Transition requests still require current evidence and permitted package edges; creating a workflow record does not activate it. Controllers cannot increase their own budgets.
 
 ## Storage and verification
 

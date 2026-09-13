@@ -1,3 +1,25 @@
+import { inboxDecisionSchema } from './control-operations.js';
+import { HumanDecisions } from './decisions/human-decisions.js';
+import { NativeApprovals } from './decisions/native-approvals.js';
+import { NativeBindingSchema } from './native.js';
+import { homedir } from 'node:os';
+import { fileURLToPath } from 'node:url';
+import { ServiceLifecycle, type ServiceActionInput } from './service/lifecycle.js';
+import { serviceDefinition } from './service/installers/index.js';
+import { runServiceRuntime } from './service/runtime.js';
+import {
+  ProjectHierarchy,
+  projectCommandSchema,
+  projectEventRequestSchema,
+  projectGrantSchema,
+  projectPrincipalSchema,
+} from './projects/index.js';
+import { EventStore } from './events/event-store.js';
+import { ControllerStore } from './controllers/controller-store.js';
+import { ControllerRuntime } from './controllers/controller-runtime.js';
+import { ControllerInbox } from './inbox/controller-inbox.js';
+import { HarnessCatalog } from './harnesses/index.js';
+import { createHerdrProvider } from './harnesses/herdr.js';
 import { createHash } from 'node:crypto';
 import { realpathSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, isAbsolute } from 'node:path';
@@ -12,6 +34,7 @@ import {
   type ResolvedContext,
 } from './context.js';
 import {
+  AttemptIdSchema,
   AgentSessionIdSchema,
   ProjectBindingSchema,
   WorkspaceIdSchema,
@@ -97,12 +120,23 @@ export class Marionette {
           nativeLocator: null,
         });
       }
-      this.#authenticate();
+      if (resolved.session?.attemptId)
+        this.#store.authenticateResultSession(
+          { ...this.#identity, token: this.#token },
+          AttemptIdSchema.parse(resolved.session.attemptId),
+        );
+      else this.#authenticate();
       this.#board = Board.create({ store: this.#store });
       this.#files = new ArtifactFiles(resolved.binding.stateDirectory);
       this.#settings = new Settings(this.#store, this.#identity);
       this.#sql = new SqlQueryService({ board: this.#board });
-      this.#runtime = new Runtime(this.#store, this.#identity, resolved);
+      this.#runtime = new Runtime(
+        this.#store,
+        this.#identity,
+        resolved,
+        undefined,
+        (workflowId, effect) => this.#withWorkflowAuthority(workflowId, effect),
+      );
     } catch (error) {
       this.#store.close();
       throw error;
@@ -182,6 +216,319 @@ export class Marionette {
       id: session.id,
       generation: session.generation,
     };
+  }
+
+  #withPeer<T>(bindingPath: string, operation: (peer: Marionette) => T): T {
+    const session = this.#authenticate();
+    if (session.role !== 'user') throw new Error('Cross-project operations require the local user');
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      MARIONETTE_STATE_HOME: dirname(dirname(this.#store.project.stateDirectory)),
+    };
+    delete env.MARIONETTE_CONTEXT;
+    const peer = Marionette.connect({ bindingPath, env });
+    try {
+      return operation(peer);
+    } finally {
+      peer.close();
+    }
+  }
+
+  #withWorkflowAuthority<T>(workflowId: WorkflowId | null, effect: () => T): T {
+    if (!workflowId) return effect();
+    const configured = this.#settings.get(
+      'hierarchy/ancestor-bindings',
+      z.array(z.string().min(1)),
+    );
+    const ancestors: Marionette[] = [];
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      MARIONETTE_STATE_HOME: dirname(dirname(this.#store.project.stateDirectory)),
+    };
+    delete env.MARIONETTE_CONTEXT;
+    try {
+      for (const bindingPath of configured?.value ?? [])
+        ancestors.push(Marionette.connect({ bindingPath, env }));
+      return this.projectHierarchy().withWorkflowAuthority(
+        workflowId,
+        ancestors.map((ancestor) => ancestor.projectHierarchy()),
+        effect,
+      );
+    } finally {
+      for (const ancestor of ancestors.reverse()) ancestor.close();
+    }
+  }
+
+  #withWorkflowControlAuthority<T>(
+    workflowId: WorkflowId | null,
+    input: { attemptId: AttemptId; controlIntentId: string },
+    effect: () => T,
+  ): T {
+    if (!workflowId) return effect();
+    const configured = this.#settings.get(
+      'hierarchy/ancestor-bindings',
+      z.array(z.string().min(1)),
+    );
+    const ancestors: Marionette[] = [];
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      MARIONETTE_STATE_HOME: dirname(dirname(this.#store.project.stateDirectory)),
+    };
+    delete env.MARIONETTE_CONTEXT;
+    try {
+      for (const bindingPath of configured?.value ?? [])
+        ancestors.push(Marionette.connect({ bindingPath, env }));
+      return this.projectHierarchy().withWorkflowControlAuthority(
+        workflowId,
+        ancestors.map((ancestor) => ancestor.projectHierarchy()),
+        input,
+        effect,
+      );
+    } finally {
+      for (const ancestor of ancestors.reverse()) ancestor.close();
+    }
+  }
+
+  #rememberPeerBinding(key: string, bindingPath: string, idempotencyKey: string) {
+    const schema = z.string().min(1);
+    const existing = this.#settings.get(key, schema);
+    if (existing?.value === bindingPath) return;
+    this.#settings.set({
+      key,
+      expectedRevision: existing?.revision ?? 0,
+      value: bindingPath,
+      schema,
+      idempotencyKey,
+    });
+  }
+
+  #pumpProjectHierarchy() {
+    const failures: unknown[] = [];
+    const links = this.projectLinks().map((raw) =>
+      z
+        .object({
+          id: z.string(),
+          side: z.enum(['parent', 'child']),
+          state: z.enum(['proposed', 'active', 'paused', 'revoked', 'unconfirmed']),
+          authority_revision: z.number().int().positive(),
+        })
+        .parse(raw),
+    );
+    const inbound = links.find((link) => link.side === 'child');
+    const propagated = new Set<string>();
+    if (inbound && (inbound.state === 'paused' || inbound.state === 'revoked')) {
+      for (const link of links) {
+        if (
+          link.side !== 'parent' ||
+          link.state === 'proposed' ||
+          link.state === 'revoked' ||
+          (inbound.state === 'paused' && link.state !== 'active')
+        )
+          continue;
+        try {
+          const child = this.#settings.get(`hierarchy/child-binding/${link.id}`, z.string().min(1));
+          if (!child) throw new Error(`No child binding is recorded for link ${link.id}`);
+          this.controlProjectLink({
+            childBindingPath: child.value,
+            linkId: link.id,
+            expectedAuthorityRevision: link.authority_revision,
+            state: inbound.state,
+            idempotencyKey: `hierarchy-propagate/${inbound.id}/${inbound.authority_revision}/${link.id}/${inbound.state}`,
+          });
+          propagated.add(link.id);
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+    }
+    for (const link of links) {
+      try {
+        if (link.state !== 'active' || propagated.has(link.id)) continue;
+        if (link.side === 'parent') {
+          const child = this.#settings.get(`hierarchy/child-binding/${link.id}`, z.string().min(1));
+          if (!child) throw new Error(`No child binding is recorded for active link ${link.id}`);
+          this.relayProjectCommands({ childBindingPath: child.value, linkId: link.id });
+        } else {
+          const ancestors = this.#settings.get(
+            'hierarchy/ancestor-bindings',
+            z.array(z.string().min(1)),
+          );
+          const parentBindingPath = ancestors?.value.at(-1);
+          if (!parentBindingPath)
+            throw new Error(`No parent binding is recorded for active link ${link.id}`);
+          this.relayProjectEvents({ parentBindingPath, linkId: link.id });
+        }
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length)
+      throw new AggregateError(failures, `${failures.length} project relay operation(s) failed`);
+  }
+
+  projectHierarchy() {
+    this.#authenticate();
+    return new ProjectHierarchy(this.#store, this.#identity);
+  }
+
+  configureProjectBudget(input: {
+    capacity: number;
+    expectedRevision: number;
+    idempotencyKey: string;
+  }) {
+    return this.projectHierarchy().configureBudget(input);
+  }
+
+  proposeProjectLink(input: {
+    childBindingPath: string;
+    linkId?: string;
+    grant: z.infer<typeof projectGrantSchema>;
+    budgetAttempts: number;
+    expectedBudgetRevision: number;
+    principal?: z.infer<typeof projectPrincipalSchema>;
+    idempotencyKey: string;
+  }) {
+    const { childBindingPath, ...proposal } = input;
+    return this.#withPeer(childBindingPath, (child) => {
+      const result = this.projectHierarchy().proposeLink(child.projectHierarchy(), proposal);
+      this.#rememberPeerBinding(
+        `hierarchy/child-binding/${result.linkId}`,
+        childBindingPath,
+        `${input.idempotencyKey}/child-binding`,
+      );
+      return result;
+    });
+  }
+
+  activateProjectLink(input: {
+    childBindingPath: string;
+    linkId: string;
+    expectedAuthorityRevision: number;
+    idempotencyKey: string;
+  }) {
+    const { childBindingPath, ...activation } = input;
+    return this.#withPeer(childBindingPath, (child) => {
+      const result = this.projectHierarchy().activateLink(child.projectHierarchy(), activation);
+      const parentAncestors =
+        this.#settings.get('hierarchy/ancestor-bindings', z.array(z.string().min(1)))?.value ?? [];
+      const value = [...parentAncestors, this.#resolved.bindingPath];
+      const existing = child.#settings.get(
+        'hierarchy/ancestor-bindings',
+        z.array(z.string().min(1)),
+      );
+      if (!existing || JSON.stringify(existing.value) !== JSON.stringify(value))
+        child.#settings.set({
+          key: 'hierarchy/ancestor-bindings',
+          expectedRevision: existing?.revision ?? 0,
+          value,
+          schema: z.array(z.string().min(1)),
+          idempotencyKey: `${input.idempotencyKey}/ancestor-bindings`,
+        });
+      return result;
+    });
+  }
+
+  updateProjectGrant(input: {
+    childBindingPath: string;
+    linkId: string;
+    expectedAuthorityRevision: number;
+    grant: z.infer<typeof projectGrantSchema>;
+    principal?: z.infer<typeof projectPrincipalSchema>;
+    idempotencyKey: string;
+  }) {
+    const { childBindingPath, ...grant } = input;
+    return this.#withPeer(childBindingPath, (child) =>
+      this.projectHierarchy().updateGrant(child.projectHierarchy(), grant),
+    );
+  }
+
+  allocateProjectBudget(input: {
+    childBindingPath: string;
+    linkId: string;
+    expectedBudgetRevision: number;
+    expectedProjectBudgetRevision: number;
+    budgetAttempts: number;
+    idempotencyKey: string;
+  }) {
+    const { childBindingPath, ...allocation } = input;
+    return this.#withPeer(childBindingPath, (child) =>
+      this.projectHierarchy().allocateBudget(child.projectHierarchy(), allocation),
+    );
+  }
+
+  enqueueProjectCommand(input: {
+    linkId: string;
+    expectedAuthorityRevision: number;
+    expectedBudgetRevision: number;
+    command: z.infer<typeof projectCommandSchema>;
+    idempotencyKey: string;
+  }) {
+    return this.projectHierarchy().enqueue(input);
+  }
+
+  relayProjectCommands(input: { childBindingPath: string; linkId: string }) {
+    return this.#withPeer(input.childBindingPath, (child) =>
+      this.projectHierarchy().relay(child.projectHierarchy(), input.linkId),
+    );
+  }
+
+  enqueueProjectEvent(input: {
+    linkId: string;
+    expectedAuthorityRevision: number;
+    expectedBudgetRevision: number;
+    event: z.infer<typeof projectEventRequestSchema>;
+    idempotencyKey: string;
+  }) {
+    return this.projectHierarchy().enqueueEvent(input);
+  }
+
+  relayProjectEvents(input: { parentBindingPath: string; linkId: string }) {
+    return this.#withPeer(input.parentBindingPath, (parent) =>
+      this.projectHierarchy().relayEvents(parent.projectHierarchy(), input.linkId),
+    );
+  }
+
+  projectRollups(linkId: string) {
+    return this.projectHierarchy().rollups(linkId);
+  }
+
+  projectLinks() {
+    return this.projectHierarchy().list();
+  }
+
+  controlProjectLink(input: {
+    childBindingPath: string;
+    linkId: string;
+    expectedAuthorityRevision: number;
+    state: 'paused' | 'revoked';
+    idempotencyKey: string;
+  }) {
+    const { childBindingPath, ...control } = input;
+    return this.#withPeer(childBindingPath, (child) =>
+      this.projectHierarchy().setLinkState(child.projectHierarchy(), control),
+    );
+  }
+
+  settleProjectWorkflowAllocation(input: {
+    workflowId: WorkflowId;
+    expectedBudgetRevision: number;
+    idempotencyKey: string;
+  }) {
+    return this.projectHierarchy().settleWorkflowAllocation(input);
+  }
+
+  settleProjectLinkAllocation(input: {
+    childBindingPath: string;
+    linkId: string;
+    expectedAuthorityRevision: number;
+    expectedBudgetRevision: number;
+    expectedProjectBudgetRevision: number;
+    idempotencyKey: string;
+  }) {
+    const { childBindingPath, ...settlement } = input;
+    return this.#withPeer(childBindingPath, (child) =>
+      this.projectHierarchy().settleLinkAllocation(child.projectHierarchy(), settlement),
+    );
   }
 
   context() {
@@ -283,6 +630,238 @@ export class Marionette {
     });
   }
 
+  activateWorkflow(input: Omit<Parameters<Store['activateWorkflow']>[0], 'actor'>) {
+    this.#authenticate();
+    return this.#store.activateWorkflow({ ...input, actor: this.#identity });
+  }
+
+  transitionWorkflow(input: Omit<Parameters<Store['requestTransition']>[0], 'actor'>) {
+    this.#authenticate();
+    return this.#store.requestTransition({ ...input, actor: this.#identity });
+  }
+
+  reviseWorkflow(input: Omit<Parameters<Store['reviseBrief']>[0], 'actor'>) {
+    this.#authenticate();
+    return this.#store.reviseBrief({ ...input, actor: this.#identity });
+  }
+
+  controlWorkflow(input: Omit<Parameters<Store['controlWorkflow']>[0], 'actor'>) {
+    this.#authenticate();
+    return this.#store.controlWorkflow({ ...input, actor: this.#identity });
+  }
+
+  resumeWorkflow(input: Omit<Parameters<Store['resumeWorkflow']>[0], 'actor'>) {
+    this.#authenticate();
+    return this.#store.resumeWorkflow({ ...input, actor: this.#identity });
+  }
+
+  extendWorkflowLimits(input: Omit<Parameters<Store['extendLimits']>[0], 'actor'>) {
+    this.#authenticate();
+    return this.#store.extendLimits({ ...input, actor: this.#identity });
+  }
+
+  workflowStatus(id: WorkflowId) {
+    this.#authenticate();
+    return this.#store.workflowStatus(id);
+  }
+
+  events(after?: number, limit?: number) {
+    this.#authenticate();
+    return new EventStore(this.#store).list(after, limit);
+  }
+  controllerStatus() {
+    this.#authenticate();
+    return new ControllerStore(this.#store).status();
+  }
+  configureController(input: {
+    profilePolicyId: string;
+    expectedRevision: number;
+    idempotencyKey: string;
+  }) {
+    this.#authenticate();
+    return this.#store.idempotent(
+      'controller.configure',
+      input.idempotencyKey,
+      input,
+      z.record(z.unknown()).nullable(),
+      () => new ControllerStore(this.#store).configure({ ...input, actor: this.#identity }),
+    ).value;
+  }
+  ensureController(input: { routeId: string; expectedRevision: number; idempotencyKey: string }) {
+    this.#authenticate();
+    const route = this.harnessCatalog().validateRoute(input.routeId);
+    return new ControllerRuntime(this.#store, this.#resolved.bindingPath).ensure({
+      actor: this.#identity,
+      routeId: input.routeId,
+      expectedRevision: input.expectedRevision,
+      idempotencyKey: input.idempotencyKey,
+      binding: NativeBindingSchema.parse(JSON.parse(route.observation.locator.binding)),
+      request: {
+        cwd: this.#store.project.repositoryRoot,
+        agentKind: route.profile.native.kind,
+        agentName: `chief-${String(this.controllerStatus()?.id).replaceAll('-', '').slice(0, 20)}`,
+        args: route.profile.native.args,
+        env: {},
+      },
+    });
+  }
+  reconcileController(input: {
+    controllerId: string;
+    generation: number;
+    expectedRevision: number;
+    idempotencyKey: string;
+  }) {
+    this.#authenticate();
+    return new ControllerRuntime(this.#store, this.#resolved.bindingPath).observe({
+      ...input,
+      actor: this.#identity,
+    });
+  }
+  async replaceController(input: {
+    controllerId: string;
+    generation: number;
+    expectedRevision: number;
+    reason: string;
+    idempotencyKey: string;
+  }) {
+    this.#authenticate();
+    return new ControllerRuntime(this.#store, this.#resolved.bindingPath).replace({
+      ...input,
+      actor: this.#identity,
+    });
+  }
+  resolveControllerEffect(input: {
+    effectId: string;
+    expectedAuthorityRevision: number;
+    reason: string;
+    idempotencyKey: string;
+  }) {
+    this.#authenticate();
+    return this.#store.idempotent(
+      'controller.effect-resolve',
+      input.idempotencyKey,
+      input,
+      z.object({
+        effectId: z.string(),
+        state: z.literal('settled'),
+        settledAt: z.string().datetime({ offset: true }),
+      }),
+      () => new ControllerStore(this.#store).resolveEffect({ ...input, actor: this.#identity }),
+    ).value;
+  }
+  readInbox(
+    controllerId: string,
+    options?: { ids?: readonly string[]; afterSequence?: number; limit?: number },
+  ) {
+    this.#authenticate();
+    return new ControllerInbox(this.#store).read(controllerId, options);
+  }
+  releaseInbox(input: Parameters<ControllerInbox['release']>[0]) {
+    this.#authenticate();
+    new ControllerInbox(this.#store).release(input);
+    return { released: true as const };
+  }
+  acknowledgeInbox(input: {
+    claims: Parameters<ControllerInbox['commitDecision']>[0]['claims'];
+    decision: z.infer<typeof inboxDecisionSchema>;
+    decisionKey: string;
+  }) {
+    this.#authenticate();
+    const decision = inboxDecisionSchema.parse(input.decision);
+    return new ControllerInbox(this.#store).commitDecision(
+      {
+        ...input,
+        decision,
+        actor: this.#identity,
+        disposition: decision.kind === 'acknowledge-only' ? 'dismissed' : 'processed',
+      },
+      () => {
+        switch (decision.kind) {
+          case 'workflow-transition':
+            return this.#store.requestTransition({
+              actor: this.#identity,
+              request: decision.request,
+            });
+          case 'request-human-decision':
+            return this.humanDecisions().request(decision.request);
+          case 'subproject-command': {
+            const { kind: _, ...command } = decision;
+            void _;
+            return this.enqueueProjectCommand(command);
+          }
+          case 'acknowledge-only':
+            return { kind: 'dismissed', reason: decision.reason };
+        }
+      },
+    );
+  }
+  humanDecisions() {
+    this.#authenticate();
+    return new HumanDecisions(this.#store, this.#identity);
+  }
+  nativeApprovals() {
+    this.#authenticate();
+    return new NativeApprovals(this.#store, this.#identity);
+  }
+  bindWorkflow(input: {
+    workflowId: WorkflowId;
+    stepName: string;
+    profile: string;
+    nativeWorkspaceId: string;
+    routeDecisionId: string;
+    expectedRevision: number;
+    idempotencyKey: string;
+  }) {
+    this.#authenticate();
+    const workflow = this.#store.getWorkflow(input.workflowId);
+    if (!workflow.package.steps.some((step) => step.name === input.stepName))
+      throw new Error('Unknown pinned step');
+    return this.#settings.set({
+      key: `schedule/${input.workflowId}/${input.stepName}`,
+      expectedRevision: input.expectedRevision,
+      value: {
+        profile: input.profile,
+        nativeWorkspaceId: input.nativeWorkspaceId,
+        routeDecisionId: input.routeDecisionId,
+      },
+      schema: z.object({
+        profile: z.string(),
+        nativeWorkspaceId: z.string(),
+        routeDecisionId: z.string(),
+      }),
+      idempotencyKey: input.idempotencyKey,
+    });
+  }
+  harnessCatalog() {
+    this.#authenticate();
+    return new HarnessCatalog(this.#store, this.#identity);
+  }
+  discoverHarness(input: {
+    socketPath: string;
+    workspaceId: string;
+    endpointId: string;
+    verifiedModels: string[];
+    idempotencyKey: string;
+  }) {
+    this.#authenticate();
+    const provider = createHerdrProvider({ ...input, hostId: this.#store.project.hostId });
+    return new HarnessCatalog(this.#store, this.#identity, [provider]).discover(
+      { id: input.endpointId, provider: provider.reference, source: { kind: 'builtin' } },
+      input.idempotencyKey,
+    );
+  }
+  probeHarness(input: {
+    installationId: string;
+    socketPath: string;
+    workspaceId: string;
+    endpointId: string;
+    verifiedModels: string[];
+  }) {
+    this.#authenticate();
+    const provider = createHerdrProvider({ ...input, hostId: this.#store.project.hostId });
+    return new HarnessCatalog(this.#store, this.#identity, [provider]).probe(input.installationId);
+  }
+
   route(input: Parameters<typeof route>[0]) {
     return route(input);
   }
@@ -321,7 +900,12 @@ export class Marionette {
   }
 
   recordResult(input: Omit<RecordResultInput, 'actor'>) {
-    this.#authenticate();
+    if (this.#resolved.session?.attemptId)
+      this.#store.authenticateResultSession(
+        { ...this.#identity, token: this.#token },
+        input.attemptId,
+      );
+    else this.#authenticate();
     return this.#store.recordResult({ ...input, actor: this.#identity });
   }
 
@@ -397,6 +981,54 @@ export class Marionette {
       return this.#runtime.inspect(id);
     }
     return this.#runtime.reconcile(id);
+  }
+
+  #serviceLifecycle() {
+    const session = this.#authenticate();
+    if (session.role !== 'user') throw new Error('Service lifecycle requires the local user');
+    const platform = z.enum(['darwin', 'linux']).parse(process.platform);
+    const definition = serviceDefinition({
+      projectId: this.#store.project.id,
+      hostId: this.#store.project.hostId,
+      executable: process.execPath,
+      arguments: [
+        fileURLToPath(new URL('./cli.js', import.meta.url)),
+        'service',
+        'run',
+        '--project',
+        this.#resolved.bindingPath,
+      ],
+      workingDirectory: this.#store.project.repositoryRoot,
+      stateDirectory: this.#store.project.stateDirectory,
+      homeDirectory: homedir(),
+      platform,
+      uid: process.getuid!(),
+    });
+    return new ServiceLifecycle(this.#store, definition, undefined, this.#identity);
+  }
+  reconcileService(input: { claimId: string; expectedRevision: number }) {
+    return this.#serviceLifecycle().reconcile(input);
+  }
+  serviceStatus() {
+    return this.#serviceLifecycle().status();
+  }
+  serviceAction(input: ServiceActionInput & { dryRun?: boolean }) {
+    const lifecycle = this.#serviceLifecycle();
+    return input.dryRun ? lifecycle.preview(input.action) : lifecycle.apply(input);
+  }
+  async runService(options: { signal: AbortSignal; watchdogMs?: number }) {
+    return runServiceRuntime({
+      store: this.#store,
+      runtime: this.#runtime,
+      actor: this.#identity,
+      bindingPath: this.#resolved.bindingPath,
+      authenticate: () => this.#authenticate(),
+      pumpHierarchy: () => this.#pumpProjectHierarchy(),
+      withWorkflowControlAuthority: (workflowId, input, effect) =>
+        this.#withWorkflowControlAuthority(workflowId, input, effect),
+      signal: options.signal,
+      watchdogMs: options.watchdogMs,
+    });
   }
 
   async ensureWatcher() {

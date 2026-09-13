@@ -1,3 +1,4 @@
+import { requireControlActor } from './controllers/controller-store.js';
 import { createHerdrAdapter, type HerdrAdapterFactory } from './adapters/herdr.js';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +12,7 @@ import {
   type AttemptId,
   type JobId,
   type ResultId,
+  type WorkflowId,
 } from './model.js';
 import {
   NativeBindingSchema,
@@ -21,6 +23,8 @@ import {
 } from './native.js';
 import { nativeLocatorForRetirement } from './retirement.js';
 import { Settings, profileSchema } from './settings.js';
+import { HarnessCatalog } from './harnesses/index.js';
+import { canonicalJson, payloadDigest } from './database.js';
 import { Store, type SessionIdentity } from './store.js';
 
 const runtimeRow = z.object({
@@ -50,6 +54,10 @@ export class Runtime {
     private readonly actor: SessionIdentity,
     private readonly context: ResolvedContext,
     private readonly adapterFor: HerdrAdapterFactory = createHerdrAdapter,
+    private readonly withWorkflowAuthority: <T>(
+      workflowId: WorkflowId | null,
+      effect: () => T,
+    ) => T = (_workflowId, effect) => effect(),
   ) {}
 
   private row(id: AttemptId) {
@@ -63,18 +71,7 @@ export class Runtime {
   }
 
   private assertController() {
-    const row = this.store.read((db) =>
-      db
-        .prepare(
-          'SELECT role,state FROM agent_sessions WHERE project_id=? AND id=? AND generation=?',
-        )
-        .get(this.store.project.id, this.actor.id, this.actor.generation),
-    );
-    const session = z
-      .object({ role: z.enum(['user', 'controller', 'worker']), state: z.string() })
-      .parse(row);
-    if (session.state !== 'active' || session.role === 'worker')
-      throw new Error('An active controller or user is required');
+    this.store.read((db) => requireControlActor(this.store, db, this.actor));
   }
 
   async register(input: {
@@ -109,138 +106,243 @@ export class Runtime {
     jobId: JobId;
     profile: string;
     nativeWorkspaceId: string;
+    routeDecisionId?: string;
     inputResultIds: ResultId[];
     expectedBriefRevision: number;
     idempotencyKey: string;
   }) {
     this.assertController();
-    return this.store.idempotent(
-      'runtime.admit',
-      input.idempotencyKey,
-      input,
-      AttemptIdSchema,
-      (db) => {
-        const settings = new Settings(this.store, this.actor);
-        const profile = settings.profile(input.profile);
-        const configured = settings.get(`native/${input.nativeWorkspaceId}`, NativeBindingSchema);
-        if (!configured) throw new Error('Register this native workspace before launching work');
-        if (configured.value.hostId !== this.store.project.hostId)
-          throw new Error('Native binding belongs to another host');
-        const job = this.store.getJob(input.jobId);
-        const workspace = this.store.getWorkspace(job.workspaceId);
-        const workflow =
-          job.origin.kind === 'workflow' ? this.store.getWorkflow(job.origin.workflowId) : null;
-        const step =
-          job.origin.kind === 'workflow' ? this.store.getStepRun(job.origin.stepRunId) : null;
-        const token = randomBytes(32).toString('hex');
-        const session = this.store.registerSession({
-          id: AgentSessionIdSchema.parse(`worker-${randomUUID()}`),
-          generation: 1,
-          workspaceId: job.workspaceId,
-          role: 'worker',
-          executionRole: step?.stepName ?? 'direct',
-          tokenHash: createHash('sha256').update(token).digest('hex'),
-          parentWorkflowId: workflow?.id ?? null,
-          attemptId: null,
-          nativeKind: null,
-          nativeServerGeneration: null,
-          nativeLocator: null,
-        });
-        const admitted = this.store.admitAttempt({
-          actor: this.actor,
-          jobId: job.id,
-          session,
-          resourceKey:
-            workspace.access === 'write' ? `workspace/${job.workspaceId}` : `session/${session.id}`,
-          inputResultIds: input.inputResultIds,
-          expectedBriefRevision: input.expectedBriefRevision,
-          workflow:
-            workflow && step
+    const job = this.store.getJob(input.jobId);
+    const workflowId = job.origin.kind === 'workflow' ? job.origin.workflowId : null;
+    return this.withWorkflowAuthority(
+      workflowId,
+      () =>
+        this.store.idempotent(
+          'runtime.admit',
+          input.idempotencyKey,
+          input,
+          AttemptIdSchema,
+          (db) => {
+            const settings = new Settings(this.store, this.actor);
+            const catalog = new HarnessCatalog(this.store, this.actor);
+            const route = input.routeDecisionId
+              ? catalog.admissionSnapshot(input.routeDecisionId)
+              : null;
+            if (route && (route.adapter.id !== 'herdr' || route.adapter.version !== 1))
+              throw new Error('This runtime requires the exact herdr adapter contract version 1');
+            if (route && route.profile.id !== input.profile)
+              throw new Error('Requested profile does not match route');
+            const profile = route ? route.profile.native : settings.profile(input.profile);
+            const configured = route
               ? {
-                  kind: 'managed',
-                  workflowId: workflow.id,
-                  stepRunId: step.id,
-                  expectedWorkflowRevision: workflow.revision,
-                  expectedControlRevision: workflow.controlRevision,
+                  value: NativeBindingSchema.parse(
+                    JSON.parse(route.observation.locator.binding ?? 'null'),
+                  ),
                 }
-              : { kind: 'direct' },
-          idempotencyKey: `runtime/${input.idempotencyKey}`,
-        });
-        const sessionContext: SessionContext = {
-          version: 1,
-          bindingPath: this.context.bindingPath,
-          projectId: this.store.project.id,
-          hostId: this.store.project.hostId,
-          sessionId: session.id,
-          generation: session.generation,
-          token,
-          attemptId: admitted.attempt.id,
-        };
-        if (workflow) sessionContext.parentWorkflowId = workflow.id;
-        const contextPath = writeSessionContext({
-          stateDirectory: this.store.project.stateDirectory,
-          context: sessionContext,
-        });
-        const now = new Date().toISOString();
-        db.prepare(
-          `INSERT INTO native_attempts(attempt_id,project_id,binding_json,profile_json,context_path,expected_control_revision,phase,created_at,updated_at)
+              : settings.get(`native/${input.nativeWorkspaceId}`, NativeBindingSchema);
+            if (
+              route &&
+              configured &&
+              (configured.value.workspaceId !== input.nativeWorkspaceId ||
+                payloadDigest(configured.value.endpoint) !== route.endpointGeneration)
+            )
+              throw new Error('Requested workspace or endpoint generation does not match route');
+            if (!configured)
+              throw new Error('Register this native workspace before launching work');
+            if (configured.value.hostId !== this.store.project.hostId)
+              throw new Error('Native binding belongs to another host');
+            const workspace = this.store.getWorkspace(job.workspaceId);
+            if (route && workspace.access === 'write' && route.profile.workspaceAccess !== 'write')
+              throw new Error('Routed profile does not authorize this writable workspace');
+            const workflow =
+              job.origin.kind === 'workflow' ? this.store.getWorkflow(job.origin.workflowId) : null;
+            const step =
+              job.origin.kind === 'workflow' ? this.store.getStepRun(job.origin.stepRunId) : null;
+            const token = randomBytes(32).toString('hex');
+            const session = this.store.registerSession({
+              id: AgentSessionIdSchema.parse(`worker-${randomUUID()}`),
+              generation: 1,
+              workspaceId: job.workspaceId,
+              role: 'worker',
+              executionRole: step?.stepName ?? 'direct',
+              tokenHash: createHash('sha256').update(token).digest('hex'),
+              parentWorkflowId: workflow?.id ?? null,
+              attemptId: null,
+              nativeKind: null,
+              nativeServerGeneration: null,
+              nativeLocator: null,
+            });
+            const admitted = this.store.admitAttempt({
+              actor: this.actor,
+              jobId: job.id,
+              session,
+              resourceKey:
+                workspace.access === 'write'
+                  ? `workspace/${job.workspaceId}`
+                  : `session/${session.id}`,
+              inputResultIds: input.inputResultIds,
+              expectedBriefRevision: input.expectedBriefRevision,
+              workflow:
+                workflow && step
+                  ? {
+                      kind: 'managed',
+                      workflowId: workflow.id,
+                      stepRunId: step.id,
+                      expectedWorkflowRevision: workflow.revision,
+                      expectedControlRevision: workflow.controlRevision,
+                    }
+                  : { kind: 'direct' },
+              idempotencyKey: `runtime/${input.idempotencyKey}`,
+            });
+            const sessionContext: SessionContext = {
+              version: 1,
+              bindingPath: this.context.bindingPath,
+              projectId: this.store.project.id,
+              hostId: this.store.project.hostId,
+              sessionId: session.id,
+              generation: session.generation,
+              token,
+              attemptId: admitted.attempt.id,
+            };
+            if (workflow) sessionContext.parentWorkflowId = workflow.id;
+            const contextPath = writeSessionContext({
+              stateDirectory: this.store.project.stateDirectory,
+              context: sessionContext,
+            });
+            const now = new Date().toISOString();
+            db.prepare(
+              `INSERT INTO native_attempts(attempt_id,project_id,binding_json,profile_json,context_path,expected_control_revision,phase,created_at,updated_at)
         VALUES(?,?,?,?,?,?,'admitted',?,?)`,
-        ).run(
-          admitted.attempt.id,
-          this.store.project.id,
-          JSON.stringify(configured.value),
-          JSON.stringify(profile),
-          contextPath,
-          workflow?.controlRevision ?? null,
-          now,
-          now,
-        );
-        return admitted.attempt.id;
-      },
-    ).value;
+            ).run(
+              admitted.attempt.id,
+              this.store.project.id,
+              JSON.stringify(configured.value),
+              JSON.stringify(profile),
+              contextPath,
+              workflow?.controlRevision ?? null,
+              now,
+              now,
+            );
+            if (route)
+              db.prepare('INSERT INTO harness_attempt_routes VALUES (?,?,?)').run(
+                admitted.attempt.id,
+                route.routeDecisionId,
+                canonicalJson(route),
+              );
+            return admitted.attempt.id;
+          },
+        ).value,
+    );
+  }
+
+  private validateAttemptRoute(id: AttemptId) {
+    const raw = this.store.read((db) =>
+      db
+        .prepare('SELECT route_id,snapshot_json FROM harness_attempt_routes WHERE attempt_id=?')
+        .get(id),
+    );
+    if (!raw) return;
+    const linked = z.object({ route_id: z.string(), snapshot_json: z.string() }).parse(raw);
+    const current = new HarnessCatalog(this.store, this.actor).validateRoute(linked.route_id);
+    if (canonicalJson(current) !== linked.snapshot_json)
+      throw new Error('Attempt route changed; reconcile before any native effect');
   }
 
   private journal(id: AttemptId): NativeJournal {
     return {
-      prepare: async (effect: NativeEffect) =>
-        this.store.transaction((db) => {
-          this.assertController();
-          const attempt = this.store.getAttempt(id);
-          const runtime = this.row(id);
-          const job = this.store.getJob(attempt.jobId);
-          if (job.currentBriefRevision !== attempt.briefRevision)
-            return { kind: 'rejected', reason: 'Brief changed before native effect' };
-          if (attempt.workflowId) {
-            const workflow = this.store.getWorkflow(attempt.workflowId);
-            if (
-              workflow.phase !== 'running' ||
-              workflow.controlRevision !== runtime.expected_control_revision
-            )
-              return { kind: 'rejected', reason: 'Workflow control changed before native effect' };
-          }
-          if (!['launching', 'running'].includes(attempt.phase))
-            return { kind: 'rejected', reason: `Attempt is ${attempt.phase}` };
-          const prior = db
-            .prepare('SELECT id FROM native_effects WHERE attempt_id=? AND effect_kind=?')
-            .get(id, effect.kind);
-          if (prior)
-            return {
-              kind: 'rejected',
-              reason: 'Native effect was already claimed; inspect its outcome before retrying',
-            };
-          const operationId = randomUUID();
-          db.prepare(
-            'INSERT INTO native_effects(id,project_id,attempt_id,effect_kind,effect_json,created_at) VALUES(?,?,?,?,?,?)',
-          ).run(
-            operationId,
-            this.store.project.id,
-            id,
-            effect.kind,
-            JSON.stringify(effect),
-            new Date().toISOString(),
-          );
-          return { kind: 'prepared', operationId };
-        }),
+      prepare: async (effect: NativeEffect) => {
+        const workflowId = this.store.getAttempt(id).workflowId;
+        const prepare = (): Awaited<ReturnType<NativeJournal['prepare']>> =>
+          this.store.transaction((db) => {
+            this.assertController();
+            if (effect.kind !== 'interrupt' && effect.kind !== 'cleanup')
+              this.validateAttemptRoute(id);
+            const attempt = this.store.getAttempt(id);
+            const runtime = this.row(id);
+            const job = this.store.getJob(attempt.jobId);
+            if (job.currentBriefRevision !== attempt.briefRevision)
+              return { kind: 'rejected', reason: 'Brief changed before native effect' };
+            if (attempt.workflowId) {
+              const workflow = this.store.getWorkflow(attempt.workflowId);
+              if (
+                workflow.phase !== 'running' ||
+                workflow.controlRevision !== runtime.expected_control_revision
+              )
+                return {
+                  kind: 'rejected',
+                  reason: 'Workflow control changed before native effect',
+                };
+            }
+            if (attempt.workflowId) {
+              const ancestors = db
+                .prepare(
+                  `WITH RECURSIVE a AS (SELECT * FROM workflow_runs WHERE id=? UNION ALL SELECT w.* FROM workflow_runs w JOIN a ON a.parent_workflow_id=w.id) SELECT id,phase,deadline_at,limits_revision FROM a`,
+                )
+                .all(attempt.workflowId);
+              for (const ancestor of ancestors) {
+                if (
+                  ancestor.phase !== 'running' ||
+                  Date.parse(String(ancestor.deadline_at)) <= Date.now()
+                )
+                  return {
+                    kind: 'rejected',
+                    reason: 'Ancestor stopped or deadline expired before native effect',
+                  };
+                const debit = db
+                  .prepare(
+                    'SELECT limits_revision FROM workflow_budget_ledger WHERE attempt_id=? AND workflow_id=?',
+                  )
+                  .get(id, ancestor.id);
+                // Limit revisions are monotonic extensions. A debit admitted under an older,
+                // tighter revision remains valid; a future or missing debit does not.
+                if (!debit || Number(debit.limits_revision) > Number(ancestor.limits_revision))
+                  return {
+                    kind: 'rejected',
+                    reason: 'Budget revision changed before native effect',
+                  };
+              }
+              const deadline = db
+                .prepare(
+                  'SELECT deadline_at,state FROM workflow_attempt_deadlines WHERE attempt_id=?',
+                )
+                .get(id);
+              if (
+                deadline &&
+                (deadline.state !== 'pending' ||
+                  Date.parse(String(deadline.deadline_at)) <= Date.now())
+              )
+                return {
+                  kind: 'rejected',
+                  reason: 'Attempt deadline expired before native effect',
+                };
+            }
+            if (!['launching', 'running'].includes(attempt.phase))
+              return { kind: 'rejected', reason: `Attempt is ${attempt.phase}` };
+            const prior = db
+              .prepare('SELECT id FROM native_effects WHERE attempt_id=? AND effect_kind=?')
+              .get(id, effect.kind);
+            if (prior)
+              return {
+                kind: 'rejected',
+                reason: 'Native effect was already claimed; inspect its outcome before retrying',
+              };
+            const operationId = randomUUID();
+            db.prepare(
+              'INSERT INTO native_effects(id,project_id,attempt_id,effect_kind,effect_json,created_at) VALUES(?,?,?,?,?,?)',
+            ).run(
+              operationId,
+              this.store.project.id,
+              id,
+              effect.kind,
+              JSON.stringify(effect),
+              new Date().toISOString(),
+            );
+            return { kind: 'prepared' as const, operationId };
+          });
+        return workflowId && effect.kind !== 'interrupt' && effect.kind !== 'cleanup'
+          ? this.withWorkflowAuthority(workflowId, prepare)
+          : prepare();
+      },
     };
   }
 
@@ -272,16 +374,19 @@ export class Runtime {
     if (row.phase !== 'admitted') return this.inspect(id);
     const attempt = this.store.getAttempt(id);
     const workspace = this.store.getWorkspace(attempt.workspaceId);
-    this.store.transaction(() => {
-      this.store.claimAttemptLaunch({
-        actor: this.actor,
-        attemptId: id,
-        expectedBriefRevision: attempt.briefRevision,
-        expectedControlRevision: row.expected_control_revision,
-        idempotencyKey: `launch/${id}`,
-      });
-      this.update(id, 'launch-claimed');
-    });
+    this.withWorkflowAuthority(attempt.workflowId, () =>
+      this.store.transaction(() => {
+        this.validateAttemptRoute(id);
+        this.store.claimAttemptLaunch({
+          actor: this.actor,
+          attemptId: id,
+          expectedBriefRevision: attempt.briefRevision,
+          expectedControlRevision: row.expected_control_revision,
+          idempotencyKey: `launch/${id}`,
+        });
+        this.update(id, 'launch-claimed');
+      }),
+    );
     const profile = profileSchema.parse(JSON.parse(row.profile_json));
     const binding = NativeBindingSchema.parse(JSON.parse(row.binding_json));
     const adapter = this.adapterFor(this.journal(id));
@@ -357,14 +462,14 @@ export class Runtime {
     const row = this.row(id);
     if (row.phase !== 'launched' || !row.identity_json) return this.inspect(id);
     const prompt = this.prompt(id);
-    const claimed = this.store.transaction(
-      (db) =>
-        db
-          .prepare(
-            "UPDATE native_attempts SET phase='prompt-claimed',updated_at=? WHERE project_id=? AND attempt_id=? AND phase='launched'",
-          )
-          .run(new Date().toISOString(), this.store.project.id, id).changes,
-    );
+    const claimed = this.store.transaction((db) => {
+      this.validateAttemptRoute(id);
+      return db
+        .prepare(
+          "UPDATE native_attempts SET phase='prompt-claimed',updated_at=? WHERE project_id=? AND attempt_id=? AND phase='launched'",
+        )
+        .run(new Date().toISOString(), this.store.project.id, id).changes;
+    });
     if (!claimed) return this.inspect(id);
     const identity = NativeIdentitySchema.parse(JSON.parse(row.identity_json));
     const submitted = await this.adapterFor(this.journal(id)).invoke('prompt', {
@@ -465,7 +570,7 @@ export class Runtime {
     return this.store.read((db) =>
       db
         .prepare(
-          "SELECT attempt_id FROM native_attempts WHERE project_id=? AND phase IN ('admitted','launch-claimed','launched','prompt-claimed','active')",
+          "SELECT attempt_id FROM native_attempts WHERE project_id=? AND phase IN ('admitted','launch-claimed','launched','prompt-claimed','active') ORDER BY attempt_id",
         )
         .all(this.store.project.id)
         .map((row) => z.object({ attempt_id: AttemptIdSchema }).parse(row).attempt_id),

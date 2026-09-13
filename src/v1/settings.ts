@@ -1,3 +1,4 @@
+import { requireControlActor } from './controllers/controller-store.js';
 import { z } from 'zod';
 import type { Store, SessionIdentity } from './store.js';
 
@@ -59,14 +60,7 @@ export class Settings {
       { key: input.key, expectedRevision: input.expectedRevision, value },
       z.object({ revision: z.number(), value: z.unknown() }),
       (db) => {
-        const raw = db
-          .prepare(
-            'SELECT role, state FROM agent_sessions WHERE project_id = ? AND id = ? AND generation = ?',
-          )
-          .get(this.store.project.id, this.actor.id, this.actor.generation);
-        const actor = z.object({ role: z.string(), state: z.string() }).parse(raw);
-        if (actor.state !== 'active' || !['user', 'controller'].includes(actor.role))
-          throw new Error('Only an active user or controller can change runtime settings');
+        requireControlActor(this.store, db, this.actor);
         const current = this.get(input.key, input.schema);
         if ((current?.revision ?? 0) !== input.expectedRevision)
           throw new Error('Runtime settings revision is stale');

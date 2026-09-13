@@ -203,13 +203,13 @@ async function main() {
     }
     return;
   }
-  if (command === 'watch') {
+  if (command === 'watch' || (command === 'service' && action === 'run')) {
     validateOptions(
       values,
       [...basic, 'project', 'stop-after', 'foreground'],
       'marionette watch --help',
     );
-    if (action)
+    if (action && command !== 'service')
       throw new CliError(
         'extra-arguments',
         'Watch does not accept positional arguments.',
@@ -237,7 +237,12 @@ async function main() {
     const deadline = duration === undefined ? undefined : setTimeout(stop, duration);
     try {
       mutationStarted = true;
-      writeOutput(await client.watch({ signal: abort.signal }), output);
+      writeOutput(
+        command === 'service'
+          ? await client.runService({ signal: abort.signal })
+          : await client.watch({ signal: abort.signal }),
+        output,
+      );
     } finally {
       if (deadline) clearTimeout(deadline);
       process.removeListener('SIGINT', stop);

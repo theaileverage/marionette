@@ -1,3 +1,5 @@
+import { ServiceOwnership } from './service/ownership.js';
+import { nudgeService, wakeSocketPath } from './service/wake-port.js';
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { closeSync, openSync } from 'node:fs';
@@ -31,6 +33,18 @@ export async function currentProcessIdentity(): Promise<string> {
 }
 
 export async function ensureBackgroundWatcher(store: Store, bindingPath: string) {
+  const service = ServiceOwnership.status(store);
+  if (
+    service &&
+    service.stopped_at === null &&
+    !(await localOwnerLiveness.confirmAbsent({
+      project: store.project,
+      processIdentity: service.process_identity,
+    }))
+  ) {
+    await nudgeService(wakeSocketPath(store.project.stateDirectory));
+    return;
+  }
   const prior = store.read((db) =>
     db
       .prepare('SELECT process_identity,settled_at FROM watcher_owners WHERE project_id=?')
