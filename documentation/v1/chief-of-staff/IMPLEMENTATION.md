@@ -51,3 +51,24 @@ reconciliation; time elapsed is never evidence of settlement.
 5. Human decisions and native approval handling.
 6. Same-host hierarchy after the single-project safety checks pass.
 7. Independent seam review, migration/package/live checks, push and PR; no merge or publish.
+
+## Single-project milestone
+
+The unrestricted original suite passed 107/107. The first integrated run passed 143/143,
+including temporary SQLite, native adapter fixtures, CLI/SDK output contracts, workflow
+controls, exact decisions, and service lifetime checks. A separate actual subprocess
+SIGKILL test passed: a competing live owner was rejected, restart proved old process absence,
+pre-submission claims were recovered, and submitted claims retained uncertainty.
+
+Independent reviews found and corrected stale controller authority, insufficient native binding
+checks, unrecovered pre-submission claims, recovered session state, and missing workflow evidence
+propagation. Unbound legacy controller test sessions were changed to local-user fixtures; no
+privileged grandfathering was added to production admission.
+
+Implementation model steering: after the user's instruction, further code implementation is
+assigned to `gpt-5.6-sol` sub-agents. Earlier implementation files were retained and handed off.
+
+Live acceptance remains separate: this Codex task does not have `HERDR_ENV=1`. No live Herdr
+session was inspected or controlled. No launchd/systemd registration, host reboot, or long soak
+has been claimed. macOS LaunchAgents run after user login; Linux user services require the user
+manager, and unattended boot requires its separately configured lifetime.

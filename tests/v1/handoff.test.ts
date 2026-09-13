@@ -178,7 +178,7 @@ function createFixture(t: TestContext): Fixture {
   store.registerSession({
     ...controller,
     workspaceId: null,
-    role: 'controller',
+    role: 'user',
     executionRole: 'controller',
     tokenHash: 'a'.repeat(64),
     parentWorkflowId: null,

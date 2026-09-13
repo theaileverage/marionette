@@ -61,7 +61,7 @@ function fixture(t: TestContext): Fixture {
     id: AgentSessionIdSchema.parse('controller'),
     generation: 1,
     workspaceId: null,
-    role: 'controller',
+    role: 'user',
     executionRole: 'controller',
     tokenHash: tokenHash('controller-token'),
     parentWorkflowId: null,
@@ -191,7 +191,7 @@ test('binds a database to one project and authenticates immutable session genera
       generation: current.controller.generation,
       token: 'controller-token',
     }).role,
-    'controller',
+    'user',
   );
   assert.throws(
     () =>
@@ -208,7 +208,7 @@ test('binds a database to one project and authenticates immutable session genera
         id: current.controller.id,
         generation: current.controller.generation,
         workspaceId: null,
-        role: 'user',
+        role: 'controller',
         executionRole: 'controller',
         tokenHash: tokenHash('controller-token'),
         parentWorkflowId: null,
@@ -959,19 +959,23 @@ test('requires review sessions to have a distinct identity and execution role', 
   assert.equal(reviewAdmission(distinctReviewer, 'admit-distinct-reviewer').workflowRevision, 4);
 });
 
-test('reports gated workflow mutations as unavailable', (t) => {
+test('brief revision is durable and rejects stale callers', (t) => {
   const current = fixture(t);
   const actor: SessionIdentity = current.controller;
+  const job = current.store.createJob(directJobInput(current, 'revision-job', 'revision-job'));
+  const input = {
+    actor,
+    jobId: job.id,
+    expectedBriefRevision: 1,
+    brief,
+    changeReason: 'Changed request',
+    idempotencyKey: 'revise-job',
+  };
+  const revised = current.store.reviseBrief(input);
+  assert.equal(revised.revision, 2);
+  assert.equal(current.store.reviseBrief(input).id, revised.id);
   assert.throws(
-    () =>
-      current.store.reviseBrief({
-        actor,
-        jobId: current.store.createJob(directJobInput(current, 'stub-job', 'stub-job')).id,
-        expectedBriefRevision: 1,
-        brief,
-        changeReason: 'Changed request',
-        idempotencyKey: 'revise-stub',
-      }),
-    hasCode('not-implemented'),
+    () => current.store.reviseBrief({ ...input, idempotencyKey: 'stale-revise' }),
+    hasCode('stale-revision'),
   );
 });

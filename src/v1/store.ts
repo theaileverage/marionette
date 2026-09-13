@@ -1,3 +1,6 @@
+import { EventStore } from './events/event-store.js';
+import { recordWorkflowAdmission } from './workflows/scheduler.js';
+import * as workflowService from './workflows/workflow-service.js';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { DatabaseSync, type SQLOutputValue } from 'node:sqlite';
 
@@ -983,6 +986,7 @@ export class Store {
       if (session.state !== 'active' || !allowedRoles.includes(session.role)) {
         throw new StoreError('permission-denied', 'Session cannot perform this operation');
       }
+      if (session.role === 'controller') workflowService.assertWorkflowActor(database, this, actor);
       return session;
     });
   }
@@ -1056,6 +1060,12 @@ export class Store {
       'INSERT INTO job_dependencies (job_id, depends_on_job_id, created_at) VALUES (?, ?, ?)',
     );
     for (const dependency of input.dependencies) dependencyInsert.run(jobId, dependency, now);
+    new EventStore(this).append({
+      kind: 'job.created',
+      aggregate: { kind: 'job', id: jobId, revision: 1 },
+      payload: { jobId },
+      dedupeKey: `job.created/${jobId}`,
+    });
     return jobId;
   }
 
@@ -1288,6 +1298,12 @@ export class Store {
             input.actor.generation,
             now,
           );
+        new EventStore(this).append({
+          kind: 'workflow.created',
+          aggregate: { kind: 'workflow', id: workflowId, revision: 1 },
+          payload: { workflowId, jobId },
+          dedupeKey: `workflow.created/${workflowId}`,
+        });
         return workflowId;
       },
     );
@@ -1422,6 +1438,7 @@ export class Store {
       input,
       admittedAttemptSchema,
       (database) => {
+        workflowService.assertWorkflowActor(database, this, input.actor);
         const job = this.#requireJob(database, input.jobId);
         if (job.state !== 'open') {
           throw new StoreError('invalid-state', `Job ${job.id} is ${job.state}`);
@@ -1524,8 +1541,33 @@ export class Store {
           );
         }
 
-        for (const resultId of input.inputResultIds)
-          this.#requireAcceptedResult(database, resultId);
+        if (stepRunId !== null) {
+          const required = database
+            .prepare(
+              'SELECT result_id FROM step_run_inputs WHERE step_run_id=? AND result_id IS NOT NULL',
+            )
+            .all(stepRunId);
+          if (
+            required.some(
+              (row) => !input.inputResultIds.includes(ResultIdSchema.parse(row.result_id)),
+            )
+          )
+            throw new StoreError(
+              'invalid-state',
+              'Managed admission must include every declared step input result',
+            );
+        }
+        for (const resultId of input.inputResultIds) {
+          const repair =
+            stepRunId !== null &&
+            database
+              .prepare(
+                'SELECT 1 FROM workflow_repair_cycles r,json_each(r.issue_result_ids_json) i WHERE r.target_step_run_id=? AND i.value=?',
+              )
+              .get(stepRunId, resultId);
+          if (repair) this.#requireEligibleResult(database, resultId);
+          else this.#requireAcceptedResult(database, resultId);
+        }
         const attemptId = this.#newId('attempt', AttemptIdSchema);
         const reservationId = this.#newId('reservation', ReservationIdSchema);
         const now = this.#now();
@@ -1583,6 +1625,7 @@ export class Store {
           )
           .run(attemptId, this.project.id, session.id, session.generation);
         if (workflowId !== null && stepRunId !== null && workflowRevision !== null) {
+          recordWorkflowAdmission(database, this, workflowId, stepRunId, attemptId, now);
           database
             .prepare(
               `UPDATE workflow_runs SET revision = ?, updated_at = ?
@@ -1763,24 +1806,47 @@ export class Store {
     return this.getBrief(this.getAttempt(input.attemptId).jobId, input.briefRevision);
   }
 
-  reviseBrief(_input: ReviseBriefInput): never {
-    throw new StoreError('not-implemented', 'Brief revision is not implemented');
+  activateWorkflow(input: workflowService.ActivateWorkflowInput): WorkflowRun {
+    return workflowService.activateWorkflow(this, input, this.#now());
   }
 
-  requestTransition(_input: RequestTransitionInput): never {
-    throw new StoreError('not-implemented', 'Workflow transition is not implemented');
+  reviseBrief(input: ReviseBriefInput): BriefRevision {
+    return workflowService.reviseBrief(this, input, this.#now());
   }
 
-  controlWorkflow(_input: ControlWorkflowInput): never {
-    throw new StoreError('not-implemented', 'Workflow control is not implemented');
+  requestTransition(input: RequestTransitionInput) {
+    return workflowService.requestTransition(this, input, this.#now());
   }
 
-  resumeWorkflow(_input: ResumeWorkflowInput): never {
-    throw new StoreError('not-implemented', 'Workflow resume is not implemented');
+  controlWorkflow(input: ControlWorkflowInput) {
+    return workflowService.controlWorkflow(this, input, this.#now());
   }
 
-  extendLimits(_input: ExtendLimitsInput): never {
-    throw new StoreError('not-implemented', 'Workflow limit extension is not implemented');
+  resumeWorkflow(input: ResumeWorkflowInput): WorkflowRun {
+    return workflowService.resumeWorkflow(this, input, this.#now());
+  }
+
+  extendLimits(input: ExtendLimitsInput): WorkflowRun {
+    return workflowService.extendLimits(this, input, this.#now());
+  }
+
+  workflowStatus(id: WorkflowId) {
+    return this.read((database) => ({
+      workflow: this.getWorkflow(id),
+      control: database
+        .prepare('SELECT activated, limits_revision FROM workflow_runs WHERE id=? AND project_id=?')
+        .get(id, this.project.id),
+      schedule: database
+        .prepare(
+          'SELECT * FROM workflow_schedule_intents WHERE workflow_id=? AND project_id=? ORDER BY created_at',
+        )
+        .all(id, this.project.id),
+      controls: database
+        .prepare(
+          'SELECT * FROM control_intents WHERE workflow_id=? AND project_id=? ORDER BY created_at',
+        )
+        .all(id, this.project.id),
+    }));
   }
 
   recordResult(input: RecordResultInput): Result {
@@ -1919,6 +1985,12 @@ export class Store {
           'INSERT INTO result_dependencies (result_id, upstream_result_id) VALUES (?, ?)',
         );
         for (const upstream of command.upstreamResultIds) dependencyInsert.run(resultId, upstream);
+        new EventStore(this).append({
+          kind: 'result.recorded',
+          aggregate: { kind: 'result', id: resultId, revision: 1 },
+          payload: { resultId, attemptId: attempt.id, workflowId: attempt.workflowId, eligible },
+          dedupeKey: `result.recorded/${resultId}`,
+        });
         return resultId;
       },
     );
@@ -2143,6 +2215,12 @@ export class Store {
             input.actor.generation,
             createdAt,
           );
+        new EventStore(this).append({
+          kind: `result.${input.decision.kind}`,
+          aggregate: { kind: 'result', id: recorded.id, revision: recorded.briefRevision },
+          payload: { resultId: recorded.id, decisionId: id, decision: input.decision },
+          dedupeKey: `result.decision/${id}`,
+        });
         return {
           id,
           resultId: recorded.id,
@@ -2183,6 +2261,7 @@ export class Store {
       input,
       AttemptIdSchema,
       (database) => {
+        workflowService.assertWorkflowActor(database, this, input.actor);
         const attempt = this.#requireAttempt(database, input.attemptId);
         const job = this.#requireJob(database, attempt.jobId);
         if (
@@ -2408,6 +2487,16 @@ export class Store {
             .run(now, this.project.id, attempt.id);
         }
         this.#finishSettledControls(database);
+        new EventStore(this).append({
+          kind: `attempt.${input.observation.kind}`,
+          aggregate: { kind: 'attempt', id: attempt.id, revision: attempt.briefRevision },
+          payload: {
+            attemptId: attempt.id,
+            workflowId: attempt.workflowId,
+            observation: input.observation,
+          },
+          dedupeKey: `attempt.settle/${input.idempotencyKey}`,
+        });
         return attempt.id;
       },
     );

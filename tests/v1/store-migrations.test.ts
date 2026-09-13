@@ -100,6 +100,10 @@ if (!isMainThread) {
           [3, '003_collaboration_handoff'],
           [4, '004_native_runtime'],
           [5, '005_artifact_media_type'],
+          [6, '006_service_events_controller'],
+          [7, '007_harness_catalog_profiles'],
+          [8, '008_workflow_control_plane'],
+          [9, '009_decisions_approvals'],
         ],
       );
       first.close();
