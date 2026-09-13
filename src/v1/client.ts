@@ -1,3 +1,21 @@
+import { inboxDecisionSchema } from './control-operations.js';
+import { HumanDecisions } from './decisions/human-decisions.js';
+import { NativeApprovals } from './decisions/native-approvals.js';
+import { NativeBindingSchema } from './native.js';
+import { homedir } from 'node:os';
+import { fileURLToPath } from 'node:url';
+import { ServiceLifecycle, type ServiceActionInput } from './service/lifecycle.js';
+import { serviceDefinition } from './service/installers/index.js';
+import { ServiceControls } from './service/controls.js';
+import { runProjectService } from './service/project-service.js';
+import { RecoveryRegistry } from './service/recovery.js';
+import { EventStore } from './events/event-store.js';
+import { ControllerStore } from './controllers/controller-store.js';
+import { ControllerRuntime } from './controllers/controller-runtime.js';
+import { ControllerInbox } from './inbox/controller-inbox.js';
+import { dueSchedules, requestExpiredDeadlines } from './workflows/scheduler.js';
+import { HarnessCatalog } from './harnesses/index.js';
+import { createHerdrProvider } from './harnesses/herdr.js';
 import { createHash } from 'node:crypto';
 import { realpathSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, isAbsolute } from 'node:path';
@@ -12,6 +30,8 @@ import {
   type ResolvedContext,
 } from './context.js';
 import {
+  ResultIdSchema,
+  AttemptIdSchema,
   AgentSessionIdSchema,
   ProjectBindingSchema,
   WorkspaceIdSchema,
@@ -283,6 +303,193 @@ export class Marionette {
     });
   }
 
+  activateWorkflow(input: Omit<Parameters<Store['activateWorkflow']>[0], 'actor'>) {
+    this.#authenticate();
+    return this.#store.activateWorkflow({ ...input, actor: this.#identity });
+  }
+
+  transitionWorkflow(input: Omit<Parameters<Store['requestTransition']>[0], 'actor'>) {
+    this.#authenticate();
+    return this.#store.requestTransition({ ...input, actor: this.#identity });
+  }
+
+  reviseWorkflow(input: Omit<Parameters<Store['reviseBrief']>[0], 'actor'>) {
+    this.#authenticate();
+    return this.#store.reviseBrief({ ...input, actor: this.#identity });
+  }
+
+  controlWorkflow(input: Omit<Parameters<Store['controlWorkflow']>[0], 'actor'>) {
+    this.#authenticate();
+    return this.#store.controlWorkflow({ ...input, actor: this.#identity });
+  }
+
+  resumeWorkflow(input: Omit<Parameters<Store['resumeWorkflow']>[0], 'actor'>) {
+    this.#authenticate();
+    return this.#store.resumeWorkflow({ ...input, actor: this.#identity });
+  }
+
+  extendWorkflowLimits(input: Omit<Parameters<Store['extendLimits']>[0], 'actor'>) {
+    this.#authenticate();
+    return this.#store.extendLimits({ ...input, actor: this.#identity });
+  }
+
+  workflowStatus(id: WorkflowId) {
+    this.#authenticate();
+    return this.#store.workflowStatus(id);
+  }
+
+  events(after?: number, limit?: number) {
+    this.#authenticate();
+    return new EventStore(this.#store).list(after, limit);
+  }
+  controllerStatus() {
+    this.#authenticate();
+    return new ControllerStore(this.#store).status();
+  }
+  configureController(input: {
+    profilePolicyId: string;
+    expectedRevision: number;
+    idempotencyKey: string;
+  }) {
+    this.#authenticate();
+    return this.#store.idempotent(
+      'controller.configure',
+      input.idempotencyKey,
+      input,
+      z.record(z.unknown()).nullable(),
+      () => new ControllerStore(this.#store).configure({ ...input, actor: this.#identity }),
+    ).value;
+  }
+  ensureController(input: { routeId: string; expectedRevision: number; idempotencyKey: string }) {
+    this.#authenticate();
+    const route = this.harnessCatalog().validateRoute(input.routeId);
+    return new ControllerRuntime(this.#store, this.#resolved.bindingPath).ensure({
+      actor: this.#identity,
+      routeId: input.routeId,
+      expectedRevision: input.expectedRevision,
+      idempotencyKey: input.idempotencyKey,
+      binding: NativeBindingSchema.parse(JSON.parse(route.observation.locator.binding)),
+      request: {
+        cwd: this.#store.project.repositoryRoot,
+        agentKind: route.profile.native.kind,
+        agentName: `chief-${String(this.controllerStatus()?.id).replaceAll('-', '').slice(0, 20)}`,
+        args: route.profile.native.args,
+        env: {},
+      },
+    });
+  }
+  reconcileController(input: {
+    controllerId: string;
+    generation: number;
+    expectedRevision: number;
+    idempotencyKey: string;
+  }) {
+    this.#authenticate();
+    return new ControllerRuntime(this.#store, this.#resolved.bindingPath).observe({
+      ...input,
+      actor: this.#identity,
+    });
+  }
+  readInbox(controllerId: string) {
+    this.#authenticate();
+    return new ControllerInbox(this.#store).read(controllerId);
+  }
+  acknowledgeInbox(input: {
+    claims: Parameters<ControllerInbox['commitDecision']>[0]['claims'];
+    decision: z.infer<typeof inboxDecisionSchema>;
+    decisionKey: string;
+  }) {
+    this.#authenticate();
+    const decision = inboxDecisionSchema.parse(input.decision);
+    return new ControllerInbox(this.#store).commitDecision(
+      {
+        ...input,
+        decision,
+        actor: this.#identity,
+        disposition: decision.kind === 'acknowledge-only' ? 'dismissed' : 'processed',
+      },
+      () => {
+        switch (decision.kind) {
+          case 'workflow-transition':
+            return this.#store.requestTransition({
+              actor: this.#identity,
+              request: decision.request,
+            });
+          case 'request-human-decision':
+            return this.humanDecisions().request(decision.request);
+          case 'acknowledge-only':
+            return { kind: 'dismissed', reason: decision.reason };
+        }
+      },
+    );
+  }
+  humanDecisions() {
+    this.#authenticate();
+    return new HumanDecisions(this.#store, this.#identity);
+  }
+  nativeApprovals() {
+    this.#authenticate();
+    return new NativeApprovals(this.#store, this.#identity);
+  }
+  bindWorkflow(input: {
+    workflowId: WorkflowId;
+    stepName: string;
+    profile: string;
+    nativeWorkspaceId: string;
+    routeDecisionId: string;
+    expectedRevision: number;
+    idempotencyKey: string;
+  }) {
+    this.#authenticate();
+    const workflow = this.#store.getWorkflow(input.workflowId);
+    if (!workflow.package.steps.some((step) => step.name === input.stepName))
+      throw new Error('Unknown pinned step');
+    return this.#settings.set({
+      key: `schedule/${input.workflowId}/${input.stepName}`,
+      expectedRevision: input.expectedRevision,
+      value: {
+        profile: input.profile,
+        nativeWorkspaceId: input.nativeWorkspaceId,
+        routeDecisionId: input.routeDecisionId,
+      },
+      schema: z.object({
+        profile: z.string(),
+        nativeWorkspaceId: z.string(),
+        routeDecisionId: z.string(),
+      }),
+      idempotencyKey: input.idempotencyKey,
+    });
+  }
+  harnessCatalog() {
+    this.#authenticate();
+    return new HarnessCatalog(this.#store, this.#identity);
+  }
+  discoverHarness(input: {
+    socketPath: string;
+    workspaceId: string;
+    endpointId: string;
+    verifiedModels: string[];
+    idempotencyKey: string;
+  }) {
+    this.#authenticate();
+    const provider = createHerdrProvider({ ...input, hostId: this.#store.project.hostId });
+    return new HarnessCatalog(this.#store, this.#identity, [provider]).discover(
+      { id: input.endpointId, provider: provider.reference, source: { kind: 'builtin' } },
+      input.idempotencyKey,
+    );
+  }
+  probeHarness(input: {
+    installationId: string;
+    socketPath: string;
+    workspaceId: string;
+    endpointId: string;
+    verifiedModels: string[];
+  }) {
+    this.#authenticate();
+    const provider = createHerdrProvider({ ...input, hostId: this.#store.project.hostId });
+    return new HarnessCatalog(this.#store, this.#identity, [provider]).probe(input.installationId);
+  }
+
   route(input: Parameters<typeof route>[0]) {
     return route(input);
   }
@@ -397,6 +604,170 @@ export class Marionette {
       return this.#runtime.inspect(id);
     }
     return this.#runtime.reconcile(id);
+  }
+
+  #serviceLifecycle() {
+    const session = this.#authenticate();
+    if (session.role !== 'user') throw new Error('Service lifecycle requires the local user');
+    const platform = z.enum(['darwin', 'linux']).parse(process.platform);
+    const definition = serviceDefinition({
+      projectId: this.#store.project.id,
+      hostId: this.#store.project.hostId,
+      executable: process.execPath,
+      arguments: [
+        fileURLToPath(new URL('./cli.js', import.meta.url)),
+        'service',
+        'run',
+        '--project',
+        this.#resolved.bindingPath,
+      ],
+      workingDirectory: this.#store.project.repositoryRoot,
+      stateDirectory: this.#store.project.stateDirectory,
+      homeDirectory: homedir(),
+      platform,
+      uid: process.getuid!(),
+    });
+    return new ServiceLifecycle(this.#store, definition, undefined, this.#identity);
+  }
+  reconcileService(input: { claimId: string; expectedRevision: number }) {
+    return this.#serviceLifecycle().reconcile(input);
+  }
+  serviceStatus() {
+    return this.#serviceLifecycle().status();
+  }
+  serviceAction(input: ServiceActionInput & { dryRun?: boolean }) {
+    const lifecycle = this.#serviceLifecycle();
+    return input.dryRun ? lifecycle.preview(input.action) : lifecycle.apply(input);
+  }
+  async runService(options: { signal: AbortSignal; watchdogMs?: number }) {
+    const session = this.#authenticate();
+    if (session.role !== 'user') throw new Error('Project service requires the local user context');
+    let watcher: Watcher | undefined;
+    const recovery = new RecoveryRegistry().register('native_attempts', async (record) => {
+      await this.#runtime.reconcile(AttemptIdSchema.parse(record.id));
+    });
+    try {
+      await runProjectService({
+        store: this.#store,
+        processIdentity: await currentProcessIdentity(),
+        livenessPort: localOwnerLiveness,
+        signal: options.signal,
+        watchdogMs: options.watchdogMs,
+        recover: async (owner) => {
+          new ControllerInbox(this.#store).recoverClaims(owner.generation);
+          await recovery.recover(owner);
+          watcher = await Watcher.start({
+            store: this.#store,
+            deliveryPort: new NativeBoardDelivery(this.#store),
+            livenessPort: localOwnerLiveness,
+            processIdentity: owner.processIdentity,
+          });
+        },
+        scan: async (owner) => {
+          this.#authenticate();
+          this.#store.transaction((db) => {
+            owner.assertCurrent(db);
+            requestExpiredDeadlines(this.#store, new Date().toISOString());
+          });
+          const reportBlocked = (kind: string, id: string, error: Error) =>
+            new EventStore(this.#store).append({
+              kind: 'service.blocked',
+              aggregate: { kind, id, revision: 1 },
+              payload: { reason: error.message },
+              dedupeKey: `service-blocked/${kind}/${id}/${createHash('sha256').update(error.message).digest('hex')}`,
+            });
+          for (const schedule of dueSchedules(this.#store).slice(0, 20)) {
+            if (options.signal.aborted) break;
+            try {
+              const workflow = this.#store.getWorkflow(schedule.workflow_id);
+              const step = this.#store.getStepRun(schedule.step_run_id);
+              if (!step.jobId) continue;
+              const policy = workflow.package.steps.find((value) => value.name === step.stepName);
+              if (!policy) continue;
+              // Explicit role routing is configured per workflow step; missing bindings remain pending.
+              const configured = this.#settings.get(
+                `schedule/${workflow.id}/${step.stepName}`,
+                z.object({
+                  profile: z.string(),
+                  nativeWorkspaceId: z.string(),
+                  routeDecisionId: z.string(),
+                }),
+              );
+              if (!configured) continue;
+              const job = this.#store.getJob(step.jobId);
+              this.#store.transaction((db) => {
+                owner.assertCurrent(db);
+                this.#runtime.admit({
+                  ...configured.value,
+                  jobId: job.id,
+                  inputResultIds: this.#store.read((db) =>
+                    db
+                      .prepare(
+                        'SELECT result_id FROM step_run_inputs WHERE step_run_id=? AND result_id IS NOT NULL ORDER BY ordinal',
+                      )
+                      .all(schedule.step_run_id)
+                      .map((row) => ResultIdSchema.parse(row.result_id)),
+                  ),
+                  expectedBriefRevision: job.currentBriefRevision,
+                  idempotencyKey: `schedule/${schedule.id}`,
+                });
+              });
+            } catch (error) {
+              reportBlocked(
+                'schedule',
+                schedule.id,
+                error instanceof Error ? error : new Error(String(error)),
+              );
+            }
+          }
+          await new ServiceControls(owner, this.#identity).scan();
+          for (const id of this.#runtime.activeAttempts().slice(0, 20)) {
+            if (options.signal.aborted) break;
+            this.#store.read((db) => owner.assertCurrent(db));
+            try {
+              await this.#runtime.start(id);
+              await this.#runtime.reconcile(id);
+            } catch (error) {
+              reportBlocked(
+                'attempt',
+                id,
+                error instanceof Error ? error : new Error(String(error)),
+              );
+            }
+          }
+          if (!options.signal.aborted) await watcher?.pollOnce();
+          new EventStore(this.#store).project();
+          const controller = new ControllerStore(this.#store).status();
+          if (controller?.state === 'idle' && controller.current_generation) {
+            const inbox = new ControllerInbox(this.#store);
+            const outstanding = this.#store.read((db) =>
+              db
+                .prepare(
+                  "SELECT 1 FROM controller_inbox_items WHERE controller_id=? AND state IN ('claimed','submitted') LIMIT 1",
+                )
+                .get(String(controller.id)),
+            );
+            if (!outstanding) {
+              const claims = inbox.claim({
+                controllerId: String(controller.id),
+                controllerGeneration: Number(controller.current_generation),
+                serviceGeneration: owner.generation,
+                limit: 10,
+              });
+              if (claims.length)
+                await new ControllerRuntime(this.#store, this.#resolved.bindingPath).submit({
+                  actor: this.#identity,
+                  claims,
+                  expectedRevision: Number(controller.state_revision),
+                });
+            }
+          }
+        },
+      });
+      return { stopped: true };
+    } finally {
+      watcher?.stop();
+    }
   }
 
   async ensureWatcher() {

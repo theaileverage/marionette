@@ -23,6 +23,8 @@ import {
   TimestampSchema,
   VerificationSchema,
   WorkflowIdSchema,
+  ControlOperationSchema,
+  StepRunPhaseSchema,
   WorkflowLimitsSchema,
   WorkflowPackageSnapshotSchema,
   WorkflowPhaseSchema,
@@ -261,6 +263,105 @@ type OperationOutputSchemaMap = { [Name in OperationName]: z.ZodTypeAny };
 
 /** One schema per operation. All schemas cover a successful raw `execute` value. */
 export const operationOutputSchemas = {
+  'harness.list': publicObject({
+    installations: z.array(z.record(z.unknown())),
+    endpoints: z.array(z.record(z.unknown())),
+  }),
+  'harness.discover': publicObject({ id: z.string() }),
+  'harness.probe': z.array(
+    publicObject({ id: z.string(), generation: z.string(), health: z.string() }),
+  ),
+  'harness.enable': publicObject({ revision: RevisionSchema }),
+  'profile.define': publicObject({ revision: RevisionSchema }),
+  'profile.bind': publicObject({ revision: RevisionSchema }),
+  'profile.route-preview': publicObject({
+    id: z.string(),
+    state: z.enum(['selected', 'blocked']),
+    policyRevision: RevisionSchema,
+    candidates: z.array(
+      publicObject({ profileId: z.string(), eligible: z.boolean(), reasons: z.array(z.string()) }),
+    ),
+  }),
+  'service.status': publicObject({
+    revision: z.number().int().nonnegative(),
+    instance: z.record(z.unknown()).nullable(),
+    definition: publicObject({ path: z.string(), content: z.string() }),
+  }),
+  'event.list': z.array(
+    publicObject({ id: z.string(), sequence: z.number().int().positive(), kind: z.string() }),
+  ),
+  'controller.configure': z.record(z.unknown()).nullable(),
+  'controller.status': z.record(z.unknown()).nullable(),
+  'controller.ensure': publicObject({
+    controllerId: z.string(),
+    generation: z.number().int().positive(),
+  }),
+  'controller.reconcile': publicObject({ kind: z.string() }),
+  'inbox.read': z.array(
+    publicObject({ id: z.string(), state: z.string(), claim_revision: z.number() }),
+  ),
+  'inbox.ack': publicObject({ cycleId: z.string(), receipt: z.unknown(), replayed: z.boolean() }),
+  'workflow.bind': publicObject({ revision: RevisionSchema, value: z.record(z.string()) }),
+  'service.install': z.union([
+    publicObject({
+      id: z.string(),
+      revision: RevisionSchema,
+      state: z.enum(['claimed', 'completed', 'unconfirmed']),
+    }),
+    publicObject({
+      action: z.string(),
+      revision: z.number().int().nonnegative(),
+      definition: publicObject({ path: z.string(), content: z.string() }),
+    }),
+  ]),
+  'service.start': z.union([
+    publicObject({
+      id: z.string(),
+      revision: RevisionSchema,
+      state: z.enum(['claimed', 'completed', 'unconfirmed']),
+    }),
+    publicObject({
+      action: z.string(),
+      revision: z.number().int().nonnegative(),
+      definition: publicObject({ path: z.string(), content: z.string() }),
+    }),
+  ]),
+  'service.stop': z.union([
+    publicObject({
+      id: z.string(),
+      revision: RevisionSchema,
+      state: z.enum(['claimed', 'completed', 'unconfirmed']),
+    }),
+    publicObject({
+      action: z.string(),
+      revision: z.number().int().nonnegative(),
+      definition: publicObject({ path: z.string(), content: z.string() }),
+    }),
+  ]),
+  'service.uninstall': z.union([
+    publicObject({
+      id: z.string(),
+      revision: RevisionSchema,
+      state: z.enum(['claimed', 'completed', 'unconfirmed']),
+    }),
+    publicObject({
+      action: z.string(),
+      revision: z.number().int().nonnegative(),
+      definition: publicObject({ path: z.string(), content: z.string() }),
+    }),
+  ]),
+  'decision.list': z.array(z.record(z.unknown())),
+  'decision.request': z.record(z.unknown()),
+  'decision.resolve': z.record(z.unknown()),
+  'approval.list': publicObject({exact:z.array(z.record(z.unknown())),legacy:z.array(z.record(z.unknown()))}),
+  'approval.request': z.record(z.unknown()),
+  'approval.resolve': z.record(z.unknown()),
+  'approval.reconcile': z.record(z.unknown()),
+  'service.reconcile': publicObject({
+    id: z.string(),
+    revision: RevisionSchema,
+    state: z.enum(['claimed', 'completed', 'unconfirmed']),
+  }),
   context: publicObject({
     project: ProjectBindingSchema,
     bindingPath: z.string().min(1),
@@ -313,6 +414,38 @@ export const operationOutputSchemas = {
   'job.get': jobSchema,
   'job.brief': briefSchema,
   'workflow.create': workflowSchema,
+  'workflow.activate': workflowSchema,
+  'workflow.transition': publicObject({
+    requestId: z.string(),
+    workflowId: WorkflowIdSchema,
+    workflowRevision: RevisionSchema,
+    createdStepRun: publicObject({ id: StepRunIdSchema, phase: StepRunPhaseSchema }).nullable(),
+    replayed: z.boolean(),
+  }),
+  'workflow.revise': briefSchema,
+  'workflow.pause': publicObject({
+    id: z.string(),
+    workflowId: WorkflowIdSchema,
+    operation: ControlOperationSchema,
+    controlRevision: RevisionSchema,
+    affectedWorkflowIds: WorkflowIdSchema.array(),
+    affectedAttemptIds: AttemptIdSchema.array(),
+    createdAt: TimestampSchema,
+    replayed: z.boolean(),
+  }),
+  'workflow.cancel': publicObject({
+    id: z.string(),
+    workflowId: WorkflowIdSchema,
+    operation: ControlOperationSchema,
+    controlRevision: RevisionSchema,
+    affectedWorkflowIds: WorkflowIdSchema.array(),
+    affectedAttemptIds: AttemptIdSchema.array(),
+    createdAt: TimestampSchema,
+    replayed: z.boolean(),
+  }),
+  'workflow.resume': workflowSchema,
+  'workflow.extend-limits': workflowSchema,
+  'workflow.status': publicObject({ workflow: workflowSchema }),
   'workflow.list': z.array(workflowSchema),
   'workflow.get': workflowSchema,
   route: z.discriminatedUnion('kind', [

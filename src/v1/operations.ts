@@ -1,7 +1,11 @@
+import { controlOperations } from './control-operations.js';
 import { z } from 'zod';
 import { Marionette } from './client.js';
 import { BoardPostKindSchema, BoardReferenceSchema } from './board.js';
 import {
+  TransitionRequestSchema,
+  WorkflowLimitsSchema,
+  TimestampSchema,
   AttemptIdSchema,
   BriefContentSchema,
   DeliveryKindSchema,
@@ -30,6 +34,7 @@ const jobInput = {
 };
 
 export const operationSchema = z.discriminatedUnion('operation', [
+  ...controlOperations,
   z.object({ operation: z.literal('context') }).strict(),
   z.object({ operation: z.literal('handoff.get'), id: key }).strict(),
   handoffSchemas.create.extend({ operation: z.literal('handoff.create') }),
@@ -92,6 +97,71 @@ export const operationSchema = z.discriminatedUnion('operation', [
       boundary: z.enum(['all', 'design-only']).default('all'),
     })
     .strict(),
+  z
+    .object({
+      operation: z.literal('workflow.activate'),
+      workflowId: WorkflowIdSchema,
+      expectedWorkflowRevision: z.number().int().positive(),
+      expectedBriefRevision: z.number().int().positive(),
+      expectedControlRevision: z.number().int().positive(),
+      idempotencyKey: key,
+    })
+    .strict(),
+  z
+    .object({ operation: z.literal('workflow.transition'), request: TransitionRequestSchema })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('workflow.revise'),
+      jobId: JobIdSchema,
+      expectedBriefRevision: z.number().int().positive(),
+      brief: BriefContentSchema,
+      changeReason: key,
+      idempotencyKey: key,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('workflow.pause'),
+      workflowId: WorkflowIdSchema,
+      expectedWorkflowRevision: z.number().int().positive(),
+      expectedControlRevision: z.number().int().positive(),
+      mode: z.enum(['drain', 'safe', 'now']),
+      idempotencyKey: key,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('workflow.cancel'),
+      workflowId: WorkflowIdSchema,
+      expectedWorkflowRevision: z.number().int().positive(),
+      expectedControlRevision: z.number().int().positive(),
+      idempotencyKey: key,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('workflow.resume'),
+      workflowId: WorkflowIdSchema,
+      expectedWorkflowRevision: z.number().int().positive(),
+      expectedBriefRevision: z.number().int().positive(),
+      expectedControlRevision: z.number().int().positive(),
+      decision: z.null(),
+      idempotencyKey: key,
+    })
+    .strict(),
+  z
+    .object({
+      operation: z.literal('workflow.extend-limits'),
+      workflowId: WorkflowIdSchema,
+      expectedLimitsRevision: z.number().int().positive(),
+      limits: WorkflowLimitsSchema,
+      deadlineAt: TimestampSchema,
+      reason: key,
+      idempotencyKey: key,
+    })
+    .strict(),
+  z.object({ operation: z.literal('workflow.status'), id: WorkflowIdSchema }).strict(),
   z.object({ operation: z.literal('workflow.list') }).strict(),
   z.object({ operation: z.literal('workflow.get'), id: WorkflowIdSchema }).strict(),
   z
@@ -206,6 +276,7 @@ export const operationSchema = z.discriminatedUnion('operation', [
   z
     .object({
       operation: z.literal('attempt.admit'),
+      routeDecisionId: key.optional(),
       jobId: JobIdSchema,
       profile: key,
       nativeWorkspaceId: key,
@@ -254,6 +325,62 @@ export async function execute(client: Marionette, raw: Operation) {
       return client.resolveHandoff(payload(input));
     case 'handoff.replan':
       return client.replanHandoff(payload(input));
+    case 'service.reconcile':
+      return client.reconcileService(payload(input));
+    case 'service.install':
+      return client.serviceAction({ ...payload(input), action: 'install' });
+    case 'service.start':
+      return client.serviceAction({ ...payload(input), action: 'start' });
+    case 'service.stop':
+      return client.serviceAction({ ...payload(input), action: 'stop' });
+    case 'service.uninstall':
+      return client.serviceAction({ ...payload(input), action: 'uninstall' });
+    case 'service.status':
+      return client.serviceStatus();
+    case 'event.list':
+      return client.events(input.after, input.limit);
+    case 'controller.configure':
+      return client.configureController(payload(input));
+    case 'controller.ensure':
+      return client.ensureController(payload(input));
+    case 'controller.status':
+      return client.controllerStatus();
+    case 'controller.reconcile':
+      return client.reconcileController(payload(input));
+    case 'inbox.read':
+      return client.readInbox(input.controllerId);
+    case 'inbox.ack':
+      return client.acknowledgeInbox(payload(input));
+    case 'workflow.bind':
+      return client.bindWorkflow(payload(input));
+    case 'decision.list':
+      return client.humanDecisions().list();
+    case 'decision.request':
+      return client.humanDecisions().request(payload(input));
+    case 'decision.resolve':
+      return client.humanDecisions().resolve(payload(input));
+    case 'approval.list':
+      return client.nativeApprovals().list();
+    case 'approval.request':
+      return client.nativeApprovals().request(payload(input));
+    case 'approval.resolve':
+      return client.nativeApprovals().resolve(payload(input));
+    case 'approval.reconcile':
+      return client.nativeApprovals().reconcile(payload(input));
+    case 'harness.list':
+      return client.harnessCatalog().list();
+    case 'harness.discover':
+      return client.discoverHarness(payload(input));
+    case 'harness.probe':
+      return client.probeHarness(payload(input));
+    case 'harness.enable':
+      return client.harnessCatalog().enable(payload(input));
+    case 'profile.define':
+      return client.harnessCatalog().defineProfile(payload(input));
+    case 'profile.bind':
+      return client.harnessCatalog().bind(payload(input));
+    case 'profile.route-preview':
+      return client.harnessCatalog().route(input.requirement, input.policyId, input.idempotencyKey);
     case 'context':
       return client.context();
     case 'workspace.register':
@@ -274,6 +401,25 @@ export async function execute(client: Marionette, raw: Operation) {
       return client.brief(input.id, input.revision);
     case 'workflow.create':
       return client.createWorkflow(payload(input));
+    case 'workflow.activate':
+      return client.activateWorkflow(payload(input));
+    case 'workflow.transition':
+      return client.transitionWorkflow(payload(input));
+    case 'workflow.revise':
+      return client.reviseWorkflow(payload(input));
+    case 'workflow.pause':
+      return client.controlWorkflow({
+        ...payload(input),
+        operation: { kind: 'pause', mode: input.mode },
+      });
+    case 'workflow.cancel':
+      return client.controlWorkflow({ ...payload(input), operation: { kind: 'cancel' } });
+    case 'workflow.resume':
+      return client.resumeWorkflow(payload(input));
+    case 'workflow.extend-limits':
+      return client.extendWorkflowLimits(payload(input));
+    case 'workflow.status':
+      return client.workflowStatus(input.id);
     case 'workflow.list':
       return client.workflows();
     case 'workflow.get':
