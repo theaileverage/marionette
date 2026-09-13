@@ -64,14 +64,9 @@ function workerPath() {
 function nodeRuntime() {
   if (process.versions.bun !== undefined)
     throw new Error('SQL queries require the Node runtime with node:sqlite');
-  const [major, minor] = process.versions.node.split('.').map(Number);
-  if (
-    !Number.isInteger(major) ||
-    !Number.isInteger(minor) ||
-    major < 24 ||
-    (major === 24 && minor < 10)
-  )
-    throw new Error('SQL queries require Node 24.10.0 or newer');
+  const [major, minor, patch] = process.versions.node.split('.').map(Number);
+  if (!(major > 26 || (major === 26 && (minor > 8 || (minor === 8 && patch >= 1)))))
+    throw new Error('SQL queries require Node 26.8.1 or newer');
   return process.execPath;
 }
 

@@ -120,7 +120,7 @@ const SAFE_FUNCTIONS = new Set([
 function installAuthorizer(database: DatabaseSync, projectId: string) {
   if (!('setAuthorizer' in database) || !('enableDefensive' in database))
     throw new Error('node:sqlite authorizer support is required for SQL queries');
-  // SAFETY: Node 24.10 exposes these methods, but the installed Node type declarations lag that runtime API.
+  // SAFETY: Node 26.8.1 exposes these methods, but the installed Node type declarations lag that runtime API.
   const authorizable = database as AuthorizableDatabase;
   authorizable.enableLoadExtension(false);
   authorizable.enableDefensive(true);
@@ -153,7 +153,7 @@ function rejectMultipleStatements(sql: string) {
 function installContributionAuthorizer(database: DatabaseSync) {
   if (!('setAuthorizer' in database))
     throw new Error('node:sqlite authorizer support is required for board contributions');
-  // SAFETY: Node 24.10 exposes setAuthorizer, but the installed Node type declarations lag that runtime API.
+  // SAFETY: Node 26.8.1 exposes setAuthorizer, but the installed Node type declarations lag that runtime API.
   const authorizable = database as AuthorizableDatabase;
   authorizable.enableLoadExtension(false);
   authorizable.enableDefensive(true);

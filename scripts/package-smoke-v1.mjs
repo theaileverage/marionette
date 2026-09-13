@@ -31,9 +31,9 @@ const packageVersion = (output) => {
 };
 
 export function requireSupportedNode(version = process.versions.node) {
-  const [major, minor] = version.split('.').map(Number);
+  const [major, minor, patch] = version.split('.').map(Number);
   assert.ok(
-    major > 24 || (major === 24 && minor >= 10),
+    major > 26 || (major === 26 && (minor > 8 || (minor === 8 && patch >= 1))),
     'Marionette v1 requires Node.js 26.8.1 or newer',
   );
 }
