@@ -53,4 +53,4 @@ jobs:
         if: env.RELEASE_TAG == 'v1.0.0-alpha.1'
         run: |
           npm install --global npm@11.19.1
-          npm publish release-assets/theaileverage-marionette-1.0.0-alpha.1.tgz --tag alpha --access public --provenance
+          npm publish ./release-assets/theaileverage-marionette-1.0.0-alpha.1.tgz --tag alpha --access public --provenance
