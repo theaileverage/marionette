@@ -290,7 +290,7 @@ export class Runtime {
       request: {
         cwd: workspace.path,
         agentKind: profile.kind,
-        agentName: `marionette-${id}`,
+        agentName: `mnett-${createHash('sha256').update(id).digest('hex').slice(0, 24)}`,
         args: profile.args,
         env: {
           MARIONETTE_CONTEXT: row.context_path,

@@ -19,6 +19,7 @@ import {
   type NativeIdentity,
   type NativeJournal,
   type LaunchResult,
+  type LaunchRequest,
   type NativeSubmission,
   type NativeObservation,
 } from '../../src/v1/native.js';
@@ -131,7 +132,8 @@ function fixture(t: TestContext, crashAt: 'launch' | 'prompt' | null = null) {
     constructor(private readonly effects: NativeJournal) {
       super(effects);
     }
-    override async launch(): Promise<LaunchResult> {
+    override async launch(_binding: NativeBinding, request: LaunchRequest): Promise<LaunchResult> {
+      assert.match(request.agentName, /^[a-z][a-z0-9_-]{0,31}$/);
       launches++;
       const prepared = await this.effects.prepare({ kind: 'create-tab', workspaceId: 'w1' });
       assert.equal(prepared.kind, 'prepared');
