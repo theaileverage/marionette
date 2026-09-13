@@ -45,7 +45,7 @@ before(async () => {
   });
 });
 function fixture(t: TestContext) {
-  const root = mkdtempSync('/private/tmp/ca-');
+  const root = mkdtempSync('/tmp/ca-');
   const repositoryRoot = join(root, 'r'),
     stateHome = join(root, 's');
   mkdirSync(repositoryRoot);
