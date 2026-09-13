@@ -51,7 +51,14 @@ async function fakeHerdr(socketPath: string, onRequest: (request: Request) => He
       const newline = input.indexOf('\n');
       if (newline < 0) return;
       const request: Request = JSON.parse(input.slice(0, newline));
-      socket.end(JSON.stringify({ id: request.id, result: onRequest(request) }) + '\n');
+      const reply = onRequest(request);
+      socket.end(
+        JSON.stringify(
+          'error' in reply
+            ? { id: request.id, error: reply.error }
+            : { id: request.id, result: reply },
+        ) + '\n',
+      );
     });
   });
   await new Promise<void>((resolve, reject) => {
@@ -153,8 +160,16 @@ test('native adapter registers, launches AGY in an owned tab, prompts, settles, 
         root_pane: { ...agent(), agent: null, agent_session: null, name: null },
       };
     }
-    if (request.method === 'agent.start')
+    if (request.method === 'agent.start') {
+      if (requests.filter((method) => method === 'agent.start').length === 1)
+        return {
+          error: {
+            code: 'not_ready',
+            message: 'agent target pane pane-1 is not an available shell',
+          },
+        };
       return { type: 'agent_started', agent: agent(), argv: ['agy'] };
+    }
     if (request.method === 'agent.get') return { type: 'agent_info', agent: agent() };
     if (request.method === 'pane.read')
       return {

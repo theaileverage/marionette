@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { z } from 'zod';
-import { HerdrClient, type ResponseTypes } from '../herdr-sdk.js';
+import { HerdrClient, HerdrError, type ResponseTypes } from '../herdr-sdk.js';
 
 export type NativeBinding = {
   hostId: string;
@@ -662,13 +662,28 @@ export class HerdrNativeAdapter {
       if (start.kind === 'rejected') return { kind: 'unsupported', reason: start.reason };
       operationId = start.operationId;
       client = await this.client(binding);
-      const started = await client.request('agent.start', {
-        pane_id: tab.root_pane.pane_id,
-        name: request.agentName,
-        kind: request.agentKind,
-        args: request.args ?? [],
-        timeout_ms: request.timeoutMs ?? 30000,
-      });
+      const started = await (async () => {
+        for (let retry = 0; ; retry += 1) {
+          try {
+            return await client.request('agent.start', {
+              pane_id: tab.root_pane.pane_id,
+              name: request.agentName,
+              kind: request.agentKind,
+              args: request.args ?? [],
+              timeout_ms: request.timeoutMs ?? 30000,
+            });
+          } catch (error) {
+            if (
+              !(error instanceof HerdrError) ||
+              !error.message.includes('not an available shell') ||
+              retry >= 20
+            )
+              throw error;
+            await new Promise((resolve) => setTimeout(resolve, 250));
+            client = await this.client(binding);
+          }
+        }
+      })();
       if (started.type !== 'agent_started')
         return unconfirmedLaunch(operationId, 'Herdr did not acknowledge agent start', locator);
       const startedIdentity = await this.identity(
