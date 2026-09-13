@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import net from 'node:net';
 import { z } from 'zod';
+import { codexAppServerThreadPointer, type NativeSessionPointer } from './native-session.js';
 
 export type AppServerEndpoint =
   | { kind: 'websocket'; url: string; authorization?: string }
@@ -20,6 +21,19 @@ export type CodexDelivery =
   | { kind: 'unconfirmed'; reason: string }
   | { kind: 'unsupported'; reason: string };
 
+export type CodexThreadHistory =
+  | { kind: 'unconfirmed'; reason: string }
+  | { kind: 'session-missing'; reason: string }
+  | {
+      kind: 'available';
+      threadId: string;
+      reference: NativeSessionPointer;
+      status: 'active' | 'idle';
+      turns: unknown[];
+      truncated: boolean;
+      bytes: number;
+    };
+
 export interface CodexAppServerPort {
   deliver(input: {
     deliveryId: string;
@@ -27,6 +41,7 @@ export interface CodexAppServerPort {
     recipient: { kind: 'codex-desktop'; id: string; generation: string };
     message: string;
   }): Promise<CodexDelivery>;
+  inspect(options?: { limit?: number; maxBytes?: number }): Promise<CodexThreadHistory>;
 }
 
 export type AppServerRequest =
@@ -57,7 +72,12 @@ export type AppServerNotification = { method: 'initialized'; params: object };
 
 export type AppServerReply =
   | { kind: 'initialized' }
-  | { kind: 'thread-read'; status: 'active' | 'idle' | 'notLoaded' }
+  | {
+      kind: 'thread-read';
+      threadId: string;
+      status: 'active' | 'idle' | 'notLoaded';
+      turns: unknown[];
+    }
   | { kind: 'turn-steered'; turnId: string }
   | { kind: 'turn-started'; turnId: string };
 
@@ -97,7 +117,9 @@ const rpcEnvelopeSchema = z
 const initializedResultSchema = z.object({}).passthrough();
 const threadReadResultSchema = z.object({
   thread: z.object({
+    id: z.string().min(1),
     status: z.object({ type: z.enum(['active', 'idle', 'notLoaded']) }).passthrough(),
+    turns: z.array(z.unknown()),
   }),
 });
 const turnSteerResultSchema = z.object({ turnId: z.string().min(1) });
@@ -169,7 +191,12 @@ function decodeReply(request: AppServerRequest, text: string): DecodedReply {
     if (!result.success) throw new Error('thread/read returned an invalid result');
     return {
       id: envelope.data.id,
-      reply: { kind: 'thread-read', status: result.data.thread.status.type },
+      reply: {
+        kind: 'thread-read',
+        threadId: result.data.thread.id,
+        status: result.data.thread.status.type,
+        turns: result.data.thread.turns,
+      },
     };
   }
   if (request.method === 'turn/steer') {
@@ -384,6 +411,52 @@ export class CodexAppServerDeliveryPort implements CodexAppServerPort {
     private readonly binding: CodexThreadBinding,
     private readonly transport: JsonRpcTransport,
   ) {}
+
+  async inspect(options: { limit?: number; maxBytes?: number } = {}): Promise<CodexThreadHistory> {
+    if (this.binding.executionHostId !== this.binding.endpointHostId)
+      return { kind: 'unconfirmed', reason: 'App-server endpoint is on another execution host' };
+    const limit = options.limit ?? 50;
+    const maxBytes = options.maxBytes ?? 64 * 1024;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200)
+      throw new Error('Codex history limit must be between 1 and 200');
+    if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 256 * 1024)
+      throw new Error('Codex history maxBytes must be between 1 and 262144');
+    try {
+      const reply = await this.transport.request({
+        method: 'thread/read',
+        params: { threadId: this.binding.threadId, includeTurns: true },
+      });
+      if (reply.kind !== 'thread-read')
+        return { kind: 'unconfirmed', reason: 'thread/read returned an unexpected reply' };
+      if (reply.threadId !== this.binding.threadId)
+        return { kind: 'unconfirmed', reason: 'thread/read returned another thread identity' };
+      if (reply.status === 'notLoaded')
+        return { kind: 'session-missing', reason: 'The registered Codex thread is not loaded' };
+      const selected: unknown[] = [];
+      let bytes = 0;
+      for (let index = reply.turns.length - 1; index >= 0 && selected.length < limit; index -= 1) {
+        const turn = reply.turns[index];
+        const size = Buffer.byteLength(JSON.stringify(turn));
+        if (bytes + size > maxBytes) break;
+        selected.unshift(turn);
+        bytes += size;
+      }
+      return {
+        kind: 'available',
+        threadId: reply.threadId,
+        reference: codexAppServerThreadPointer(reply.threadId),
+        status: reply.status,
+        turns: selected,
+        truncated: selected.length < reply.turns.length,
+        bytes,
+      };
+    } catch (error) {
+      return {
+        kind: 'unconfirmed',
+        reason: error instanceof Error ? errorText(error) : 'thread/read failed',
+      };
+    }
+  }
 
   async deliver(input: {
     deliveryId: string;

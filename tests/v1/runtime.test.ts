@@ -27,6 +27,7 @@ import {
 import { Settings, profileSchema } from '../../src/v1/settings.js';
 import { Store } from '../../src/v1/store.js';
 import { Runtime } from '../../src/v1/runtime.js';
+import { parseOperationOutput } from '../../src/v1/output-contracts.js';
 
 function fixture(
   t: TestContext,
@@ -177,6 +178,7 @@ function fixture(
   let duringLaunch: (() => void) | undefined;
   let nativeSettled = false;
   let ambiguous = false;
+  let referenceAfterPrompt = false;
   class Adapter extends HerdrNativeAdapter {
     constructor(private readonly effects: NativeJournal) {
       super(effects);
@@ -197,7 +199,7 @@ function fixture(
           terminalId: 'terminal-test',
           agentKind: 'agy',
           agentName: 'fixture-agent',
-          nativeSession: 'native-session',
+          foregroundProcess: { pid: 31415, startToken: 'process-instance' },
           identityRevision: 1,
           ownedTabId: 'w1:t2',
         },
@@ -213,6 +215,7 @@ function fixture(
       });
       if (prepared.kind === 'rejected') throw new Error(prepared.reason);
       if (crashAt === 'prompt') throw new Error('Simulated process loss after durable claim');
+      referenceAfterPrompt = true;
       return { kind: 'submitted', operationId: prepared.operationId };
     }
     override async interrupt(identity: NativeIdentity): Promise<NativeSubmission> {
@@ -224,9 +227,21 @@ function fixture(
     }
     override async observe(identity: NativeIdentity): Promise<NativeObservation> {
       if (ambiguous) return { kind: 'unconfirmed', reason: 'Fixture could not confirm identity' };
+      const refreshed = referenceAfterPrompt
+        ? {
+            ...identity,
+            sessionReference: {
+              harness: 'agy',
+              kind: 'id' as const,
+              value: 'agy-conversation-1',
+              source: 'herdr:antigravity_cli',
+            },
+            identityRevision: 2,
+          }
+        : identity;
       return nativeSettled
-        ? { kind: 'settled', identity, slotReady: true }
-        : { kind: 'working', identity };
+        ? { kind: 'settled', identity: refreshed, slotReady: true }
+        : { kind: 'working', identity: refreshed };
     }
   }
   const runtime = new Runtime(store, actor, context, (journal) =>
@@ -279,6 +294,18 @@ test('native runtime admits idempotently and concurrent starts claim each extern
     effects.map((row) => row.effect_kind),
     ['create-tab', 'prompt'],
   );
+  assert.deepEqual(
+    f.store.listNativeSessionReferences(id).map(({ harness, value, status }) => ({
+      harness,
+      value,
+      status,
+    })),
+    [{ harness: 'agy', value: 'agy-conversation-1', status: 'confirmed' }],
+  );
+  const retained = await f.runtime.inspectRetainedWork(id);
+  assert.equal(retained.history.kind, 'unsupported');
+  assert.deepEqual(parseOperationOutput('attempt.retained-work', retained), retained);
+  assert.deepEqual(f.counts(), { launches: 1, prompts: 1 });
 });
 
 test('crash after a claimed launch becomes unconfirmed without replaying launch or prompt', async (t) => {

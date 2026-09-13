@@ -9,6 +9,7 @@ import { test } from 'node:test';
 
 import {
   AgentSessionIdSchema,
+  AttemptIdSchema,
   DigestSchema,
   HostIdSchema,
   ProjectBindingSchema,
@@ -34,7 +35,7 @@ type Fixture = {
   workspaceId: ReturnType<typeof WorkspaceIdSchema.parse>;
   actor: SessionIdentity;
   identity: NativeIdentity;
-  attemptId: string;
+  attemptId: ReturnType<typeof AttemptIdSchema.parse>;
   store: Store;
 };
 
@@ -247,7 +248,20 @@ class FixtureAdapter extends HerdrNativeAdapter {
   }
 
   override async observe(identity: NativeIdentity): Promise<NativeObservation> {
-    return { kind: 'settled', identity, slotReady: true };
+    return {
+      kind: 'settled',
+      identity: {
+        ...identity,
+        sessionReference: {
+          harness: 'agy',
+          kind: 'id',
+          value: 'agy-conversation-before-retirement',
+          source: 'herdr:antigravity_cli',
+        },
+        identityRevision: identity.identityRevision + 1,
+      },
+      slotReady: true,
+    };
   }
 
   override async cleanup(identity: NativeIdentity, authorized: boolean): Promise<CleanupResult> {
@@ -272,6 +286,20 @@ test('runtime retirement cleans only its persisted identity with a settled attem
     });
     assert.equal(retired.kind, 'completed');
     assert.equal(adapter?.cleanupCalls, 1);
+    assert.deepEqual(
+      fixture.store.listNativeSessionReferences(fixture.attemptId).map((reference) => ({
+        harness: reference.harness,
+        value: reference.value,
+        status: reference.status,
+      })),
+      [
+        {
+          harness: 'agy',
+          value: 'agy-conversation-before-retirement',
+          status: 'confirmed',
+        },
+      ],
+    );
     assert.equal(
       fixture.store.read(
         (database) =>

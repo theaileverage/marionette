@@ -103,6 +103,8 @@ The runtime journals launch and prompt claims. A crash after a claim leaves the 
 
 The project watcher owns native launch and prompt execution. `attempt start` ensures that watcher is running and returns the current observation; inspect the attempt until its launch is confirmed. CLI callers do not race the watcher by launching directly. The CLI starts a local background watcher after relevant runtime and board operations. SDK callers can call `ensureWatcher()` explicitly. `marionette watch --stop-after 5000` runs a bounded foreground watcher. Uncertain delivery is retained for reconciliation rather than automatically repeated.
 
+`attempt retained-work --id ATTEMPT` (SDK: `inspectRetainedWork`) refreshes and returns typed native conversation references, an explicit bounded-history status, and job-scoped retained attempts/results/artifacts. Pi and OMP confirmed JSONL paths support local bounded history; identifier-only harnesses report history as unsupported. Reference identity is separate from the pane/process locator, and legacy string bytes remain explicitly untyped. See [native session references](documentation/v1/native-session-references.md).
+
 Desktop notification support requires a reachable endpoint for the actual desktop-owned Codex app-server. The current local desktop uses private stdio, so delivery to it is unavailable. The board remains readable. A separately started app-server would not establish access to that desktop task.
 
 ## Handoff and retirement

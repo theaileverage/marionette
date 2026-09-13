@@ -264,6 +264,8 @@ export class NativeWorkspaceRetirementGit implements WorkspaceRetirementGit {
 
 export function nativeLocatorForRetirement(identity: NativeIdentity): string {
   const parsed = NativeIdentitySchema.parse(identity);
+  // Conversation references are controller evidence, not transport identity. A typed
+  // reference can be refreshed without changing the pane this retirement targets.
   return JSON.stringify({
     workspaceId: parsed.binding.workspaceId,
     tabId: parsed.tabId,
@@ -272,7 +274,6 @@ export function nativeLocatorForRetirement(identity: NativeIdentity): string {
     agentKind: parsed.agentKind,
     agentName: parsed.agentName,
     ownedTabId: parsed.ownedTabId,
-    identityRevision: parsed.identityRevision,
     nativeSession: parsed.nativeSession,
     foregroundProcess:
       parsed.foregroundProcess === undefined

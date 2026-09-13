@@ -150,6 +150,11 @@ export const commandMetadata = {
     effect: 'native',
     controller: true,
   },
+  'attempt.retained-work': {
+    summary: 'Refresh native identity and inspect references, bounded history, and retained work.',
+    effect: 'native',
+    controller: true,
+  },
   'attempt.reconcile': {
     summary: 'Reconcile native state while retaining uncertain reservations.',
     effect: 'native',

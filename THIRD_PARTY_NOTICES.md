@@ -1,8 +1,8 @@
 # Third-party notices
 
-## Herdr 0.9.0 API schema
+## Herdr 0.9.0 API schema and native-session normalization
 
-The SDK protocol types are generated from Herdr (https://github.com/herdrdev/herdr/tree/v0.9.0), licensed under Apache-2.0.
+The SDK protocol types are generated from Herdr (https://github.com/herdrdev/herdr/tree/v0.9.0), licensed under Apache-2.0. Native-session source pairing and ID/path normalization are adapted from Herdr's `src/agent_resume.rs` at commit `b99002ac99b09e00b4ca692436cb15a6b0d676f1` (tag `v0.9.0`).
 
 ```text
 Apache License

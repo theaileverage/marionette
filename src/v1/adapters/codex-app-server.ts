@@ -5,6 +5,7 @@ import {
   type CodexThreadBinding,
   type JsonRpcTransport,
 } from '../codex-app-server.js';
+import { NativeSessionPointerSchema } from '../native-session.js';
 
 export const codexThreadBindingSchema = z
   .object({
@@ -51,6 +52,32 @@ export const codexDeliveryOutputSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('unconfirmed'), reason: z.string().min(1) }).strict(),
   z.object({ kind: z.literal('unsupported'), reason: z.string().min(1) }).strict(),
 ]);
+export const codexInspectionInputSchema = z
+  .object({
+    limit: z.number().int().min(1).max(200).optional(),
+    maxBytes: z
+      .number()
+      .int()
+      .min(1)
+      .max(256 * 1024)
+      .optional(),
+  })
+  .strict();
+export const codexInspectionOutputSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('unconfirmed'), reason: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal('session-missing'), reason: z.string().min(1) }).strict(),
+  z
+    .object({
+      kind: z.literal('available'),
+      threadId: z.string().min(1),
+      reference: NativeSessionPointerSchema,
+      status: z.enum(['active', 'idle']),
+      turns: z.array(z.unknown()),
+      truncated: z.boolean(),
+      bytes: z.number().int().nonnegative(),
+    })
+    .strict(),
+]);
 
 export function createCodexAppServerCapabilities(input: {
   binding: CodexThreadBinding;
@@ -59,6 +86,13 @@ export function createCodexAppServerCapabilities(input: {
   const binding = codexThreadBindingSchema.parse(input.binding);
   const port = new CodexAppServerDeliveryPort(binding, input.transport);
   return {
+    inspect: defineCapability({
+      input: codexInspectionInputSchema,
+      output: codexInspectionOutputSchema,
+      effect: 'read',
+      summary: 'Read bounded history from the registered Codex thread.',
+      execute: (request) => port.inspect(request),
+    }),
     deliver: defineCapability({
       input: codexDeliveryInputSchema,
       output: codexDeliveryOutputSchema,
@@ -86,4 +120,5 @@ export type {
   AppServerEndpoint,
   AppServerRequest,
   AppServerReply,
+  CodexThreadHistory,
 } from '../codex-app-server.js';

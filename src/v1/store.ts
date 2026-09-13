@@ -6,7 +6,16 @@ import { z } from 'zod';
 import { ArtifactFiles } from './artifacts.js';
 import { canonicalJson, openDatabase, payloadDigest } from './database.js';
 import {
+  NativeSessionBindingEvidenceSchema,
+  NativeSessionPointerSchema,
+  NativeSessionReferenceSchema,
+  NativeSessionReferenceStatusSchema,
+  type NativeSessionPointer,
+  type NativeSessionReference,
+} from './native-session.js';
+import {
   AgentSessionIdSchema,
+  ArtifactIdSchema,
   AttemptIdSchema,
   BriefContentSchema,
   ControlOperationSchema,
@@ -29,6 +38,7 @@ import {
   WorkflowPackageSnapshotSchema,
   WorkspaceIdSchema,
   type AgentSessionId,
+  type ArtifactId,
   type Attempt,
   type AttemptId,
   type BriefContent,
@@ -243,6 +253,37 @@ export type SettleAttemptInput = {
     | { kind: 'settled'; outcome: 'succeeded' | 'failed' | 'interrupted'; reason: string }
     | { kind: 'unconfirmed'; reason: string };
   idempotencyKey: string;
+};
+
+export type RecordNativeSessionReferenceInput = {
+  actor: SessionIdentity;
+  attemptId: AttemptId;
+  nativeKind: string;
+  nativeServerGeneration: string;
+  reference:
+    | NativeSessionPointer
+    | { harness: 'unknown'; kind: 'legacy'; value: string; source: 'legacy-nativeSession' };
+  status: z.infer<typeof NativeSessionReferenceStatusSchema>;
+  binding: z.infer<typeof NativeSessionBindingEvidenceSchema>;
+  rejectionReason?: string;
+};
+
+export type RetainedWorkArtifact = {
+  id: ArtifactId;
+  resultId: ResultId;
+  attemptId: AttemptId;
+  digest: Digest;
+  byteLength: number;
+  mediaType: string;
+  path: string;
+  ordinal: number;
+};
+
+export type AttemptRetainedWork = {
+  jobId: JobId;
+  attempts: Attempt[];
+  results: Result[];
+  artifacts: RetainedWorkArtifact[];
 };
 
 export type ResultDecisionInput = {
@@ -464,6 +505,17 @@ const resultRowSchema = z.object({
   created_at: TimestampSchema,
 });
 
+const retainedWorkArtifactRowSchema = z.object({
+  id: ArtifactIdSchema,
+  result_id: ResultIdSchema,
+  attempt_id: AttemptIdSchema,
+  digest: DigestSchema,
+  byte_length: z.number().int().nonnegative(),
+  media_type: z.string().min(1),
+  path: z.string().min(1),
+  ordinal: z.number().int().nonnegative(),
+});
+
 const stringArraySchema = z.array(z.string());
 const admittedAttemptSchema = z.object({
   attemptId: AttemptIdSchema,
@@ -520,6 +572,23 @@ const nativeIdentitySchema = z.union([
     locator: z.string().min(1),
   }),
 ]);
+const nativeSessionReferenceRowSchema = z.object({
+  id: z.string().min(1),
+  attempt_id: AttemptIdSchema,
+  session_id: AgentSessionIdSchema,
+  session_generation: SessionGenerationSchema,
+  host_id: HostIdSchema,
+  native_kind: z.string().min(1),
+  native_server_generation: z.string().min(1),
+  harness: z.string().min(1),
+  reference_kind: z.enum(['id', 'path', 'thread', 'legacy']),
+  reference_value: z.string().min(1),
+  source: z.string().min(1),
+  status: NativeSessionReferenceStatusSchema,
+  binding_json: z.string(),
+  rejection_reason: z.string().nullable(),
+  observed_at: TimestampSchema,
+});
 
 type SqliteRow = Record<string, SQLOutputValue>;
 
@@ -560,6 +629,27 @@ function attemptFromRow(raw: SqliteRow): Attempt {
     createdAt: row.created_at,
     settledAt: row.settled_at,
   };
+}
+
+function nativeSessionReferenceFromRow(raw: SqliteRow): NativeSessionReference {
+  const row = nativeSessionReferenceRowSchema.parse(raw);
+  return NativeSessionReferenceSchema.parse({
+    id: row.id,
+    attemptId: row.attempt_id,
+    sessionId: row.session_id,
+    sessionGeneration: row.session_generation,
+    hostId: row.host_id,
+    nativeKind: row.native_kind,
+    nativeServerGeneration: row.native_server_generation,
+    harness: row.harness,
+    kind: row.reference_kind,
+    value: row.reference_value,
+    source: row.source,
+    status: row.status,
+    observedAt: row.observed_at,
+    binding: parseJson(NativeSessionBindingEvidenceSchema, row.binding_json),
+    rejectionReason: row.rejection_reason,
+  });
 }
 
 function evidenceArtifactDigests(evidence: readonly Evidence[]): Digest[] {
@@ -1692,6 +1782,147 @@ export class Store {
 
   getAttempt(id: AttemptId): Attempt {
     return this.read((database) => this.#requireAttempt(database, id));
+  }
+
+  recordNativeSessionReference(input: RecordNativeSessionReferenceInput): NativeSessionReference {
+    this.#requireActor(input.actor, ['user', 'controller']);
+    const status = NativeSessionReferenceStatusSchema.parse(input.status);
+    const binding = NativeSessionBindingEvidenceSchema.parse(input.binding);
+    const reference =
+      input.reference.kind === 'legacy'
+        ? z
+            .object({
+              harness: z.literal('unknown'),
+              kind: z.literal('legacy'),
+              value: z.string().min(1),
+              source: z.literal('legacy-nativeSession'),
+            })
+            .strict()
+            .parse(input.reference)
+        : NativeSessionPointerSchema.parse(input.reference);
+    const rejectionReason = input.rejectionReason ?? null;
+    if ((status === 'unconfirmed') !== (rejectionReason !== null))
+      throw new StoreError(
+        'invalid-state',
+        'Only an unconfirmed reference observation can have a rejection reason',
+      );
+    if ((status === 'legacy-untyped') !== (reference.kind === 'legacy'))
+      throw new StoreError('invalid-state', 'Legacy references must remain explicitly untyped');
+    return this.transaction((database) => {
+      const attempt = this.#requireAttempt(database, input.attemptId);
+      if (
+        attempt.hostId !== this.project.hostId ||
+        attempt.nativeKind !== input.nativeKind ||
+        attempt.nativeServerGeneration !== input.nativeServerGeneration
+      )
+        throw new StoreError(
+          'identity-mismatch',
+          'Native reference does not match the attempt execution identity',
+        );
+      const bindingJson = canonicalJson(binding);
+      const id = this.#newId('native-session-reference', z.string().min(1));
+      const observedAt = this.#now();
+      database
+        .prepare(
+          `INSERT OR IGNORE INTO native_session_reference_observations
+             (id,project_id,attempt_id,session_id,session_generation,host_id,native_kind,
+              native_server_generation,harness,reference_kind,reference_value,source,status,
+              binding_json,rejection_reason,observed_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        )
+        .run(
+          id,
+          this.project.id,
+          attempt.id,
+          attempt.sessionId,
+          attempt.sessionGeneration,
+          attempt.hostId,
+          input.nativeKind,
+          input.nativeServerGeneration,
+          reference.harness,
+          reference.kind,
+          reference.value,
+          reference.source,
+          status,
+          bindingJson,
+          rejectionReason,
+          observedAt,
+        );
+      const row = requireValue(
+        database
+          .prepare(
+            `SELECT * FROM native_session_reference_observations
+             WHERE project_id=? AND attempt_id=? AND native_server_generation=?
+               AND harness=? AND reference_kind=? AND reference_value=? AND source=?
+               AND status=? AND binding_json=?`,
+          )
+          .get(
+            this.project.id,
+            attempt.id,
+            input.nativeServerGeneration,
+            reference.harness,
+            reference.kind,
+            reference.value,
+            reference.source,
+            status,
+            bindingJson,
+          ),
+        'invalid-state',
+        'Native reference observation was not stored',
+      );
+      return nativeSessionReferenceFromRow(row);
+    });
+  }
+
+  listNativeSessionReferences(attemptId: AttemptId): NativeSessionReference[] {
+    return this.read((database) => {
+      this.#requireAttempt(database, attemptId);
+      return database
+        .prepare(
+          `SELECT * FROM native_session_reference_observations
+           WHERE project_id=? AND attempt_id=? ORDER BY observed_at,rowid`,
+        )
+        .all(this.project.id, attemptId)
+        .map(nativeSessionReferenceFromRow);
+    });
+  }
+
+  retainedWork(attemptId: AttemptId): AttemptRetainedWork {
+    return this.read((database) => {
+      const attempt = this.#requireAttempt(database, attemptId);
+      const attempts = database
+        .prepare('SELECT * FROM attempts WHERE project_id=? AND job_id=? ORDER BY created_at,id')
+        .all(this.project.id, attempt.jobId)
+        .map(attemptFromRow);
+      const results = database
+        .prepare('SELECT * FROM results WHERE project_id=? AND job_id=? ORDER BY created_at,id')
+        .all(this.project.id, attempt.jobId)
+        .map((row) => this.#resultFromRow(row));
+      const artifacts = database
+        .prepare(
+          `SELECT a.id,ra.result_id,r.attempt_id,a.digest,a.byte_length,a.media_type,a.path,ra.ordinal
+           FROM results r
+           JOIN result_artifacts ra ON ra.result_id=r.id
+           JOIN artifacts a ON a.id=ra.artifact_id AND a.project_id=r.project_id
+           WHERE r.project_id=? AND r.job_id=?
+           ORDER BY r.created_at,r.id,ra.ordinal`,
+        )
+        .all(this.project.id, attempt.jobId)
+        .map((raw): RetainedWorkArtifact => {
+          const row = retainedWorkArtifactRowSchema.parse(raw);
+          return {
+            id: row.id,
+            resultId: row.result_id,
+            attemptId: row.attempt_id,
+            digest: row.digest,
+            byteLength: row.byte_length,
+            mediaType: row.media_type,
+            path: row.path,
+            ordinal: row.ordinal,
+          };
+        });
+      return { jobId: attempt.jobId, attempts, results, artifacts };
+    });
   }
 
   listAttempts(filter: { jobId?: JobId; workflowId?: WorkflowId } = {}): Attempt[] {

@@ -18,8 +18,11 @@ A safe-pause request uses the same workflow/control revision checks and atomic d
 - A deadline no later than the attempt's existing deadline.
 - Explicit allowed final-write paths/actions and their existing authority references; an empty project-write list is the default.
 - A checkpoint artifact schema version and a single-use acknowledgement token bound to that attempt and control.
+- The originating attempt ID plus the exact append-only native-session-reference observation IDs and native-history observation IDs used to describe the checkpointed conversation. Missing or unconfirmed native identity stays explicit.
 
 The assigned worker submits `checkpoint.record` with that envelope, artifact digests, retained-effect records, pending-operation references, and continuation notes. The runner checks the authenticated worker identity, current revisions, artifact availability and digests, and declared write scope. A worker acknowledgement remains a claim about its work; it does not establish compliance or native settlement.
+
+Every checkpoint artifact link is provenance-bearing: it names the checkpoint record, originating attempt, result when applicable, artifact digest, and the exact typed native reference/history observations. A fresh attempt may discover those retained links, but does not inherit the prior native conversation or its authority. This paragraph specifies the future safe-pause evidence shape only; it does not implement safe pause.
 
 Retained effects use a discriminated record: `workspace-change`, `git-change`, `external-operation`, or `none-observed`. Each record identifies its target, evidence references, and status (`confirmed` or `unconfirmed`). A `none-observed` assertion includes the checks supporting it. Unknown effects cannot be relabelled as absent.
 

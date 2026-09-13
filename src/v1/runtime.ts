@@ -15,11 +15,14 @@ import {
 import {
   NativeBindingSchema,
   NativeIdentitySchema,
+  type NativeIdentity,
   type NativeEffect,
   type NativeJournal,
   type NativeObservation,
 } from './native.js';
 import { nativeLocatorForRetirement } from './retirement.js';
+import { NativeSessionBindingEvidenceSchema } from './native-session.js';
+import { readNativeHistory, type NativeHistoryOptions } from './native-history.js';
 import { Settings, profileSchema } from './settings.js';
 import { Store, type SessionIdentity } from './store.js';
 
@@ -274,6 +277,55 @@ export class Runtime {
     );
   }
 
+  private persistReference(
+    id: AttemptId,
+    identity: NativeIdentity,
+    candidate?: Extract<NativeObservation, { kind: 'unconfirmed' }>['candidate'],
+    rejectionReason?: string,
+  ) {
+    const attempt = this.store.getAttempt(id);
+    if (!attempt.nativeKind || !attempt.nativeServerGeneration) return;
+    const reference = candidate?.reference ?? identity.sessionReference;
+    const binding: z.infer<typeof NativeSessionBindingEvidenceSchema> = {
+      workspaceId: identity.binding.workspaceId,
+      tabId: identity.tabId,
+      paneId: identity.paneId,
+      terminalId: identity.terminalId,
+      identityRevision: candidate?.identityRevision ?? identity.identityRevision,
+    };
+    if (identity.foregroundProcess) binding.foregroundProcess = identity.foregroundProcess;
+    if (identity.binding.endpoint.endpointProtocolGeneration !== undefined)
+      binding.endpointProtocolGeneration = identity.binding.endpoint.endpointProtocolGeneration;
+    if (reference) {
+      const input: Parameters<Store['recordNativeSessionReference']>[0] = {
+        actor: this.actor,
+        attemptId: id,
+        nativeKind: attempt.nativeKind,
+        nativeServerGeneration: attempt.nativeServerGeneration,
+        reference,
+        status: candidate ? 'unconfirmed' : 'confirmed',
+        binding,
+      };
+      if (candidate && rejectionReason) input.rejectionReason = rejectionReason;
+      this.store.recordNativeSessionReference(input);
+    } else if (identity.nativeSession) {
+      this.store.recordNativeSessionReference({
+        actor: this.actor,
+        attemptId: id,
+        nativeKind: attempt.nativeKind,
+        nativeServerGeneration: attempt.nativeServerGeneration,
+        reference: {
+          harness: 'unknown',
+          kind: 'legacy',
+          value: identity.nativeSession,
+          source: 'legacy-nativeSession',
+        },
+        status: 'legacy-untyped',
+        binding,
+      });
+    }
+  }
+
   async start(id: AttemptId) {
     this.assertController();
     const row = this.row(id);
@@ -330,6 +382,7 @@ export class Runtime {
       });
       this.update(id, 'launched', { identity: launched.identity, launch: launched });
     });
+    this.persistReference(id, launched.identity);
     return this.control(id) ? this.reconcile(id) : this.submit(id);
   }
 
@@ -398,6 +451,23 @@ export class Runtime {
         observation: { kind: 'unconfirmed', reason: submitted.reason },
         idempotencyKey: `prompt-unconfirmed/${id}`,
       });
+    if (submitted.kind === 'submitted') {
+      try {
+        await this.inspect(id);
+      } catch (error) {
+        const observation = {
+          kind: 'unconfirmed',
+          reason: `Post-prompt reference refresh failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+        };
+        this.store.transaction((db) =>
+          db
+            .prepare(
+              'UPDATE native_attempts SET last_observation_json=?,updated_at=? WHERE project_id=? AND attempt_id=?',
+            )
+            .run(JSON.stringify(observation), new Date().toISOString(), this.store.project.id, id),
+        );
+      }
+    }
     return { attempt: this.store.getAttempt(id), native: submitted };
   }
 
@@ -417,6 +487,12 @@ export class Runtime {
       };
     const identity = NativeIdentitySchema.parse(JSON.parse(row.identity_json));
     const observation = await this.adapterFor(this.journal(id)).invoke('observe', { identity });
+    if ('identity' in observation) {
+      this.update(id, row.phase, { identity: observation.identity });
+      this.persistReference(id, observation.identity);
+    } else if (observation.candidate) {
+      this.persistReference(id, identity, observation.candidate, observation.reason);
+    }
     this.store.transaction((db) =>
       db
         .prepare(
@@ -431,6 +507,28 @@ export class Runtime {
         ),
     );
     return { attempt: this.store.getAttempt(id), native: observation };
+  }
+
+  async inspectRetainedWork(
+    id: AttemptId,
+    options: NativeHistoryOptions & { refresh?: boolean } = {},
+  ) {
+    this.assertController();
+    if (options.refresh !== false) await this.inspect(id);
+    const references = this.store.listNativeSessionReferences(id);
+    const reference = references.at(-1) ?? null;
+    const history = reference
+      ? readNativeHistory(reference, this.store.project.hostId, options)
+      : {
+          kind: 'missing-reference' as const,
+          reason: 'This attempt has no native conversation reference',
+        };
+    return {
+      attempt: this.store.getAttempt(id),
+      references,
+      history,
+      retained: this.store.retainedWork(id),
+    };
   }
 
   private markUnconfirmed(id: AttemptId, reason: string) {

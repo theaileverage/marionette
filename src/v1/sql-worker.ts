@@ -86,6 +86,7 @@ const PUBLIC_VIEWS = new Set([
   'public_board_threads',
   'public_board_posts',
   'public_agent_sessions',
+  'public_native_session_references',
   'public_jobs',
   'public_results',
   'public_notification_events',

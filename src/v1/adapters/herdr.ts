@@ -20,6 +20,7 @@ import {
   type NativeSubmission,
   type CleanupResult,
 } from '../native.js';
+import { NativeSessionPointerSchema } from '../native-session.js';
 import type { HerdrClient } from '../../herdr-sdk.js';
 
 const reason = z.string().min(1);
@@ -35,7 +36,19 @@ export const herdrObservationSchema = z.discriminatedUnion('kind', [
       slotReady: z.literal(true),
     })
     .strict(),
-  z.object({ kind: z.literal('unconfirmed'), reason }).strict(),
+  z
+    .object({
+      kind: z.literal('unconfirmed'),
+      reason,
+      candidate: z
+        .object({
+          reference: NativeSessionPointerSchema,
+          identityRevision: z.number().int().nonnegative(),
+        })
+        .strict()
+        .optional(),
+    })
+    .strict(),
 ]);
 export const herdrSubmissionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('submitted'), operationId: z.string().min(1) }).strict(),

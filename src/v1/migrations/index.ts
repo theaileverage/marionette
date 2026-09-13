@@ -4,6 +4,7 @@ import { coreSql } from './001_core.js';
 import { workflowsSql } from './002_workflows.js';
 import { nativeRuntimeSql } from './004_native_runtime.js';
 import { artifactMediaTypeSql } from './005_artifact_media_type.js';
+import { nativeSessionReferencesSql } from './007_native_session_references.js';
 
 export type Migration = {
   version: number;
@@ -18,4 +19,5 @@ export const migrations = [
   { version: 4, name: '004_native_runtime', sql: nativeRuntimeSql },
   { version: 5, name: '005_artifact_media_type', sql: artifactMediaTypeSql },
   { version: 6, name: '006_control_dispatch', sql: controlDispatchSql },
+  { version: 7, name: '007_native_session_references', sql: nativeSessionReferencesSql },
 ] satisfies readonly Migration[];

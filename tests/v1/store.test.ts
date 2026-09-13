@@ -183,6 +183,161 @@ function admitRunningAttempt(
   return admission.attempt;
 }
 
+test('persists immutable typed and legacy native session observations', (t) => {
+  const current = fixture(t);
+  const attempt = admitRunningAttempt(current, {
+    jobKey: 'native-reference',
+    admissionKey: 'native-reference-admit',
+    launchKey: 'native-reference-launch',
+    observationKey: 'native-reference-running',
+  });
+  const binding = {
+    workspaceId: 'herdr-workspace',
+    tabId: 'tab-1',
+    paneId: 'pane-1',
+    terminalId: 'terminal-1',
+    identityRevision: 4,
+  };
+  const first = current.store.recordNativeSessionReference({
+    actor: current.controller,
+    attemptId: attempt.id,
+    nativeKind: 'herdr-pane',
+    nativeServerGeneration: 'server-1',
+    reference: {
+      harness: 'agy',
+      kind: 'id',
+      value: 'conversation-1',
+      source: 'herdr:antigravity_cli',
+    },
+    status: 'confirmed',
+    binding,
+  });
+  const replay = current.store.recordNativeSessionReference({
+    actor: current.controller,
+    attemptId: attempt.id,
+    nativeKind: 'herdr-pane',
+    nativeServerGeneration: 'server-1',
+    reference: {
+      harness: 'agy',
+      kind: 'id',
+      value: 'conversation-1',
+      source: 'herdr:antigravity_cli',
+    },
+    status: 'confirmed',
+    binding,
+  });
+  assert.equal(replay.id, first.id);
+  const legacy = current.store.recordNativeSessionReference({
+    actor: current.controller,
+    attemptId: attempt.id,
+    nativeKind: 'herdr-pane',
+    nativeServerGeneration: 'server-1',
+    reference: {
+      harness: 'unknown',
+      kind: 'legacy',
+      value: '/bytes/retained/exactly',
+      source: 'legacy-nativeSession',
+    },
+    status: 'legacy-untyped',
+    binding: { ...binding, identityRevision: 5 },
+  });
+  assert.equal(legacy.kind, 'legacy');
+  assert.deepEqual(
+    current.store.listNativeSessionReferences(attempt.id).map(({ value, status }) => ({
+      value,
+      status,
+    })),
+    [
+      { value: 'conversation-1', status: 'confirmed' },
+      { value: '/bytes/retained/exactly', status: 'legacy-untyped' },
+    ],
+  );
+  assert.throws(
+    () =>
+      current.store.transaction((database) =>
+        database
+          .prepare('UPDATE native_session_reference_observations SET reference_value=? WHERE id=?')
+          .run('changed', first.id),
+      ),
+    /immutable/,
+  );
+});
+
+test('a fresh attempt can discover prior attempts, results, and retained artifacts', (t) => {
+  const current = fixture(t);
+  const original = admitRunningAttempt(current, {
+    jobKey: 'retained-work',
+    admissionKey: 'retained-work-admit',
+    launchKey: 'retained-work-launch',
+    observationKey: 'retained-work-running',
+  });
+  const files = new ArtifactFiles(current.project.stateDirectory);
+  const artifact = files.put(Buffer.from('retained checkpoint'), 'text/plain');
+  const artifactDigest = DigestSchema.parse(artifact.digest);
+  registerArtifact(current.store, files, artifact);
+  const result = current.store.recordResult({
+    actor: current.controller,
+    attemptId: original.id,
+    content: { kind: 'report', body: 'Original retained work', artifactDigests: [artifactDigest] },
+    inputDigest: zeroDigest,
+    workspaceDigest: oneDigest,
+    evidenceClaims: [],
+    evidence: [],
+    verification: { kind: 'not-requested' },
+    upstreamResultIds: [],
+    idempotencyKey: 'retained-work-result',
+  });
+  current.store.decideResult({
+    actor: current.controller,
+    resultId: result.id,
+    expectedBriefRevision: 1,
+    decision: { kind: 'accepted' },
+    idempotencyKey: 'retained-work-accept',
+  });
+  current.store.settleAttempt({
+    actor: current.controller,
+    attemptId: original.id,
+    observation: { kind: 'settled', outcome: 'succeeded', reason: 'fixture settled' },
+    idempotencyKey: 'retained-work-settle',
+  });
+  const freshWorker = registerWorker(current, 'fresh-worker');
+  const fresh = current.store.admitAttempt({
+    actor: current.controller,
+    jobId: original.jobId,
+    session: freshWorker,
+    resourceKey: 'workspace:retained-work',
+    inputResultIds: [result.id],
+    expectedBriefRevision: 1,
+    workflow: { kind: 'direct' },
+    idempotencyKey: 'retained-work-fresh-admit',
+  }).attempt;
+  const retained = current.store.retainedWork(fresh.id);
+  assert.deepEqual(
+    retained.attempts.map(({ id }) => id),
+    [original.id, fresh.id],
+  );
+  assert.deepEqual(
+    retained.results.map(({ id }) => id),
+    [result.id],
+  );
+  assert.deepEqual(
+    retained.artifacts.map(({ resultId, attemptId, digest, mediaType }) => ({
+      resultId,
+      attemptId,
+      digest,
+      mediaType,
+    })),
+    [
+      {
+        resultId: result.id,
+        attemptId: original.id,
+        digest: artifactDigest,
+        mediaType: 'text/plain',
+      },
+    ],
+  );
+});
+
 test('binds a database to one project and authenticates immutable session generations', (t) => {
   const current = fixture(t);
   assert.equal(

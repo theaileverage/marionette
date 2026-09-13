@@ -292,7 +292,8 @@ test('Codex app-server composes only messaging and retains its expected-turn che
     close() {},
     async request(request) {
       calls.push(request);
-      if (request.method === 'thread/read') return { kind: 'thread-read', status: 'active' };
+      if (request.method === 'thread/read')
+        return { kind: 'thread-read', threadId: 't', status: 'active', turns: [] };
       if (request.method === 'turn/steer') return { kind: 'turn-steered', turnId: 'turn-1' };
       throw new Error('Unexpected fixture request');
     },
@@ -314,7 +315,7 @@ test('Codex app-server composes only messaging and retains its expected-turn che
   });
   assert.deepEqual(
     adapter.describe().capabilities.map(({ name }) => name),
-    ['deliver'],
+    ['inspect', 'deliver'],
   );
   assert.doesNotMatch(JSON.stringify(adapter.describe()), /SECRET_CREDENTIAL/);
   const result = await adapter.invoke('deliver', {

@@ -16,6 +16,7 @@ import {
   type NativeJournal,
   type NativeLaunchLocator,
 } from '../../src/v1/native.js';
+import { herdrSessionPointer } from '../../src/v1/native-session.js';
 
 type Request = { id: string; method: string; params: object };
 type HerdrReply = object;
@@ -27,7 +28,12 @@ function agent(
 ) {
   return {
     agent: 'agy',
-    agent_session: { agent: 'agy', kind: 'id', source: 'test', value: 'native-1' },
+    agent_session: {
+      agent: 'agy',
+      kind: 'id',
+      source: 'herdr:antigravity_cli',
+      value: 'native-1',
+    },
     agent_status: status,
     interactive_ready: true,
     launch_pending: false,
@@ -87,6 +93,32 @@ const endpointInspector = {
     return 'server-start-1';
   },
 };
+
+test('Herdr references require the official source and harness pairing', () => {
+  assert.deepEqual(
+    herdrSessionPointer({
+      source: 'herdr:pi',
+      agent: 'pi',
+      kind: 'path',
+      value: '/private/tmp/pi-session.jsonl',
+    }),
+    {
+      harness: 'pi',
+      kind: 'path',
+      value: '/private/tmp/pi-session.jsonl',
+      source: 'herdr:pi',
+    },
+  );
+  assert.equal(
+    herdrSessionPointer({
+      source: 'herdr:pi',
+      agent: 'agy',
+      kind: 'id',
+      value: 'unrelated',
+    }),
+    undefined,
+  );
+});
 
 test('local endpoint inspector ties a socket owner to its process start instance', async () => {
   const calls: { command: string; args: readonly string[] }[] = [];
@@ -209,6 +241,12 @@ test('native adapter registers, launches AGY in an owned tab, prompts, settles, 
     assert.equal(launched.kind, 'launched');
     if (launched.kind !== 'launched') return;
     assert.equal(launched.identity.agentKind, 'agy');
+    assert.deepEqual(launched.identity.sessionReference, {
+      harness: 'agy',
+      kind: 'id',
+      value: 'native-1',
+      source: 'herdr:antigravity_cli',
+    });
     assert.equal(
       (await adapter.invoke('prompt', { identity: launched.identity, text: 'inspect only' })).kind,
       'submitted',
@@ -370,6 +408,7 @@ test('native adapter uses a foreground process start identity when AGY has no na
   const socketPath = join(root, 'herdr.sock');
   const methods: string[] = [];
   let startToken = 'process-start-1';
+  let sessionAvailable = false;
   const server = await fakeHerdr(socketPath, (request) => {
     methods.push(request.method);
     if (request.method === 'ping')
@@ -384,7 +423,11 @@ test('native adapter uses a foreground process start identity when AGY has no na
       };
     if (request.method === 'agent.start')
       return { type: 'agent_started', agent: agentWithoutSession(), argv: ['agy'] };
-    if (request.method === 'agent.get') return { type: 'agent_info', agent: agentWithoutSession() };
+    if (request.method === 'agent.get')
+      return {
+        type: 'agent_info',
+        agent: sessionAvailable ? agent('working') : agentWithoutSession(),
+      };
     if (request.method === 'pane.process_info')
       return {
         type: 'pane_process_info',
@@ -398,8 +441,10 @@ test('native adapter uses a foreground process start identity when AGY has no na
         type: 'pane_read',
         read: { pane_id: 'pane-1', tab_id: 'tab-1', workspace_id: 'workspace-1', text: '' },
       };
-    if (request.method === 'agent.prompt')
-      return { type: 'agent_prompted', agent: agentWithoutSession('working') };
+    if (request.method === 'agent.prompt') {
+      sessionAvailable = true;
+      return { type: 'agent_prompted', agent: agent('working') };
+    }
     throw new Error(`unexpected ${request.method}`);
   });
   try {
@@ -435,12 +480,24 @@ test('native adapter uses a foreground process start identity when AGY has no na
       startToken: 'process-start-1',
     });
     assert.equal(launch.identity.nativeSession, undefined);
+    assert.equal(launch.identity.sessionReference, undefined);
+    assert.equal((await adapter.prompt(launch.identity, 'first invocation')).kind, 'submitted');
+    const enriched = await adapter.observe(launch.identity);
+    assert.equal(enriched.kind, 'working');
+    if (enriched.kind === 'working')
+      assert.deepEqual(enriched.identity.sessionReference, {
+        harness: 'agy',
+        kind: 'id',
+        value: 'native-1',
+        source: 'herdr:antigravity_cli',
+      });
+    assert.equal(methods.filter((method) => method === 'agent.prompt').length, 1);
     startToken = 'process-start-2';
     assert.equal(
       (await adapter.prompt(launch.identity, 'must not reach a reused process')).kind,
       'unconfirmed',
     );
-    assert.equal(methods.includes('agent.prompt'), false);
+    assert.equal(methods.filter((method) => method === 'agent.prompt').length, 1);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     rmSync(root, { recursive: true, force: true });
@@ -490,6 +547,44 @@ test('native recovery reopens only an unchanged session locator', async () => {
       (await adapter.recover(binding, { ...locator, nativeSession: 'native-session-changed' }))
         .kind,
       'unconfirmed',
+    );
+    const changed = await adapter.observe({
+      ...locator,
+      identityRevision: 3,
+      sessionReference: {
+        harness: 'agy',
+        kind: 'id',
+        value: 'prior-native-session',
+        source: 'herdr:antigravity_cli',
+      },
+      nativeSession: undefined,
+    });
+    assert.deepEqual(changed, {
+      kind: 'unconfirmed',
+      reason: 'Native conversation reference changed without stable process evidence',
+      candidate: {
+        reference: {
+          harness: 'agy',
+          kind: 'id',
+          value: 'native-1',
+          source: 'herdr:antigravity_cli',
+        },
+        identityRevision: 4,
+      },
+    });
+    assert.deepEqual(
+      await adapter.observe({
+        ...locator,
+        identityRevision: 5,
+        sessionReference: {
+          harness: 'agy',
+          kind: 'id',
+          value: 'native-1',
+          source: 'herdr:antigravity_cli',
+        },
+        nativeSession: undefined,
+      }),
+      { kind: 'unconfirmed', reason: 'Native agent identity revision moved backwards' },
     );
     assert.equal(methods.includes('tab.create'), false);
     assert.equal(methods.includes('agent.start'), false);
@@ -619,7 +714,7 @@ test('native launch retains a known locator when the started agent is not explic
     assert.equal(launch.kind, 'unconfirmed');
     if (launch.kind !== 'unconfirmed') return;
     assert.equal(launch.operationId, 'op-2');
-    assert.equal(launch.locator?.nativeSession, 'native-1');
+    assert.equal(launch.locator?.sessionReference?.value, 'native-1');
     assert.equal(launch.locator?.paneId, 'pane-1');
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));

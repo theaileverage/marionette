@@ -389,6 +389,14 @@ export class Marionette {
     return this.#runtime.inspect(id);
   }
 
+  inspectRetainedWork(
+    id: AttemptId,
+    options: Omit<Parameters<Runtime['inspectRetainedWork']>[1], 'id'> = {},
+  ) {
+    this.#authenticate();
+    return this.#runtime.inspectRetainedWork(id, options);
+  }
+
   async reconcileAttempt(id: AttemptId) {
     const session = this.#authenticate();
     if (session.role === 'worker') throw new Error('An active controller or user is required');

@@ -3,6 +3,7 @@ import { artifactSchema } from './artifacts.js';
 import { BoardPostKindSchema, BoardReferenceSchema } from './board.js';
 import {
   AgentSessionIdSchema,
+  ArtifactIdSchema,
   AttemptIdSchema,
   AttemptPhaseSchema,
   BriefContentSchema,
@@ -29,6 +30,7 @@ import {
   WorkspaceIdSchema,
 } from './model.js';
 import { NativeBindingSchema, NativeIdentitySchema } from './native.js';
+import { NativeSessionPointerSchema, NativeSessionReferenceSchema } from './native-session.js';
 import { type Operation } from './operations.js';
 import { profileSchema } from './settings.js';
 
@@ -220,13 +222,73 @@ const nativeObservationSchema = z.discriminatedUnion('kind', [
     identity: NativeIdentitySchema,
     slotReady: z.literal(true),
   }),
-  publicObject({ kind: z.literal('unconfirmed'), reason: z.string().min(1) }),
+  publicObject({
+    kind: z.literal('unconfirmed'),
+    reason: z.string().min(1),
+    candidate: z
+      .object({
+        reference: NativeSessionPointerSchema,
+        identityRevision: z.number().int().nonnegative(),
+      })
+      .optional(),
+  }),
   publicObject({ kind: z.literal('unsupported'), reason: z.string().min(1) }),
   publicObject({ kind: z.literal('submitted'), operationId: z.string().min(1) }),
 ]);
 const attemptNativeSchema = publicObject({
   attempt: attemptSchema,
   native: nativeObservationSchema,
+});
+
+const nativeHistorySchema = z.discriminatedUnion('kind', [
+  publicObject({ kind: z.literal('missing-reference'), reason: z.string().min(1) }),
+  publicObject({ kind: z.literal('identity-unconfirmed'), reason: z.string().min(1) }),
+  publicObject({
+    kind: z.literal('unsupported'),
+    harness: z.string().min(1),
+    referenceKind: z.string().min(1),
+    reason: z.string().min(1),
+  }),
+  publicObject({ kind: z.literal('session-missing'), reason: z.string().min(1) }),
+  publicObject({ kind: z.literal('unsafe-path'), reason: z.string().min(1) }),
+  publicObject({
+    kind: z.literal('malformed-history'),
+    reason: z.string().min(1),
+    offset: z.number().int().nonnegative(),
+  }),
+  publicObject({
+    kind: z.literal('available'),
+    harness: z.string().min(1),
+    referenceId: z.string().min(1),
+    cursor: z.number().int().nonnegative(),
+    nextCursor: z.number().int().nonnegative().nullable(),
+    truncated: z.boolean(),
+    bytesRead: z.number().int().nonnegative(),
+    entries: z.array(publicObject({ offset: z.number().int().nonnegative(), value: z.unknown() })),
+  }),
+]);
+
+const retainedWorkSchema = publicObject({
+  attempt: attemptSchema,
+  references: z.array(NativeSessionReferenceSchema),
+  history: nativeHistorySchema,
+  retained: publicObject({
+    jobId: JobIdSchema,
+    attempts: z.array(attemptSchema),
+    results: z.array(resultSchema),
+    artifacts: z.array(
+      publicObject({
+        id: ArtifactIdSchema,
+        resultId: ResultIdSchema,
+        attemptId: AttemptIdSchema,
+        digest: DigestSchema,
+        byteLength: z.number().int().nonnegative(),
+        mediaType: z.string().min(1),
+        path: z.string().min(1),
+        ordinal: z.number().int().nonnegative(),
+      }),
+    ),
+  }),
 });
 
 const retirementTargetSchema = publicObject({
@@ -340,6 +402,7 @@ export const operationOutputSchemas = {
   'attempt.admit': AttemptIdSchema,
   'attempt.start': attemptNativeSchema,
   'attempt.inspect': attemptNativeSchema,
+  'attempt.retained-work': retainedWorkSchema,
   'attempt.reconcile': attemptNativeSchema,
   'brief.acknowledge': briefSchema,
   'result.get': resultSchema,

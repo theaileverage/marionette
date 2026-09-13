@@ -227,6 +227,21 @@ export const operationSchema = z.discriminatedUnion('operation', [
     .strict(),
   z.object({ operation: z.literal('attempt.start'), id: AttemptIdSchema }).strict(),
   z.object({ operation: z.literal('attempt.inspect'), id: AttemptIdSchema }).strict(),
+  z
+    .object({
+      operation: z.literal('attempt.retained-work'),
+      id: AttemptIdSchema,
+      refresh: z.boolean().default(true),
+      cursor: z.number().int().nonnegative().optional(),
+      limit: z.number().int().min(1).max(200).optional(),
+      maxBytes: z
+        .number()
+        .int()
+        .min(1)
+        .max(256 * 1024)
+        .optional(),
+    })
+    .strict(),
   z.object({ operation: z.literal('attempt.reconcile'), id: AttemptIdSchema }).strict(),
   z
     .object({
@@ -339,6 +354,8 @@ export async function execute(client: Marionette, raw: Operation) {
       return client.startAttempt(input.id);
     case 'attempt.inspect':
       return client.inspectAttempt(input.id);
+    case 'attempt.retained-work':
+      return client.inspectRetainedWork(input.id, payload(input));
     case 'attempt.reconcile':
       return client.reconcileAttempt(input.id);
     case 'sql.contribute':

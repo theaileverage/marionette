@@ -4,6 +4,11 @@ import { statSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import { HerdrClient, HerdrError, type ResponseTypes } from '../herdr-sdk.js';
+import {
+  NativeSessionPointerSchema,
+  herdrSessionPointer,
+  type NativeSessionPointer,
+} from './native-session.js';
 
 export type NativeBinding = {
   hostId: string;
@@ -28,6 +33,8 @@ export type NativeIdentity = {
   terminalId: string;
   agentKind: string;
   agentName: string;
+  sessionReference?: NativeSessionPointer;
+  /** Present only when decoding pre-v7 persisted identity bytes. */
   nativeSession?: string;
   foregroundProcess?: NativeForegroundProcess;
   identityRevision: number;
@@ -62,6 +69,7 @@ export const NativeIdentitySchema = z
     terminalId: z.string().min(1),
     agentKind: z.string().min(1),
     agentName: z.string().min(1),
+    sessionReference: NativeSessionPointerSchema.optional(),
     nativeSession: z.string().min(1).optional(),
     foregroundProcess: z
       .object({ pid: z.number().int().positive(), startToken: z.string().min(1) })
@@ -72,7 +80,7 @@ export const NativeIdentitySchema = z
   })
   .strict()
   .superRefine((identity, context) => {
-    if (!identity.nativeSession && !identity.foregroundProcess)
+    if (!identity.sessionReference && !identity.nativeSession && !identity.foregroundProcess)
       context.addIssue({
         code: z.ZodIssueCode.custom,
         message: 'Native identity needs a native session or foreground process instance',
@@ -87,6 +95,8 @@ export type NativeLaunchLocator = {
   agentKind: string;
   agentName: string;
   ownedTabId: string;
+  sessionReference?: NativeSessionPointer;
+  /** Present only in pre-v7 persisted launch locators. */
   nativeSession?: string;
   foregroundProcess?: NativeForegroundProcess;
   identityRevision?: number;
@@ -101,6 +111,7 @@ export const NativeLaunchLocatorSchema = z
     agentKind: z.string().min(1),
     agentName: z.string().min(1),
     ownedTabId: z.string().min(1),
+    sessionReference: NativeSessionPointerSchema.optional(),
     nativeSession: z.string().min(1).optional(),
     foregroundProcess: z
       .object({ pid: z.number().int().positive(), startToken: z.string().min(1) })
@@ -110,7 +121,7 @@ export const NativeLaunchLocatorSchema = z
   })
   .strict()
   .superRefine((locator, context) => {
-    if (!locator.nativeSession && !locator.foregroundProcess)
+    if (!locator.sessionReference && !locator.nativeSession && !locator.foregroundProcess)
       context.addIssue({
         code: z.ZodIssueCode.custom,
         message: 'Native launch locator needs a native session or foreground process instance',
@@ -126,6 +137,7 @@ export const NativeAdoptionLocatorSchema = z
     agentKind: z.string().min(1),
     agentName: z.string().min(1),
     ownedTabId: z.string().min(1),
+    sessionReference: NativeSessionPointerSchema.optional(),
     nativeSession: z.string().min(1).optional(),
     foregroundProcess: z
       .object({ pid: z.number().int().positive(), startToken: z.string().min(1) })
@@ -260,7 +272,11 @@ export type NativeObservation =
   | { kind: 'blocked'; identity: NativeIdentity; reason: string }
   | { kind: 'manual-required'; identity: NativeIdentity; reason: string }
   | { kind: 'settled'; identity: NativeIdentity; slotReady: true }
-  | { kind: 'unconfirmed'; reason: string };
+  | {
+      kind: 'unconfirmed';
+      reason: string;
+      candidate?: { reference: NativeSessionPointer; identityRevision: number };
+    };
 
 export type LaunchRequest = {
   cwd: string;
@@ -310,9 +326,11 @@ function agentIdentity(
   ownedTabId: string,
   foregroundProcess?: NativeForegroundProcess,
 ) {
-  const nativeSession = agent.agent_session?.value;
+  const sessionReference = agent.agent_session
+    ? herdrSessionPointer(agent.agent_session)
+    : undefined;
   if (
-    (!nativeSession && !foregroundProcess) ||
+    (!sessionReference && !foregroundProcess) ||
     agent.workspace_id !== binding.workspaceId ||
     agent.tab_id !== ownedTabId ||
     agent.agent !== request.agentKind ||
@@ -329,7 +347,7 @@ function agentIdentity(
     identityRevision: agent.revision,
     ownedTabId,
   };
-  if (nativeSession) identity.nativeSession = nativeSession;
+  if (sessionReference) identity.sessionReference = sessionReference;
   if (foregroundProcess) identity.foregroundProcess = foregroundProcess;
   return identity;
 }
@@ -408,6 +426,7 @@ function launchLocator(
 function identityLocator(identity: NativeIdentity): NativeLaunchLocator {
   return {
     ...identity,
+    sessionReference: identity.sessionReference,
     nativeSession: identity.nativeSession,
     identityRevision: identity.identityRevision,
   };
@@ -435,7 +454,12 @@ export class HerdrNativeAdapter {
   ) {}
 
   private async foregroundProcess(client: HerdrClient, paneId: string, agentKind: string) {
-    const response = await client.request('pane.process_info', { pane_id: paneId });
+    let response: ResponseTypes.ResponseResult;
+    try {
+      response = await client.request('pane.process_info', { pane_id: paneId });
+    } catch {
+      return undefined;
+    }
     if (response.type !== 'pane_process_info' || response.process_info.pane_id !== paneId)
       return undefined;
     const matches = (response.process_info.foreground_processes ?? []).filter(
@@ -454,32 +478,73 @@ export class HerdrNativeAdapter {
     request: Pick<LaunchRequest, 'agentKind' | 'agentName'>,
     ownedTabId: string,
   ) {
-    if (agent.agent_session?.value) return agentIdentity(binding, agent, request, ownedTabId);
-    const foregroundProcess = await this.foregroundProcess(
-      client,
-      agent.pane_id,
-      request.agentKind,
-    );
+    const hasVerifiedReference = agent.agent_session
+      ? herdrSessionPointer(agent.agent_session) !== undefined
+      : false;
+    const foregroundProcess = hasVerifiedReference
+      ? undefined
+      : await this.foregroundProcess(client, agent.pane_id, request.agentKind);
     return agentIdentity(binding, agent, request, ownedTabId, foregroundProcess);
   }
 
-  private async sameIdentity(
+  private async refreshedIdentity(
     client: HerdrClient,
     identity: NativeIdentity,
     agent: ResponseTypes.AgentInfo,
-  ) {
-    if (!sameAgent(identity, agent)) return false;
-    if (identity.nativeSession) return agent.agent_session?.value === identity.nativeSession;
-    if (!identity.foregroundProcess) return false;
-    const foregroundProcess = await this.foregroundProcess(
-      client,
-      identity.paneId,
-      identity.agentKind,
+  ): Promise<
+    | { kind: 'confirmed'; identity: NativeIdentity }
+    | {
+        kind: 'unconfirmed';
+        reason: string;
+        candidate?: { reference: NativeSessionPointer; identityRevision: number };
+      }
+  > {
+    if (!sameAgent(identity, agent))
+      return { kind: 'unconfirmed', reason: 'Native agent locator no longer matches' };
+    if (agent.revision < identity.identityRevision)
+      return { kind: 'unconfirmed', reason: 'Native agent identity revision moved backwards' };
+    const candidate = agent.agent_session ? herdrSessionPointer(agent.agent_session) : undefined;
+    let foregroundProcess: NativeForegroundProcess | undefined;
+    if (identity.foregroundProcess) {
+      foregroundProcess = await this.foregroundProcess(client, identity.paneId, identity.agentKind);
+      if (
+        foregroundProcess?.pid !== identity.foregroundProcess.pid ||
+        foregroundProcess.startToken !== identity.foregroundProcess.startToken
+      )
+        return { kind: 'unconfirmed', reason: 'Native foreground process changed' };
+    }
+    if (identity.sessionReference && !foregroundProcess) {
+      if (
+        !candidate ||
+        candidate.kind !== identity.sessionReference.kind ||
+        candidate.value !== identity.sessionReference.value ||
+        candidate.source !== identity.sessionReference.source ||
+        candidate.harness !== identity.sessionReference.harness
+      ) {
+        const result: Extract<NativeObservation, { kind: 'unconfirmed' }> = {
+          kind: 'unconfirmed',
+          reason: 'Native conversation reference changed without stable process evidence',
+        };
+        if (candidate)
+          result.candidate = { reference: candidate, identityRevision: agent.revision };
+        return result;
+      }
+    }
+    if (identity.nativeSession && !identity.sessionReference && !foregroundProcess) {
+      if (agent.agent_session?.value !== identity.nativeSession)
+        return { kind: 'unconfirmed', reason: 'Legacy native session value changed' };
+      return { kind: 'confirmed', identity: { ...identity, identityRevision: agent.revision } };
+    }
+    const refreshed = agentIdentity(
+      identity.binding,
+      agent,
+      identity,
+      identity.ownedTabId,
+      foregroundProcess,
     );
-    return (
-      foregroundProcess?.pid === identity.foregroundProcess.pid &&
-      foregroundProcess.startToken === identity.foregroundProcess.startToken
-    );
+    return refreshed
+      ? { kind: 'confirmed', identity: refreshed }
+      : { kind: 'unconfirmed', reason: 'Native agent identity is unavailable' };
   }
 
   /** Reopens a persisted launch locator using read-only checks; it never creates or controls a pane. */
@@ -493,35 +558,14 @@ export class HerdrNativeAdapter {
       const current = await client.request('agent.get', { target: locator.paneId });
       if (current.type !== 'agent_info' || !sameAgent(locator, current.agent))
         return { kind: 'unconfirmed', reason: 'Native agent locator no longer matches' };
-      if (locator.nativeSession) {
-        if (current.agent.agent_session?.value !== locator.nativeSession)
-          return { kind: 'unconfirmed', reason: 'Native agent session changed' };
-        const identity = agentIdentity(binding, current.agent, locator, locator.ownedTabId);
-        if (!identity)
-          return { kind: 'unconfirmed', reason: 'Native agent identity is unavailable' };
-        return this.observe(identity);
-      }
-      if (!locator.foregroundProcess)
-        return { kind: 'unconfirmed', reason: 'Native process identity is unavailable' };
-      const foregroundProcess = await this.foregroundProcess(
-        client,
-        locator.paneId,
-        locator.agentKind,
-      );
-      if (
-        foregroundProcess?.pid !== locator.foregroundProcess.pid ||
-        foregroundProcess.startToken !== locator.foregroundProcess.startToken
-      )
-        return { kind: 'unconfirmed', reason: 'Native foreground process changed' };
-      const identity = agentIdentity(
-        binding,
-        current.agent,
-        locator,
-        locator.ownedTabId,
-        foregroundProcess,
-      );
-      if (!identity) return { kind: 'unconfirmed', reason: 'Native agent identity is unavailable' };
-      return this.observe(identity);
+      const persisted = NativeIdentitySchema.safeParse({
+        ...locator,
+        identityRevision: locator.identityRevision ?? current.agent.revision,
+      });
+      if (!persisted.success)
+        return { kind: 'unconfirmed', reason: 'Persisted native process identity is unavailable' };
+      const refreshed = await this.refreshedIdentity(client, persisted.data, current.agent);
+      return refreshed.kind === 'confirmed' ? this.observe(refreshed.identity) : refreshed;
     } catch (error) {
       return {
         kind: 'unconfirmed',
@@ -741,11 +785,11 @@ export class HerdrNativeAdapter {
       const current = await client.request('agent.get', {
         target: identity.paneId,
       });
-      if (
-        current.type !== 'agent_info' ||
-        !(await this.sameIdentity(client, identity, current.agent))
-      )
+      if (current.type !== 'agent_info')
         return { kind: 'unconfirmed', reason: 'Native agent identity changed' };
+      const refreshed = await this.refreshedIdentity(client, identity, current.agent);
+      if (refreshed.kind === 'unconfirmed') return refreshed;
+      const observedIdentity = refreshed.identity;
       if (current.agent.agent_status === 'idle' || current.agent.agent_status === 'done') {
         const screen = await client.request('pane.read', {
           pane_id: identity.paneId,
@@ -765,17 +809,19 @@ export class HerdrNativeAdapter {
             reason: 'Native pane read did not match the registered pane',
           };
         const required = manualRequirement(screen.read.text);
-        if (required) return { kind: 'manual-required', identity, reason: required };
+        if (required)
+          return { kind: 'manual-required', identity: observedIdentity, reason: required };
       }
-      if (current.agent.agent_status === 'working') return { kind: 'working', identity };
+      if (current.agent.agent_status === 'working')
+        return { kind: 'working', identity: observedIdentity };
       if (current.agent.agent_status === 'blocked')
-        return { kind: 'blocked', identity, reason: 'Native agent is blocked' };
+        return { kind: 'blocked', identity: observedIdentity, reason: 'Native agent is blocked' };
       if (
         (current.agent.agent_status === 'idle' || current.agent.agent_status === 'done') &&
         !current.agent.launch_pending &&
         current.agent.interactive_ready === true
       )
-        return { kind: 'settled', identity, slotReady: true };
+        return { kind: 'settled', identity: observedIdentity, slotReady: true };
       return { kind: 'unconfirmed', reason: 'Native agent is not explicitly ready' };
     } catch (error) {
       return {
