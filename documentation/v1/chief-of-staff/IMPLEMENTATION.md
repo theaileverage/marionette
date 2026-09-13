@@ -72,3 +72,49 @@ Live acceptance remains separate: this Codex task does not have `HERDR_ENV=1`. N
 session was inspected or controlled. No launchd/systemd registration, host reboot, or long soak
 has been claimed. macOS LaunchAgents run after user login; Linux user services require the user
 manager, and unattended boot requires its separately configured lifetime.
+
+## Review-driven corrections and hierarchy
+
+A separate migration 011 adds controller incarnation authority snapshots, native prompt receipt
+linkage, and retirement evidence. It avoids rewriting migrations already committed in the earlier
+slice. Policy changes revoke old credentials without pretending the native process stopped;
+replacement requires positive idle observation or remains blocked/unconfirmed.
+
+Hierarchy uses explicit same-host links and fixed receiver identities. Local project state stays
+in its owning database. Signed sequence-numbered messages carry bounded commands and child events;
+immutable receipts support replay after either database commits first. Grants can name the logical
+controller, so replacing its native incarnation does not silently grant another principal access.
+
+Workflow creation reserves an attempt envelope. Actual attempt admission is deduplicated and
+debited across the child and all ancestor links while current authority is checked. Inherited
+workflow ownership is resolved recursively. Allocation release requires confirmed terminal state
+and effects; uncertainty is retained. Child result, integration, deployment and parent outcome
+remain distinct facts.
+
+Further regressions cover late worker results retained as stale, pause-closure-safe descendant
+resume, downstream brief preservation, source-bound repair issues, finite no-result timeout
+recovery, atomic prompt claims, old-generation inbox isolation, priority fairness, and partial
+cross-database commit convergence. The final verification ledger below supersedes interim counts.
+
+## Final source and package verification — 2026-09-13
+
+- Full regression suite: **171/171 passed**, no skipped tests, with fixture process and
+  Unix socket access enabled. This includes real SQLite migration/replay tests and a disposable
+  subprocess SIGKILL/restart test; it does not establish live Herdr or OS-supervisor acceptance.
+- `npm run check`: passed, with the pre-existing `src/v1/output.ts` `no-control-regex` warning.
+  `npm run format:check`, `npm run build`, `npm run release:check`, and `git diff --check` passed.
+- Local tarball built with `npm pack --ignore-scripts` after the source checks/build completed.
+  Standard `scripts/release.mjs smoke` passed after installing it into a disposable consumer.
+- Expanded installed-package acceptance: **6/6 passed** using
+  `MARIONETTE_CHIEF_PACKAGE_ROOT` to select the installed CLI and SDK artifacts. Fixture setup and
+  some direct assertions still use source helpers; this is public-artifact integration evidence,
+  not a wholly independent black-box test or live native test.
+- Independent sol reviews and regression fixes covered controller authority/replacement, ambiguous
+  effect retention, workflow closure/limits, hierarchy partial commits, ancestor accounting, and
+  narrow control authority after revocation. No known P1/P2 finding remains in the reviewed slices.
+- Migrations 001–005 remain byte-for-byte unchanged from the baseline. Package metadata is
+  consistent at `1.0.0-alpha.1`; no release was published.
+
+Live Herdr, installed launchd/systemd recovery, actual host reboot, and sustained soak remain
+**unverified**. The pull request is a draft for review with these acceptance gates outstanding.
+No actual service registration or user native session was changed during these checks.

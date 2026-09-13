@@ -123,6 +123,13 @@ its receipt with acknowledgement; successful prompt submission alone does not ac
 Human choices use `decision request` / `decision resolve`. Native approvals retain exact operation
 identity and remain `manual-required` when a typed adapter action is unavailable.
 
+Same-host child projects keep separate bindings, databases, workflow state, and native effects.
+`project link-propose` / `project link-activate` establish explicit two-party authority;
+`project authority-grant` and `project budget-allocate` revise grants and attempt allocations.
+Commands and return events use authenticated, ordered outboxes and deduplicated receipts.
+A child result roll-up preserves evidence identity and does not imply integration or deployment.
+Cross-host links and reparenting existing portfolios are rejected.
+
 Use `marionette schema OPERATION` for the current nested request contract. The
 [implementation audit](documentation/v1/chief-of-staff/IMPLEMENTATION.md) distinguishes fixture,
 process-crash, packaged, and live-native evidence. Live Herdr restart, OS reboot, and soak acceptance
