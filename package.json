@@ -1,6 +1,6 @@
 {
   "name": "@theaileverage/marionette",
-  "version": "0.5.3",
+  "version": "0.6.0-alpha.1",
   "type": "module",
   "engines": {
     "bun": ">=1.3.14"
@@ -15,7 +15,7 @@
     "mcp": "bun src/mcp.ts",
     "format": "bun --bun prettier --write src web documentation skills .github tests scripts .oxlintrc.json .vscode *.json *.ts *.md",
     "format:check": "bun --bun prettier --check src web documentation skills .github tests scripts .oxlintrc.json .vscode *.json *.ts *.md",
-    "prepack": "bun run check && bun run test && bun run runtime:check && bun run build",
+    "prepack": "bun run check && bun run build && bun run test && bun run runtime:check",
     "release:prepare": "bun scripts/release.mjs prepare",
     "release:check": "bun scripts/release.mjs check",
     "sdk:generate": "bun scripts/generate-herdr-sdk.mjs",
