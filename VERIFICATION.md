@@ -1,3 +1,7 @@
+# Historical verification
+
+These records describe releases before the v1 rewrite. They do not establish v1 alpha behavior. Current acceptance work is tracked in [the v1 implementation plan](documentation/v1/implementation-plan.md).
+
 # Verification record
 
 ## Upgrade continuity and CLI configuration — 0.5.3

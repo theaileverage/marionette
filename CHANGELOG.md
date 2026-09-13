@@ -1,13 +1,13 @@
 # Changelog
 
-## 0.6.0-alpha.1 — 2026-09-13
+## 1.0.0-alpha.1 Unreleased
 
-- Add setup choices for conversation or external authority, project skill installation, and lead startup, with preview and scripted options.
-- Save project lead profiles, reasoning levels, instructions, and selected skills through scoped MCP tools. Preserve existing conversations when preferences change.
-- Record bounded user requests as revision-checked conversation authority while retaining external authorization for projects that require it.
-- Rework the outcome dashboard and add rendering regressions.
-- Stop STDIO MCP processes when clients disconnect and improve MCP registration and transport handling.
-- Bundle Marionette skills with the runtime and preserve customized project skill files during installation.
+- Introduce a Node 26.8.1+ CLI and importable SDK with a shared operation boundary.
+- Store project, session, job, input, result, board, and execution records in versioned SQLite migrations.
+- Pin workflow packages, entry steps, source resources, and explicit model profiles.
+- Journal native launch and prompt claims before external effects. Keep uncertain reservations and verify exact Herdr process identities during recovery.
+- Add bounded SQL reads, controlled board contributions, durable report content, and protected workspace retirement.
+- This alpha is under implementation. Workflow corrections and transitions remain gated, and the current Codex desktop does not expose a compatible notification endpoint.
 
 ## 0.5.3 — 2026-09-10
 
