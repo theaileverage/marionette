@@ -78,13 +78,17 @@ function runCli(
   args: readonly string[],
   options: { cwd: string; stateHome: string; input?: string; env?: NodeJS.ProcessEnv },
 ): CliResult {
-  const result = spawnSync(process.execPath, [cliPath, ...args], {
-    cwd: options.cwd,
-    env: environment(options.stateHome, options.env),
-    input: options.input,
-    encoding: 'utf8',
-    timeout: 10_000,
-  });
+  const result = spawnSync(
+    process.execPath,
+    ['--disable-warning=ExperimentalWarning', cliPath, ...args],
+    {
+      cwd: options.cwd,
+      env: environment(options.stateHome, options.env),
+      input: options.input,
+      encoding: 'utf8',
+      timeout: 10_000,
+    },
+  );
   assert.ifError(result.error);
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
@@ -115,7 +119,15 @@ function runCliInPty(
 ): CliResult {
   const result = spawnSync(
     'python3',
-    ['-c', ptyDriver, options.cwd, process.execPath, cliPath, ...args],
+    [
+      '-c',
+      ptyDriver,
+      options.cwd,
+      process.execPath,
+      '--disable-warning=ExperimentalWarning',
+      cliPath,
+      ...args,
+    ],
     {
       env: environment(options.stateHome),
       encoding: 'utf8',

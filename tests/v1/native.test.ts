@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import net from 'node:net';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import {
@@ -137,7 +138,7 @@ test('local endpoint inspector rejects a socket with more than one owner', async
 });
 
 test('native adapter registers, launches AGY in an owned tab, prompts, settles, and cleans up', async () => {
-  const root = mkdtempSync('/private/tmp/marionette-v1-native-');
+  const root = mkdtempSync(join(tmpdir(), 'marionette-v1-native-'));
   const socketPath = join(root, 'herdr.sock');
   const requests: string[] = [];
   const tabCreates: object[] = [];
@@ -247,7 +248,7 @@ test('native adapter registers, launches AGY in an owned tab, prompts, settles, 
 });
 
 test('native cleanup does not close a tab after another pane joins it', async () => {
-  const root = mkdtempSync('/private/tmp/marionette-v1-native-');
+  const root = mkdtempSync(join(tmpdir(), 'marionette-v1-native-'));
   const socketPath = join(root, 'herdr.sock');
   let tabCloseCalls = 0;
   let siblingAdded = false;
@@ -308,7 +309,7 @@ test('native cleanup does not close a tab after another pane joins it', async ()
 });
 
 test('native trust screen is manual-required and never receives a prompt or key press', async () => {
-  const root = mkdtempSync('/private/tmp/marionette-v1-native-');
+  const root = mkdtempSync(join(tmpdir(), 'marionette-v1-native-'));
   const socketPath = join(root, 'herdr.sock');
   const methods: string[] = [];
   const server = await fakeHerdr(socketPath, (request) => {
@@ -365,7 +366,7 @@ test('native trust screen is manual-required and never receives a prompt or key 
 });
 
 test('native adapter uses a foreground process start identity when AGY has no native session', async () => {
-  const root = mkdtempSync('/private/tmp/marionette-v1-native-');
+  const root = mkdtempSync(join(tmpdir(), 'marionette-v1-native-'));
   const socketPath = join(root, 'herdr.sock');
   const methods: string[] = [];
   let startToken = 'process-start-1';
@@ -447,7 +448,7 @@ test('native adapter uses a foreground process start identity when AGY has no na
 });
 
 test('native recovery reopens only an unchanged session locator', async () => {
-  const root = mkdtempSync('/private/tmp/marionette-v1-native-');
+  const root = mkdtempSync(join(tmpdir(), 'marionette-v1-native-'));
   const socketPath = join(root, 'herdr.sock');
   const methods: string[] = [];
   const server = await fakeHerdr(socketPath, (request) => {
@@ -501,7 +502,7 @@ test('native recovery reopens only an unchanged session locator', async () => {
 });
 
 test('native fixture adoption pins an observed AGY process after exact caller authorization', async () => {
-  const root = mkdtempSync('/private/tmp/marionette-v1-native-');
+  const root = mkdtempSync(join(tmpdir(), 'marionette-v1-native-'));
   const socketPath = join(root, 'herdr.sock');
   const methods: string[] = [];
   const server = await fakeHerdr(socketPath, (request) => {
@@ -582,7 +583,7 @@ test('native fixture adoption pins an observed AGY process after exact caller au
 });
 
 test('native launch retains a known locator when the started agent is not explicitly ready', async () => {
-  const root = mkdtempSync('/private/tmp/marionette-v1-native-');
+  const root = mkdtempSync(join(tmpdir(), 'marionette-v1-native-'));
   const socketPath = join(root, 'herdr.sock');
   const server = await fakeHerdr(socketPath, (request) => {
     if (request.method === 'ping')
@@ -627,7 +628,7 @@ test('native launch retains a known locator when the started agent is not explic
 });
 
 test('native adapter does not prompt when socket identity changes after registration', async () => {
-  const root = mkdtempSync('/private/tmp/marionette-v1-native-');
+  const root = mkdtempSync(join(tmpdir(), 'marionette-v1-native-'));
   const socketPath = join(root, 'herdr.sock');
   const methods: string[] = [];
   const server = await fakeHerdr(socketPath, (request) => {

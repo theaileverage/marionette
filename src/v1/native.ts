@@ -695,10 +695,17 @@ export class HerdrNativeAdapter {
       );
       if (startedIdentity) locator = identityLocator(startedIdentity);
       client = await this.client(binding);
-      const current = await client.request('agent.get', { target: tab.root_pane.pane_id });
+      let current = await client.request('agent.get', { target: tab.root_pane.pane_id });
       if (current.type !== 'agent_info')
         return unconfirmedLaunch(operationId, 'Herdr did not return agent identity', locator);
-      const identity = await this.identity(client, binding, current.agent, request, tab.tab.tab_id);
+      let identity = await this.identity(client, binding, current.agent, request, tab.tab.tab_id);
+      for (let poll = 0; !identity && poll < 20; poll += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        client = await this.client(binding);
+        current = await client.request('agent.get', { target: tab.root_pane.pane_id });
+        if (current.type !== 'agent_info') break;
+        identity = await this.identity(client, binding, current.agent, request, tab.tab.tab_id);
+      }
       if (!identity)
         return unconfirmedLaunch(
           operationId,
@@ -706,7 +713,17 @@ export class HerdrNativeAdapter {
           locator,
         );
       locator = identityLocator(identity);
-      const observation = await this.observe(identity);
+      let observation = await this.observe(identity);
+      for (
+        let poll = 0;
+        observation.kind === 'unconfirmed' &&
+        observation.reason === 'Native agent is not explicitly ready' &&
+        poll < 20;
+        poll += 1
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        observation = await this.observe(identity);
+      }
       if (observation.kind === 'settled') return { kind: 'launched', identity };
       return unconfirmedLaunch(operationId, `Agent is ${observation.kind}`, locator);
     } catch (error) {
