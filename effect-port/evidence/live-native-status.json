@@ -1,0 +1,35 @@
+{
+  "mode": "status",
+  "manifestPath": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/.test-output/live-native/evidence/live-native-session.json",
+  "manifestDigest": "46fb92de65b243560b84ad8c9c6b332e1c07d722dadba35aec3be7d67445a894",
+  "currentInputDigest": "aacce7401f8e777c3065a4565802cb89619daeedf2914a65e9d3a4b18ffb7630",
+  "job": {
+    "id": "job_99f85682-306a-48dd-b249-d671e13c0745",
+    "state": "open",
+    "currentBriefRevision": 1
+  },
+  "attempt": {
+    "id": "attempt_5ea8c03a-52fd-4a5c-8adf-82a36f88022e",
+    "jobId": "job_99f85682-306a-48dd-b249-d671e13c0745",
+    "workflowId": null,
+    "stepRunId": null,
+    "briefId": "brief_c3742770-e4df-432c-8beb-aa57a8877a30",
+    "briefRevision": 1,
+    "hostId": "4c10263d-2caf-4b57-bcc6-5e16458912c4",
+    "workspaceId": "live-native-inspect",
+    "sessionId": "worker-16f345d6-fa68-45d1-be57-ef2e0b3c15ba",
+    "sessionGeneration": 1,
+    "phase": "settled",
+    "nativeKind": "claude",
+    "nativeServerGeneration": "qTXyci5PGVD3oDXBfnr8FnDzqhO0Cvw-K7h-tH8nEvw",
+    "nativeLocator": "{\"workspaceId\":\"wK\",\"tabId\":\"wK:t5\",\"paneId\":\"wK:p5\",\"terminalId\":\"term_65b65f20e359d21\",\"agentKind\":\"claude\",\"agentName\":\"mnett-c607c892e4efd93a2dff4fd3\",\"ownedTabId\":\"wK:t5\",\"identityRevision\":3,\"nativeSession\":\"d191d1d2-8644-4cec-9d2e-20fc5fbd4a3a\"}",
+    "createdAt": "2026-09-13T23:47:49.554Z",
+    "settledAt": "2026-09-13T23:52:17.892Z"
+  },
+  "resultIds": [
+    "result_afc386a1-272b-48c5-9fc7-7eee570318fa"
+  ],
+  "observation": {
+    "kind": "already-settled"
+  }
+}

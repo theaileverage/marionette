@@ -1,0 +1,20 @@
+{
+  "baseline": {
+    "head": "231fe3bc22fab4f1c6e550ec6b08983bf8e03c69",
+    "files": 85
+  },
+  "sourceModules": 41,
+  "byteIdentical": [
+    "src/v1/migrations/001_core.ts",
+    "src/v1/migrations/002_workflows.ts",
+    "src/v1/migrations/003_collaboration_handoff.ts",
+    "src/v1/migrations/004_native_runtime.ts",
+    "src/v1/migrations/005_artifact_media_type.ts",
+    "src/v1/migrations/index.ts",
+    "src/herdr-sdk.ts",
+    "src/herdr-protocol.ts",
+    "src/herdr-streams.ts",
+    "src/herdr-transport.ts"
+  ],
+  "bundledProductModules": 40
+}

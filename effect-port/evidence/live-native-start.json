@@ -1,0 +1,9 @@
+{
+  "mode": "start",
+  "manifestPath": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/.test-output/live-native/evidence/live-native-session.json",
+  "manifestDigest": "46fb92de65b243560b84ad8c9c6b332e1c07d722dadba35aec3be7d67445a894",
+  "jobId": "job_99f85682-306a-48dd-b249-d671e13c0745",
+  "attemptId": "attempt_5ea8c03a-52fd-4a5c-8adf-82a36f88022e",
+  "attemptPhase": "pending",
+  "nativeKind": "unconfirmed"
+}

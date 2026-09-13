@@ -1,0 +1,510 @@
+{
+  "baselineHead": "231fe3bc22fab4f1c6e550ec6b08983bf8e03c69",
+  "baselineManifest": "evidence/baseline-source.json",
+  "status": "INCONCLUSIVE",
+  "modules": [
+    {
+      "path": "src/v1/adapters.ts",
+      "baselineSha256": "0349c2ec461f3196c14f8eb6d352ca728b4ec39047269241d1b38985a2a9f1c9",
+      "disposition": "ported",
+      "portPath": "src/v1/adapters.ts",
+      "portSha256": "736cb138a96bfe827b98bb1405666cbda966e8063f434eddf5666646202a6589",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/adapters/codex-app-server.ts",
+      "baselineSha256": "192d59479932ea7a143d24f38f932c86cb9984c1ce83586b44ea28825e624997",
+      "disposition": "ported",
+      "portPath": "src/v1/adapters/codex-app-server.ts",
+      "portSha256": "de741d4d6f985447e6734229105f478f3a5529ae213be6d0ee79ec2232842b5b",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/adapters/herdr.ts",
+      "baselineSha256": "aeb3f0ba15dc9d3f4121ef8a72ecbb545edd27694e0fc63aa878c1955b011bf9",
+      "disposition": "ported",
+      "portPath": "src/v1/adapters/herdr.ts",
+      "portSha256": "4e713e453a8aec4e668f38e3f5968377872d231e880e98b46e2bc4b9d909e87e",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/arguments.ts",
+      "baselineSha256": "d456188d3c6dcd3148abc0e29f37dc45ea78adc0220cdbce1e48219c1db092f7",
+      "disposition": "ported",
+      "portPath": "src/v1/arguments.ts",
+      "portSha256": "3e67dc4ea799e5628c63bdd142d17e0be86a22e93ebccb369b8df79ee12c53d5",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/artifacts.ts",
+      "baselineSha256": "06be16e92133251d5685a78d2c4dadcf39e0a78e5a6523f539068f48d26bc90c",
+      "disposition": "ported",
+      "portPath": "src/v1/artifacts.ts",
+      "portSha256": "b877d7ddb96a20d273c4c5dee021d1fb06aafc8e93a59a1218c48ed86dfe8b52",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/background.ts",
+      "baselineSha256": "846a0a846f196633fffe0b279b6dfa3df24b6f1d95e190d87abf66aa4a63453b",
+      "disposition": "ported",
+      "portPath": "src/v1/background.ts",
+      "portSha256": "4403722218be25d86f3d6a09b0edc4aee5f85ab27826d16acaa7a2753cb5c48f",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/board.ts",
+      "baselineSha256": "92a4a57ac8d072cb4418fd0d20f57f4e9ee9ab3aa4982ace074b0e60112b1829",
+      "disposition": "ported",
+      "portPath": "src/v1/board.ts",
+      "portSha256": "8b07a4441751174e456d527670cd999e15376bb9e0d87373a0d3ba1d6ed58c1e",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/cli.ts",
+      "baselineSha256": "b2d1e7d8f8bef96e791864589f34042e97ee42fc01b773b12aa9441ce8b9bc26",
+      "disposition": "ported",
+      "portPath": "src/v1/cli.ts",
+      "portSha256": "1d7763cd67f283dc1f81e8611480a8da9250492d7889b500ba7f8f12dd32f6ba",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/client.ts",
+      "baselineSha256": "b016ef929139ed0149218931e451528b2be5da57d036bfab268412bd6201a992",
+      "disposition": "ported",
+      "portPath": "src/v1/client.ts",
+      "portSha256": "d781a701b44739c2bdc2e17369d6b3df56152e42383e5bccf0be0a5a38d270ad",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/codex-app-server.ts",
+      "baselineSha256": "c2fa50a112df80add2a773a351f7fa869f87083e00e756166634d7acc5fccb3b",
+      "disposition": "ported",
+      "portPath": "src/v1/codex-app-server.ts",
+      "portSha256": "e7957b171627963ed18505ccb1d956a7a15bc49776e44e8899c2ee123616d890",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/command-registry.ts",
+      "baselineSha256": "85a7c30f94cb06d31a72ad2886dbc110bc1e92d46be073e9a3a19c17c6fb45b2",
+      "disposition": "ported",
+      "portPath": "src/v1/command-registry.ts",
+      "portSha256": "0b6f5f3eca7b5e557a32767c4b2609ae70665cedee89d4831746f3c5677866b0",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/context.ts",
+      "baselineSha256": "a910772e0c2402fcaea584d918fd23b3d411985e366115761fe43a4c904ba5c4",
+      "disposition": "ported",
+      "portPath": "src/v1/context.ts",
+      "portSha256": "7173251b61aef0beb5296e390a276b9f2242d9bae934450a08eaad04568c6e40",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/database.ts",
+      "baselineSha256": "706d98887481a57c0db9850c7724637645a2df001633c4adf384c2355ab4e01a",
+      "disposition": "ported",
+      "portPath": "src/v1/database.ts",
+      "portSha256": "1a49cf57abb2f0989e26f933607049073970604d5ccf0b07581f6c3cb4ee3537",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/delivery.ts",
+      "baselineSha256": "081ca911f6dc42fca0f772ede17a3bcd1ddc3fd9167371849e0fe96ba6fd9e86",
+      "disposition": "ported",
+      "portPath": "src/v1/delivery.ts",
+      "portSha256": "758bbfa0f714392ae6cd3fd20660423ab61be13258b4eb2de1c9ef1a9b145103",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/git.ts",
+      "baselineSha256": "7dc9d7e67503a7607d52d8071483efb7d379a049feae8f8c49471805a7f06318",
+      "disposition": "ported",
+      "portPath": "src/v1/git.ts",
+      "portSha256": "115af7419aaabc966f7f291bebc5a080f06b449a835bd1e0493e339a80089f42",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/handoff.ts",
+      "baselineSha256": "bbffa0f7471022ed1a23649f2d92184e961e653d55187fcc771f918d257863c3",
+      "disposition": "ported",
+      "portPath": "src/v1/handoff.ts",
+      "portSha256": "faca42b89690d948cf3aab078136d0ace9119be7aa9e4fff54524ccd74744009",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/index.ts",
+      "baselineSha256": "a71100c29eda3b8cb3cfd3775f42b9de7250ba657e7c8ecbe706763c749a3126",
+      "disposition": "ported",
+      "portPath": "src/v1/index.ts",
+      "portSha256": "9a5ebe465fd416b8bce6bedb80d9df02401ecfa2734c9d7b297508b46741399d",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/migrations/001_core.ts",
+      "baselineSha256": "5594a39a76b0b2613ec25ed1b5ef4a2fd3b2037d6a50e4aa1772fcd372c6af57",
+      "disposition": "preserved-byte-identical",
+      "portPath": "src/v1/migrations/001_core.ts",
+      "portSha256": "5594a39a76b0b2613ec25ed1b5ef4a2fd3b2037d6a50e4aa1772fcd372c6af57",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/migrations/002_workflows.ts",
+      "baselineSha256": "cd9d2ae575387b5bc0b82dc5830fb9e06a3650d59f4f54a8731e7270f277d235",
+      "disposition": "preserved-byte-identical",
+      "portPath": "src/v1/migrations/002_workflows.ts",
+      "portSha256": "cd9d2ae575387b5bc0b82dc5830fb9e06a3650d59f4f54a8731e7270f277d235",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/migrations/003_collaboration_handoff.ts",
+      "baselineSha256": "d50c9bc3f0350231bc44d4e64be0626cf9a2c07f33e0b29d323475704cca2b6a",
+      "disposition": "preserved-byte-identical",
+      "portPath": "src/v1/migrations/003_collaboration_handoff.ts",
+      "portSha256": "d50c9bc3f0350231bc44d4e64be0626cf9a2c07f33e0b29d323475704cca2b6a",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/migrations/004_native_runtime.ts",
+      "baselineSha256": "6614a5fb1c87d51b0e0a08f6c6c5ee08cebf5b2a80925c1daa7bba9b0cd6ac38",
+      "disposition": "preserved-byte-identical",
+      "portPath": "src/v1/migrations/004_native_runtime.ts",
+      "portSha256": "6614a5fb1c87d51b0e0a08f6c6c5ee08cebf5b2a80925c1daa7bba9b0cd6ac38",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/migrations/005_artifact_media_type.ts",
+      "baselineSha256": "eeadac9c84acf593f067b4ade6cf1db3ebdb3e8fe4be0155fa46ee506fe1adda",
+      "disposition": "preserved-byte-identical",
+      "portPath": "src/v1/migrations/005_artifact_media_type.ts",
+      "portSha256": "eeadac9c84acf593f067b4ade6cf1db3ebdb3e8fe4be0155fa46ee506fe1adda",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/migrations/index.ts",
+      "baselineSha256": "81e6b4f8c417fb5d460524771bf7a6d1b9b0cd7c0518bb4591b91cbc73fb4323",
+      "disposition": "preserved-byte-identical",
+      "portPath": "src/v1/migrations/index.ts",
+      "portSha256": "81e6b4f8c417fb5d460524771bf7a6d1b9b0cd7c0518bb4591b91cbc73fb4323",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/model.ts",
+      "baselineSha256": "1328823f6d5b929cd9327f3104d75abd59c5fe7ecddd857d05b3c8b346707c8f",
+      "disposition": "ported",
+      "portPath": "src/v1/model.ts",
+      "portSha256": "9363e28ce224016d0d808bf98d7b852b7486795c9d2c066ac9a76ff4db466cc1",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/native.ts",
+      "baselineSha256": "3442905bf7a7e2006057704451aa022944d5624dc208713b383ab82c55da5634",
+      "disposition": "ported",
+      "portPath": "src/v1/native.ts",
+      "portSha256": "cd4359e38d22b5e3d255a1f3080a9a92f539df9bc01ae8ac757d00575db065f3",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/onboarding.ts",
+      "baselineSha256": "885275ced7c7f24eaf7d49aa3d467bfc86486759ea14bbba70e6e94261c82cf5",
+      "disposition": "ported",
+      "portPath": "src/v1/onboarding.ts",
+      "portSha256": "dc4ccc1eb783fc75114473471f50e83a6c19edb5b02243204f97b150cc06b3bd",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/operations.ts",
+      "baselineSha256": "888d89fffd9be23b04a8cff07ee08b711d6c9ff472ee2c91ffba3634335e94e4",
+      "disposition": "ported",
+      "portPath": "src/v1/operations.ts",
+      "portSha256": "7b159727ed247f74f80f6cd0f52c180bebc3864d61474d2385f724787960a616",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/output-contracts.ts",
+      "baselineSha256": "37a958871021a6bf3e06d952c884901381564c081d430ef3a3303527f260c056",
+      "disposition": "ported",
+      "portPath": "src/v1/output-contracts.ts",
+      "portSha256": "5bab555e5ee0d84efce8180f9cc73ddd6d2d31c25f26f284b5ba24c397b1ec81",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/output.ts",
+      "baselineSha256": "afc262e2c4356bd48e34035f70328a02e6c4d86390aa7350694509142440cca8",
+      "disposition": "ported",
+      "portPath": "src/v1/output.ts",
+      "portSha256": "54c720a9f19a0cde8d5cc4f945f20e61f237a4a3fa3d257d27cda1ce9b7d8860",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/packages.ts",
+      "baselineSha256": "23e0c94197d73393485b07faca19d8489df558efc989c293149bc94dc9eb1746",
+      "disposition": "ported",
+      "portPath": "src/v1/packages.ts",
+      "portSha256": "e85fa6cc7c2d7f7f3e30db471daa08158ba26b865d6a08ec70545864d7b7942c",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/retirement.ts",
+      "baselineSha256": "e65b0158b536872c13db7c863fa6ed01b68e46cfc621b962661a500ad977b966",
+      "disposition": "ported",
+      "portPath": "src/v1/retirement.ts",
+      "portSha256": "86ed992b8e83954e19d21c58c2b4ded685ddc9cd895d6acc0c2db0601813962f",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/runtime-retirement.ts",
+      "baselineSha256": "a7d27be1e798035c54183aeaf9ae5dd955fd4db2c6417e1239a1be71d7daf3f4",
+      "disposition": "ported",
+      "portPath": "src/v1/runtime-retirement.ts",
+      "portSha256": "db119dd1b8ea9f172afe383d09599e70f567206e982168d7d65f4e3207fecb7e",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/runtime.ts",
+      "baselineSha256": "ab14aa65bc470ebfb228e8a74362f7a70b5af0cd74e4afd105a3893871309bd2",
+      "disposition": "ported",
+      "portPath": "src/v1/runtime.ts",
+      "portSha256": "e5e634d718e0e128be7086cae5fe1f74094a06175132ddfde29cae7ceb2198e8",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/schema-description.ts",
+      "baselineSha256": "f54ba27b15160db18c3c7b50e734a339a9799f5be0d3144c8971918f11d13c85",
+      "disposition": "ported",
+      "portPath": "src/v1/schema-description.ts",
+      "portSha256": "e7052f9415018483dd5e896059d2f6b0f37bcf733ba887b30e08c1c197df2fa4",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/schema.ts",
+      "baselineSha256": "6e752548a4e30cc67433d8282240536a221595397157e92e25b6ea7e1c09b28f",
+      "disposition": "ported",
+      "portPath": "src/v1/schema.ts",
+      "portSha256": "ce8ff5a45fc10fa019c8fd9a0757bc2d1a97c277e63ee7f9cdb4835ccc02a057",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/settings.ts",
+      "baselineSha256": "3a8cd64c5ab06130795c6fc43c34000baa87a72253439693205522a73b1932e3",
+      "disposition": "ported",
+      "portPath": "src/v1/settings.ts",
+      "portSha256": "80d66876d3cde244e12c7cd49cedaede18decdcec2822831474af63785e7daa9",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/sql-worker.ts",
+      "baselineSha256": "9b737ebf56f8d7699a43c8fd945b17e53e0b521719395802448e619261d8fb1e",
+      "disposition": "ported",
+      "portPath": "src/v1/sql-worker.ts",
+      "portSha256": "53069693c707209b961d922186d5e3c7d8888d5bf5e9f48c7e0f0adafdd5f7cb",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/sql.ts",
+      "baselineSha256": "7f95ad42921bac9c0447ed95f8029ba64bdce2f72284e249b9e058a2d038d11d",
+      "disposition": "ported",
+      "portPath": "src/v1/sql.ts",
+      "portSha256": "629923ad2e44149b93be5d31ffe3a1fa63da440ecaecbcdf2dbefd04d0509f13",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/store.ts",
+      "baselineSha256": "adb921f6e5ac2879233a07718ed39c5ebdc73fb9694999d7c47966e84e2aa3b2",
+      "disposition": "ported",
+      "portPath": "src/v1/store.ts",
+      "portSha256": "debebae94b058bfe98325dcd4637c142c5e7957ba44f8ce7527182c0eabcef52",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/version.ts",
+      "baselineSha256": "5a62a5ed00544f6702cccd9d58580086fc1303b69de75f4b031477ee8911cf79",
+      "disposition": "ported",
+      "portPath": "src/v1/version.ts",
+      "portSha256": "c8d74869b4701bef8b3f3b057349bcc589c1a9b8ffc3eadf5ce1bbb2cb28ec75",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    },
+    {
+      "path": "src/v1/watcher.ts",
+      "baselineSha256": "865aa6a5a07dd425152dd677ccd163aaafaab7eda3e51caab07f46041920fc17",
+      "disposition": "ported",
+      "portPath": "src/v1/watcher.ts",
+      "portSha256": "fd2c5d1da48d0ecef240f565b2f660de2fedf5abe4244c2447f63dbe145d6e9a",
+      "evidence": [
+        "evidence/port-full-tests.txt",
+        "evidence/boundaries.json",
+        "evidence/check-final.txt"
+      ]
+    }
+  ],
+  "automatedVerification": "VERIFIED: all 41 baseline v1 modules ported;162/162 tests, strict typecheck, standalone build, package exports/declarations and CLI/SQL smoke pass.",
+  "additionalModules": [
+    "src/v1/service.ts",
+    "src/extensions.ts"
+  ],
+  "liveVerification": {
+    "launchAndPrompt": "VERIFIED with the real Effect runtime and Sonnet 5",
+    "durableFailureAndRejection": "VERIFIED using lead-recorded provider evidence",
+    "workerCompletion": "NOT VERIFIED: Sonnet 5 provider returned [cyber] safeguard refusal before executing checksum task",
+    "evidence": "evidence/live-native-outcome.json"
+  }
+}
