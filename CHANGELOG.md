@@ -2,7 +2,7 @@
 
 ## 1.0.0-alpha.1 Unreleased
 
-- Introduce a Node 24.10+ CLI and importable SDK with a shared operation boundary.
+- Introduce a Node 26.8.1+ CLI and importable SDK with a shared operation boundary.
 - Store project, session, job, input, result, board, and execution records in versioned SQLite migrations.
 - Pin workflow packages, entry steps, source resources, and explicit model profiles.
 - Journal native launch and prompt claims before external effects. Keep uncertain reservations and verify exact Herdr process identities during recovery.

@@ -14,7 +14,7 @@ npm pack
 node scripts/release.mjs smoke /absolute/path/to/package.tgz
 ```
 
-The smoke test installs the actual tarball into a temporary project. It exercises the installed CLI, SDK, SQL worker, bundled workflow loading, and TypeScript declarations. CI repeats these checks on Linux and macOS using Node.js 24.10.0.
+The smoke test installs the actual tarball into a temporary project. It exercises the installed CLI, SDK, SQL worker, bundled workflow loading, and TypeScript declarations. CI repeats these checks on Linux and macOS using Node.js 26.8.1.
 
 Publication is a separate authorized action. The release workflow verifies tagged artifacts and does not publish automatically. Before publication, verify that the intended commit is on main, the version tag identifies that commit, the package has passed its smoke test, and the changelog describes the actual release.
 

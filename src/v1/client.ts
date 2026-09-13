@@ -372,17 +372,30 @@ export class Marionette {
     this.#authenticate();
     return this.#runtime.admit(input);
   }
-  startAttempt(id: AttemptId) {
-    this.#authenticate();
-    return this.#runtime.start(id);
+  async startAttempt(id: AttemptId) {
+    const session = this.#authenticate();
+    if (session.role === 'worker') throw new Error('An active controller or user is required');
+    this.#store.getAttempt(id);
+    await this.ensureWatcher();
+    return this.#runtime.inspect(id);
   }
   inspectAttempt(id: AttemptId) {
     this.#authenticate();
     return this.#runtime.inspect(id);
   }
 
-  reconcileAttempt(id: AttemptId) {
-    this.#authenticate();
+  async reconcileAttempt(id: AttemptId) {
+    const session = this.#authenticate();
+    if (session.role === 'worker') throw new Error('An active controller or user is required');
+    const attempt = this.#store.getAttempt(id);
+    if (
+      attempt.phase === 'pending' ||
+      attempt.phase === 'launching' ||
+      attempt.phase === 'running'
+    ) {
+      await this.ensureWatcher();
+      return this.#runtime.inspect(id);
+    }
     return this.#runtime.reconcile(id);
   }
 

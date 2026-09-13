@@ -34,7 +34,7 @@ export function requireSupportedNode(version = process.versions.node) {
   const [major, minor] = version.split('.').map(Number);
   assert.ok(
     major > 24 || (major === 24 && minor >= 10),
-    'Marionette v1 requires Node.js 24.10.0 or newer',
+    'Marionette v1 requires Node.js 26.8.1 or newer',
   );
 }
 

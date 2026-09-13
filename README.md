@@ -6,7 +6,7 @@ This branch prepares **1.0.0-alpha.1**. It is a breaking rewrite. Existing Mario
 
 ## Requirements
 
-- Node.js 24.10.0 or newer.
+- Node.js 26.8.1 or newer.
 - Herdr for native worker execution.
 - The agent executable selected in your execution profile.
 
@@ -101,7 +101,7 @@ Register a Herdr connection and configure an execution profile before admitting 
 
 The runtime journals launch and prompt claims. A crash after a claim leaves the effect unconfirmed. It does not blindly launch another worker. A native idle observation releases a reservation only after the attempt has a durable result. Result acceptance remains a separate decision.
 
-The CLI starts a local background watcher after relevant runtime and board operations. SDK callers can call `ensureWatcher()` explicitly. `marionette watch --stop-after 5000` runs a bounded foreground watcher. Uncertain delivery is retained for reconciliation rather than automatically repeated.
+The project watcher owns native launch and prompt execution. `attempt start` ensures that watcher is running and returns the current observation; inspect the attempt until its launch is confirmed. CLI callers do not race the watcher by launching directly. The CLI starts a local background watcher after relevant runtime and board operations. SDK callers can call `ensureWatcher()` explicitly. `marionette watch --stop-after 5000` runs a bounded foreground watcher. Uncertain delivery is retained for reconciliation rather than automatically repeated.
 
 Desktop notification support requires a reachable endpoint for the actual desktop-owned Codex app-server. The current local desktop uses private stdio, so delivery to it is unavailable. The board remains readable. A separately started app-server would not establish access to that desktop task.
 

@@ -61,7 +61,7 @@ export function notesFor(changelog, version) {
 export function check(tag) {
   const pkg = read('package.json');
   versionParts(pkg.version);
-  assert.equal(pkg.engines?.node, '>=24.10.0');
+  assert.equal(pkg.engines?.node, '>=26.8.1');
   assert.equal(pkg.bin?.marionette, 'dist/v1/cli.js');
   assert.equal(pkg.types, './dist/v1/index.d.ts');
   assert.equal(pkg.exports?.['.']?.import, './dist/v1/index.js');
