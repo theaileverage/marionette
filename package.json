@@ -21,6 +21,7 @@
     "zod": "^3.25.0"
   },
   "devDependencies": {
+    "@oxlint/plugins": "1.82.0",
     "@types/node": "^24.10.0",
     "esbuild": "^0.28.2",
     "oxlint": "1.82.0",
