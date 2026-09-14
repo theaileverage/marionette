@@ -1,6 +1,10 @@
 import { z } from 'zod';
 import { Marionette } from './client.js';
-import { BoardPostKindSchema, BoardReferenceSchema } from './board.js';
+import {
+  BoardPostKindSchema,
+  BoardReferenceSchema,
+  BoardSubscriptionStartPolicySchema,
+} from './board.js';
 import {
   AttemptIdSchema,
   BriefContentSchema,
@@ -160,11 +164,13 @@ export const operationSchema = z.discriminatedUnion('operation', [
   z.object({ operation: z.literal('board.list'), ...page }).strict(),
   z.object({ operation: z.literal('board.read'), threadId: key, ...page }).strict(),
   z.object({ operation: z.literal('board.search'), query: key, ...page }).strict(),
+  z.object({ operation: z.literal('board.inbox'), ...page }).strict(),
   z
     .object({
       operation: z.literal('board.subscribe'),
       threadId: z.string().optional(),
       eventKinds: z.array(BoardPostKindSchema).optional(),
+      startPolicy: BoardSubscriptionStartPolicySchema.optional(),
     })
     .strict(),
   z.object({ operation: z.literal('board.unsubscribe'), threadId: z.string().optional() }).strict(),
@@ -300,6 +306,8 @@ export async function execute(client: Marionette, raw: Operation) {
       return client.readThread(input);
     case 'board.search':
       return client.searchBoard(input);
+    case 'board.inbox':
+      return client.inbox(input);
     case 'board.subscribe':
       return client.subscribe(input);
     case 'board.unsubscribe':

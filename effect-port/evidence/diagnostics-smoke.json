@@ -1,0 +1,31 @@
+{
+  "versions": {
+    "effect": "4.0.0-rc.112",
+    "@effect/tsgo": "0.43.0",
+    "typescript": "7.0.2"
+  },
+  "expectedFailure": true,
+  "exitCode": 1,
+  "diagnostics": [
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/.test-output/diagnostics-probe/probe.ts",
+      "start": 33,
+      "length": 17,
+      "line": 2,
+      "column": 1,
+      "endLine": 2,
+      "endColumn": 18,
+      "severity": "error",
+      "code": 377001,
+      "name": "floatingEffect",
+      "message": "This Effect value is neither yielded nor used in an assignment."
+    }
+  ],
+  "summary": {
+    "filesChecked": 1,
+    "totalFiles": 1,
+    "errors": 1,
+    "warnings": 0,
+    "messages": 0
+  }
+}

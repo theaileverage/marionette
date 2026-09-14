@@ -1,0 +1,667 @@
+{
+  "diagnostics": [
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/extensions.ts",
+      "start": 1851,
+      "length": 16,
+      "line": 56,
+      "column": 14,
+      "endLine": 56,
+      "endColumn": 30,
+      "severity": "message",
+      "code": 377091,
+      "name": "lazyEffect",
+      "message": "Service 'ExtensionCatalog' member 'list' returns a lazy Effect. Effect is already lazy, so wrapping it in a zero-argument function adds unnecessary indirection."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/extensions.ts",
+      "start": 3063,
+      "length": 5,
+      "line": 87,
+      "column": 41,
+      "endLine": 87,
+      "endColumn": 46,
+      "severity": "message",
+      "code": 377019,
+      "name": "unnecessaryFailYieldableError",
+      "message": "This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/extensions.ts",
+      "start": 3424,
+      "length": 5,
+      "line": 95,
+      "column": 14,
+      "endLine": 95,
+      "endColumn": 19,
+      "severity": "message",
+      "code": 377019,
+      "name": "unnecessaryFailYieldableError",
+      "message": "This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/extensions.ts",
+      "start": 3685,
+      "length": 5,
+      "line": 101,
+      "column": 16,
+      "endLine": 101,
+      "endColumn": 21,
+      "severity": "message",
+      "code": 377019,
+      "name": "unnecessaryFailYieldableError",
+      "message": "This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/extensions.ts",
+      "start": 3888,
+      "length": 5,
+      "line": 104,
+      "column": 16,
+      "endLine": 104,
+      "endColumn": 21,
+      "severity": "message",
+      "code": 377019,
+      "name": "unnecessaryFailYieldableError",
+      "message": "This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/extensions.ts",
+      "start": 4207,
+      "length": 5,
+      "line": 113,
+      "column": 14,
+      "endLine": 113,
+      "endColumn": 19,
+      "severity": "message",
+      "code": 377019,
+      "name": "unnecessaryFailYieldableError",
+      "message": "This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/extensions.ts",
+      "start": 5738,
+      "length": 5,
+      "line": 149,
+      "column": 23,
+      "endLine": 149,
+      "endColumn": 28,
+      "severity": "message",
+      "code": 377019,
+      "name": "unnecessaryFailYieldableError",
+      "message": "This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/extensions.ts",
+      "start": 6290,
+      "length": 5,
+      "line": 160,
+      "column": 16,
+      "endLine": 160,
+      "endColumn": 21,
+      "severity": "message",
+      "code": 377019,
+      "name": "unnecessaryFailYieldableError",
+      "message": "This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/extensions.ts",
+      "start": 6485,
+      "length": 5,
+      "line": 164,
+      "column": 16,
+      "endLine": 164,
+      "endColumn": 21,
+      "severity": "message",
+      "code": 377019,
+      "name": "unnecessaryFailYieldableError",
+      "message": "This `yield* Effect.fail(...)` passes a yieldable error value. `yield*` represents that value directly without wrapping it in `Effect.fail`."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/adapters.ts",
+      "start": 195,
+      "length": 6,
+      "line": 5,
+      "column": 32,
+      "endLine": 5,
+      "endColumn": 38,
+      "severity": "message",
+      "code": 377098,
+      "name": "schemaNumber",
+      "message": "This Schema number API accepts `NaN`, `Infinity`, and `-Infinity`. Use `Schema.Finite` for finite domain numbers. If non-finite values are intentional, disable this diagnostic for that line."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/artifacts.ts",
+      "start": 519,
+      "length": 6,
+      "line": 20,
+      "column": 22,
+      "endLine": 20,
+      "endColumn": 28,
+      "severity": "message",
+      "code": 377098,
+      "name": "schemaNumber",
+      "message": "This Schema number API accepts `NaN`, `Infinity`, and `-Infinity`. Use `Schema.Finite` for finite domain numbers. If non-finite values are intentional, disable this diagnostic for that line."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/artifacts.ts",
+      "start": 2592,
+      "length": 17,
+      "line": 74,
+      "column": 27,
+      "endLine": 74,
+      "endColumn": 44,
+      "severity": "message",
+      "code": 377112,
+      "name": "preferTypedSchemaDecoder",
+      "message": "This input is already assignable to the schema's Encoded type. Use `decodeSync` to preserve compile-time type checking instead of discarding the input type through `decodeUnknownSync`."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/artifacts.ts",
+      "start": 3685,
+      "length": 6,
+      "line": 108,
+      "column": 29,
+      "endLine": 108,
+      "endColumn": 35,
+      "severity": "message",
+      "code": 377098,
+      "name": "schemaNumber",
+      "message": "This Schema number API accepts `NaN`, `Infinity`, and `-Infinity`. Use `Schema.Finite` for finite domain numbers. If non-finite values are intentional, disable this diagnostic for that line."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/artifacts.ts",
+      "start": 4234,
+      "length": 17,
+      "line": 121,
+      "column": 23,
+      "endLine": 121,
+      "endColumn": 40,
+      "severity": "message",
+      "code": 377112,
+      "name": "preferTypedSchemaDecoder",
+      "message": "This input is already assignable to the schema's Encoded type. Use `decodeSync` to preserve compile-time type checking instead of discarding the input type through `decodeUnknownSync`."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/background.ts",
+      "start": 419,
+      "length": 6,
+      "line": 11,
+      "column": 15,
+      "endLine": 11,
+      "endColumn": 21,
+      "severity": "message",
+      "code": 377098,
+      "name": "schemaNumber",
+      "message": "This Schema number API accepts `NaN`, `Infinity`, and `-Infinity`. Use `Schema.Finite` for finite domain numbers. If non-finite values are intentional, disable this diagnostic for that line."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/board.ts",
+      "start": 235,
+      "length": 6,
+      "line": 7,
+      "column": 24,
+      "endLine": 7,
+      "endColumn": 30,
+      "severity": "message",
+      "code": 377098,
+      "name": "schemaNumber",
+      "message": "This Schema number API accepts `NaN`, `Infinity`, and `-Infinity`. Use `Schema.Finite` for finite domain numbers. If non-finite values are intentional, disable this diagnostic for that line."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/client.ts",
+      "start": 2379,
+      "length": 17,
+      "line": 73,
+      "column": 18,
+      "endLine": 73,
+      "endColumn": 35,
+      "severity": "message",
+      "code": 377112,
+      "name": "preferTypedSchemaDecoder",
+      "message": "This input is already assignable to the schema's Encoded type. Use `decodeSync` to preserve compile-time type checking instead of discarding the input type through `decodeUnknownSync`."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/client.ts",
+      "start": 2588,
+      "length": 17,
+      "line": 78,
+      "column": 23,
+      "endLine": 78,
+      "endColumn": 40,
+      "severity": "message",
+      "code": 377112,
+      "name": "preferTypedSchemaDecoder",
+      "message": "This input is already assignable to the schema's Encoded type. Use `decodeSync` to preserve compile-time type checking instead of discarding the input type through `decodeUnknownSync`."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/client.ts",
+      "start": 4531,
+      "length": 17,
+      "line": 131,
+      "column": 23,
+      "endLine": 131,
+      "endColumn": 40,
+      "severity": "message",
+      "code": 377112,
+      "name": "preferTypedSchemaDecoder",
+      "message": "This input is already assignable to the schema's Encoded type. Use `decodeSync` to preserve compile-time type checking instead of discarding the input type through `decodeUnknownSync`."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/client.ts",
+      "start": 4837,
+      "length": 17,
+      "line": 140,
+      "column": 20,
+      "endLine": 140,
+      "endColumn": 37,
+      "severity": "message",
+      "code": 377112,
+      "name": "preferTypedSchemaDecoder",
+      "message": "This input is already assignable to the schema's Encoded type. Use `decodeSync` to preserve compile-time type checking instead of discarding the input type through `decodeUnknownSync`."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/client.ts",
+      "start": 7300,
+      "length": 17,
+      "line": 229,
+      "column": 44,
+      "endLine": 229,
+      "endColumn": 61,
+      "severity": "message",
+      "code": 377112,
+      "name": "preferTypedSchemaDecoder",
+      "message": "This input is already assignable to the schema's Encoded type. Use `decodeSync` to preserve compile-time type checking instead of discarding the input type through `decodeUnknownSync`."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/context.ts",
+      "start": 989,
+      "length": 6,
+      "line": 37,
+      "column": 22,
+      "endLine": 37,
+      "endColumn": 28,
+      "severity": "message",
+      "code": 377098,
+      "name": "schemaNumber",
+      "message": "This Schema number API accepts `NaN`, `Infinity`, and `-Infinity`. Use `Schema.Finite` for finite domain numbers. If non-finite values are intentional, disable this diagnostic for that line."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/database.ts",
+      "start": 356,
+      "length": 6,
+      "line": 14,
+      "column": 24,
+      "endLine": 14,
+      "endColumn": 30,
+      "severity": "message",
+      "code": 377098,
+      "name": "schemaNumber",
+      "message": "This Schema number API accepts `NaN`, `Infinity`, and `-Infinity`. Use `Schema.Finite` for finite domain numbers. If non-finite values are intentional, disable this diagnostic for that line."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/delivery.ts",
+      "start": 1475,
+      "length": 6,
+      "line": 33,
+      "column": 30,
+      "endLine": 33,
+      "endColumn": 36,
+      "severity": "message",
+      "code": 377098,
+      "name": "schemaNumber",
+      "message": "This Schema number API accepts `NaN`, `Infinity`, and `-Infinity`. Use `Schema.Finite` for finite domain numbers. If non-finite values are intentional, disable this diagnostic for that line."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/delivery.ts",
+      "start": 1520,
+      "length": 6,
+      "line": 34,
+      "column": 38,
+      "endLine": 34,
+      "endColumn": 44,
+      "severity": "message",
+      "code": 377098,
+      "name": "schemaNumber",
+      "message": "This Schema number API accepts `NaN`, `Infinity`, and `-Infinity`. Use `Schema.Finite` for finite domain numbers. If non-finite values are intentional, disable this diagnostic for that line."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/git.ts",
+      "start": 1438,
+      "length": 17,
+      "line": 38,
+      "column": 23,
+      "endLine": 38,
+      "endColumn": 40,
+      "severity": "message",
+      "code": 377112,
+      "name": "preferTypedSchemaDecoder",
+      "message": "This input is already assignable to the schema's Encoded type. Use `decodeSync` to preserve compile-time type checking instead of discarding the input type through `decodeUnknownSync`."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/git.ts",
+      "start": 1572,
+      "length": 17,
+      "line": 41,
+      "column": 23,
+      "endLine": 41,
+      "endColumn": 40,
+      "severity": "message",
+      "code": 377112,
+      "name": "preferTypedSchemaDecoder",
+      "message": "This input is already assignable to the schema's Encoded type. Use `decodeSync` to preserve compile-time type checking instead of discarding the input type through `decodeUnknownSync`."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/git.ts",
+      "start": 3248,
+      "length": 17,
+      "line": 99,
+      "column": 23,
+      "endLine": 99,
+      "endColumn": 40,
+      "severity": "message",
+      "code": 377112,
+      "name": "preferTypedSchemaDecoder",
+      "message": "This input is already assignable to the schema's Encoded type. Use `decodeSync` to preserve compile-time type checking instead of discarding the input type through `decodeUnknownSync`."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/git.ts",
+      "start": 3315,
+      "length": 17,
+      "line": 100,
+      "column": 25,
+      "endLine": 100,
+      "endColumn": 42,
+      "severity": "message",
+      "code": 377112,
+      "name": "preferTypedSchemaDecoder",
+      "message": "This input is already assignable to the schema's Encoded type. Use `decodeSync` to preserve compile-time type checking instead of discarding the input type through `decodeUnknownSync`."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/git.ts",
+      "start": 3638,
+      "length": 17,
+      "line": 106,
+      "column": 23,
+      "endLine": 106,
+      "endColumn": 40,
+      "severity": "message",
+      "code": 377112,
+      "name": "preferTypedSchemaDecoder",
+      "message": "This input is already assignable to the schema's Encoded type. Use `decodeSync` to preserve compile-time type checking instead of discarding the input type through `decodeUnknownSync`."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/model.ts",
+      "start": 351,
+      "length": 6,
+      "line": 7,
+      "column": 24,
+      "endLine": 7,
+      "endColumn": 30,
+      "severity": "message",
+      "code": 377098,
+      "name": "schemaNumber",
+      "message": "This Schema number API accepts `NaN`, `Infinity`, and `-Infinity`. Use `Schema.Finite` for finite domain numbers. If non-finite values are intentional, disable this diagnostic for that line."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/native.ts",
+      "start": 1112,
+      "length": 6,
+      "line": 41,
+      "column": 32,
+      "endLine": 41,
+      "endColumn": 38,
+      "severity": "message",
+      "code": 377098,
+      "name": "schemaNumber",
+      "message": "This Schema number API accepts `NaN`, `Infinity`, and `-Infinity`. Use `Schema.Finite` for finite domain numbers. If non-finite values are intentional, disable this diagnostic for that line."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/native.ts",
+      "start": 1264,
+      "length": 6,
+      "line": 42,
+      "column": 35,
+      "endLine": 42,
+      "endColumn": 41,
+      "severity": "message",
+      "code": 377098,
+      "name": "schemaNumber",
+      "message": "This Schema number API accepts `NaN`, `Infinity`, and `-Infinity`. Use `Schema.Finite` for finite domain numbers. If non-finite values are intentional, disable this diagnostic for that line."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/packages.ts",
+      "start": 562,
+      "length": 6,
+      "line": 16,
+      "column": 24,
+      "endLine": 16,
+      "endColumn": 30,
+      "severity": "message",
+      "code": 377098,
+      "name": "schemaNumber",
+      "message": "This Schema number API accepts `NaN`, `Infinity`, and `-Infinity`. Use `Schema.Finite` for finite domain numbers. If non-finite values are intentional, disable this diagnostic for that line."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/packages.ts",
+      "start": 4071,
+      "length": 6,
+      "line": 132,
+      "column": 57,
+      "endLine": 132,
+      "endColumn": 63,
+      "severity": "message",
+      "code": 377098,
+      "name": "schemaNumber",
+      "message": "This Schema number API accepts `NaN`, `Infinity`, and `-Infinity`. Use `Schema.Finite` for finite domain numbers. If non-finite values are intentional, disable this diagnostic for that line."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/settings.ts",
+      "start": 115,
+      "length": 6,
+      "line": 4,
+      "column": 24,
+      "endLine": 4,
+      "endColumn": 30,
+      "severity": "message",
+      "code": 377098,
+      "name": "schemaNumber",
+      "message": "This Schema number API accepts `NaN`, `Infinity`, and `-Infinity`. Use `Schema.Finite` for finite domain numbers. If non-finite values are intentional, disable this diagnostic for that line."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/settings.ts",
+      "start": 2215,
+      "length": 6,
+      "line": 68,
+      "column": 40,
+      "endLine": 68,
+      "endColumn": 46,
+      "severity": "message",
+      "code": 377098,
+      "name": "schemaNumber",
+      "message": "This Schema number API accepts `NaN`, `Infinity`, and `-Infinity`. Use `Schema.Finite` for finite domain numbers. If non-finite values are intentional, disable this diagnostic for that line."
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/store.ts",
+      "start": 7443,
+      "length": 6,
+      "line": 319,
+      "column": 24,
+      "endLine": 319,
+      "endColumn": 30,
+      "severity": "message",
+      "code": 377098,
+      "name": "schemaNumber",
+      "message": "This Schema number API accepts `NaN`, `Infinity`, and `-Infinity`. Use `Schema.Finite` for finite domain numbers. If non-finite values are intentional, disable this diagnostic for that line."
+    }
+  ],
+  "files": [
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/extensions.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/herdr-protocol.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/herdr-sdk.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/herdr-streams.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/herdr-transport.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/adapters.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/artifacts.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/background.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/board.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/client.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/context.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/database.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/delivery.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/git.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/model.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/native.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/packages.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/runtime.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/settings.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/store.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/watcher.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/adapters/codex-app-server.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/adapters/herdr.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/migrations/001_core.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/migrations/002_workflows.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/migrations/003_collaboration_handoff.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/migrations/004_native_runtime.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/migrations/005_artifact_media_type.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/src/v1/migrations/index.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/tests/database-parity.test.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/tests/extensions.test.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    },
+    {
+      "file": "/Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/effect-port/tests/model-parity.test.ts",
+      "detectedEffect": "v4",
+      "supportedEffect": "v4"
+    }
+  ],
+  "summary": {
+    "filesChecked": 32,
+    "totalFiles": 32,
+    "errors": 0,
+    "warnings": 0,
+    "messages": 38
+  }
+}

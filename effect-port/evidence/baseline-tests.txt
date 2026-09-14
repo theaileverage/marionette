@@ -1,0 +1,387 @@
+✔ composed capabilities retain their typed inputs, outputs, and offline descriptions (16.189292ms)
+✔ registry lookup is pinned and composition cannot overwrite capabilities (9.65475ms)
+✔ invalid input and pre-cancelled calls cannot reach a harness (116.662709ms)
+✔ validation and cancellation failures after invocation never retry a harness (0.822542ms)
+✔ async input validation is described offline and fails before harness execution (0.433ms)
+✔ adapter outputs cannot lose a class prototype while retaining a class return type (0.432833ms)
+✔ a composed local-process harness works without Herdr identity fields (61.744625ms)
+✔ Codex app-server composes only messaging and retains its expected-turn checks (1.114375ms)
+✔ input snapshots survive source edits and detect damaged durable bytes (49.977083ms)
+✔ board posts are immutable, persist across restart, and atomically create non-self notification intents (91.666125ms)
+✔ board cursors and writes cannot cross project scope (52.088792ms)
+✔ default subscriptions notify questions, blockers, and results but leave progress on the board (48.066958ms)
+✔ init installs the project skill and preserves local skill changes (397.074333ms)
+✔ flags, file input, stdin, inline JSON, and full exec JSON produce the same raw result (1085.603334ms)
+✔ invalid command input exits 2 before project discovery and never exposes parser input (616.176917ms)
+✔ malformed credential JSON is redacted at the process boundary (67.519458ms)
+✔ TTY defaults to bounded escaped human output while an explicit machine mode stays machine-readable (538.969709ms)
+✔ workspace retirement dry-run validates its preview and leaves the real target and state unchanged (975.617666ms)
+✔ SDK and parsed operations share durable state and derive the author from the session (112.138458ms)
+✔ managed SDK connection cannot promote a supplied context to a local user (45.165709ms)
+✖ the real watcher settles its ownership before closing on abort (43.712375ms)
+✔ desktop delivery starts an idle registered thread without changing its settings (8.716ms)
+✔ desktop delivery steers only the registered active turn and starts after an explicit mismatch reaches idle (0.368041ms)
+✔ desktop delivery rejects an endpoint registered to another execution host (0.121542ms)
+✔ inherited context stays bound when cwd changes and rejects an explicit project switch (65.576875ms)
+✔ host mismatch and malformed context fail before project fallback (9.169792ms)
+✔ target checks detect untracked bytes, staged changes and HEAD drift; commit exports retain bytes (1673.866708ms)
+✔ claims only an accepted current result through an attempt on the target write workspace (1447.940167ms)
+✔ completes only after the accepted source patch is present in the checked target (2304.155041ms)
+✔ runs checks on the integrated target and rejects drift during or after a passing check (2327.234166ms)
+✔ retains an unconfirmed claim until settlement and replans without losing artifacts (1281.58775ms)
+✔ SDK requires an explicit session and bounded deadlines (1.489959ms)
+✖ SDK helpers target the requested resource and retain wire failures (5.65875ms)
+✖ subscriptions preserve coalesced and fragmented UTF-8 events (3.622583ms)
+✖ subscriptions fail on overflow, EOF, and abort without reconnecting (0.694208ms)
+✖ graphics streams preserve bytes and correlate immutable file-frame acknowledgements (0.762459ms)
+✖ transport handles fragmented correlated NDJSON and rejects silent delivery (2.85ms)
+✔ local endpoint inspector ties a socket owner to its process start instance (2.106625ms)
+✔ local endpoint inspector rejects a socket with more than one owner (1.978125ms)
+✖ native adapter registers, launches AGY in an owned tab, prompts, settles, and cleans up (2.332458ms)
+✖ native cleanup does not close a tab after another pane joins it (0.984709ms)
+✖ native trust screen is manual-required and never receives a prompt or key press (1.044ms)
+✖ native adapter uses a foreground process start identity when AGY has no native session (0.965125ms)
+✖ native recovery reopens only an unchanged session locator (0.685041ms)
+✖ native fixture adoption pins an observed AGY process after exact caller authorization (0.421792ms)
+✖ native launch retains a known locator when the started agent is not explicitly ready (1.032834ms)
+✖ native adapter does not prompt when socket identity changes after registration (0.638667ms)
+✔ v1 output contracts cover every operation and retain the version boundary (0.9765ms)
+✔ v1 output contracts parse real board operation results (46.671833ms)
+✔ v1 output contracts accept the native observation and submission states (1.079125ms)
+✔ a package digest changes when a pinned resource changes (12.072583ms)
+✔ resource bytes are copied when read from an immutable snapshot (1.202125ms)
+✔ package loading rejects a resource whose bytes no longer match its pinned digest (0.986958ms)
+✔ package loading rejects malformed external manifests before routing (0.552ms)
+✔ routing uses pstack precedence and keeps routine work direct (0.793917ms)
+✔ bundled package names resolve after the caller changes directory (31.174542ms)
+✔ reviewed custom manifests use their own name without joining the bundled registry (2.170417ms)
+✔ model imports retain source-line diagnostics without substituting a model (0.623792ms)
+✔ the captured workflow resources still match their declared source digests (15.358167ms)
+✔ plans a clean worktree retirement without recording an intent or removing its worktree (832.379292ms)
+✔ reports planned native cleanup without observing, claiming, or settling the session (396.531333ms)
+✔ blocks on an active workspace consumer without recording retirement state (183.122708ms)
+✔ runtime preview uses only its persisted target lookup and returns the same clean plan (533.496ms)
+✔ preserves a dirty registered worktree and its untracked bytes (855.707625ms)
+✔ keeps the worktree while another registered session consumes it (215.34475ms)
+✔ reconciles the same intent after Git removed the worktree before completion was recorded (571.6265ms)
+✔ requires the exact registered native identity before closing an owned tab (443.91575ms)
+✔ preserves a worktree when a required verification log is not durable (199.407084ms)
+✔ runtime retirement cleans only its persisted identity with a settled attempt (890.62875ms)
+✔ runtime retirement does not resend a cleanup already claimed before its outcome (200.562375ms)
+✔ runtime retirement rejects a native identity whose session binding changed (192.18275ms)
+✔ native runtime admits idempotently and concurrent starts claim each external effect once (71.361541ms)
+✔ crash after a claimed launch becomes unconfirmed without replaying launch or prompt (47.0405ms)
+✔ a working prompt claim recovers as active without resending the prompt (48.614333ms)
+✔ an ambiguous observation can later settle with a durable result without replaying effects (47.468792ms)
+✔ native idle releases execution only after a durable result exists (51.711584ms)
+✔ describes every operation with JSON-compatible output (4.646917ms)
+✔ describes nested job fields and operation defaults (3.322708ms)
+✔ describes nested result variants, tuples, and defaults (1.796291ms)
+✔ keeps nullable, record, and refinement input structures discoverable (0.814875ms)
+✔ describes static Zod constraints without executing user functions (0.406958ms)
+✔ SQL reads are constrained to public project-scoped views (11.665708ms)
+✔ SQL authorizer rejects mutations, pragma, attach and extension loading (12.054166ms)
+✔ board contribution SQL can insert one validated in-memory contribution only (2.048542ms)
+✔ SQL row and byte bounds stop iteration with truncation (6.602208ms)
+✔ SQL query timeout kills the isolated Node worker (705.709ms)
+✔ read-only opens reject pending migrations and cannot write current state (35.281125ms)
+✔ applies numbered migrations once on a real database file (25.458291ms)
+✔ adds artifact media type without rewriting existing artifact records (19.812334ms)
+✔ refuses a database created by a newer schema (2.4705ms)
+✔ refuses checksum drift in an applied migration (19.537625ms)
+✔ rolls back a failed migration without advancing its journal (19.616625ms)
+✔ serializes concurrent first opens and records each migration once (221.579625ms)
+✔ canonical payloads ignore object key order and reject unsupported values (34.631041ms)
+✔ binds a database to one project and authenticates immutable session generations (63.310292ms)
+✔ creates jobs idempotently and fences active workspace retirement (45.982042ms)
+✔ rejects results whose file or command evidence has no durable artifact (129.343875ms)
+✔ rejects results whose evidence catalog bytes fail integrity verification (158.262708ms)
+✔ retains evidence-only artifacts and rejects damage before first acceptance (48.141458ms)
+✔ rejects new worker results after settlement but replays an already recorded result (27.508708ms)
+✔ fences attempt launch, persists immutable results, and releases settled resources (57.894583ms)
+✔ keeps uncertain resources reserved until later native settlement (22.43725ms)
+✔ fences managed admission by workflow and control revision (27.734125ms)
+✔ requires review sessions to have a distinct identity and execution role (24.224792ms)
+✔ reports gated workflow mutations as unavailable (20.140625ms)
+✔ watcher checks readiness then acknowledges a durable claimed delivery (46.436875ms)
+✔ watcher takeover needs proven former absence and never replays an uncertain claimed delivery (23.376083ms)
+✔ watcher records an unconfirmed outcome when delivery throws after a durable claim (33.535083ms)
+ℹ tests 108
+ℹ suites 0
+ℹ pass 94
+ℹ fail 14
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7711.824917
+
+✖ failing tests:
+
+test at .v1-test/client.test.mjs:9186:1
+✖ the real watcher settles its ownership before closing on abort (43.712375ms)
+  Error: Cannot establish the watcher process identity
+      at currentProcessIdentity (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/client.test.mjs:5551:26)
+      at async _Marionette.watch (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/client.test.mjs:8706:24)
+      at async TestContext.<anonymous> (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/client.test.mjs:9194:21)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+
+test at .v1-test/herdr-sdk.test.mjs:637:1
+✖ SDK helpers target the requested resource and retain wire failures (5.65875ms)
+  Error: listen EPERM: operation not permitted /var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/herdr-v1-sdk-AV6kes/h.sock
+      at Server.setupListenHandle [as _listen2] (node:net:2306:21)
+      at listenInCluster (node:net:2437:12)
+      at Server.listen (node:net:2579:5)
+      at file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/herdr-sdk.test.mjs:671:12
+      at new Promise (<anonymous>)
+      at TestContext.<anonymous> (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/herdr-sdk.test.mjs:669:9)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19) {
+    code: 'EPERM',
+    errno: -1,
+    syscall: 'listen',
+    address: '/var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/herdr-v1-sdk-AV6kes/h.sock',
+    port: -1
+  }
+
+test at .v1-test/herdr-streams.test.mjs:673:1
+✖ subscriptions preserve coalesced and fragmented UTF-8 events (3.622583ms)
+  Error: listen EPERM: operation not permitted /var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/herdr-v1-stream-kurhQX/h.sock
+      at Server.setupListenHandle [as _listen2] (node:net:2306:21)
+      at listenInCluster (node:net:2437:12)
+      at Server.listen (node:net:2579:5)
+      at client (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/herdr-streams.test.mjs:656:12)
+      at new Promise (<anonymous>)
+      at fixture (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/herdr-streams.test.mjs:654:9)
+      at TestContext.<anonymous> (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/herdr-streams.test.mjs:675:19)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17) {
+    code: 'EPERM',
+    errno: -1,
+    syscall: 'listen',
+    address: '/var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/herdr-v1-stream-kurhQX/h.sock',
+    port: -1
+  }
+
+test at .v1-test/herdr-streams.test.mjs:699:1
+✖ subscriptions fail on overflow, EOF, and abort without reconnecting (0.694208ms)
+  Error: listen EPERM: operation not permitted /var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/herdr-v1-stream-8IrSvU/h.sock
+      at Server.setupListenHandle [as _listen2] (node:net:2306:21)
+      at listenInCluster (node:net:2437:12)
+      at Server.listen (node:net:2579:5)
+      at client (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/herdr-streams.test.mjs:656:12)
+      at new Promise (<anonymous>)
+      at fixture (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/herdr-streams.test.mjs:654:9)
+      at TestContext.<anonymous> (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/herdr-streams.test.mjs:703:21)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18) {
+    code: 'EPERM',
+    errno: -1,
+    syscall: 'listen',
+    address: '/var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/herdr-v1-stream-8IrSvU/h.sock',
+    port: -1
+  }
+
+test at .v1-test/herdr-streams.test.mjs:735:1
+✖ graphics streams preserve bytes and correlate immutable file-frame acknowledgements (0.762459ms)
+  Error: listen EPERM: operation not permitted /var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/herdr-v1-stream-DwpDqr/h.sock
+      at Server.setupListenHandle [as _listen2] (node:net:2306:21)
+      at listenInCluster (node:net:2437:12)
+      at Server.listen (node:net:2579:5)
+      at client (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/herdr-streams.test.mjs:656:12)
+      at new Promise (<anonymous>)
+      at fixture (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/herdr-streams.test.mjs:654:9)
+      at TestContext.<anonymous> (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/herdr-streams.test.mjs:738:19)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18) {
+    code: 'EPERM',
+    errno: -1,
+    syscall: 'listen',
+    address: '/var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/herdr-v1-stream-DwpDqr/h.sock',
+    port: -1
+  }
+
+test at .v1-test/herdr-transport.test.mjs:248:1
+✖ transport handles fragmented correlated NDJSON and rejects silent delivery (2.85ms)
+  Error: listen EPERM: operation not permitted /var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/herdr-v1-transport-3LMUVG/h.sock
+      at Server.setupListenHandle [as _listen2] (node:net:2306:21)
+      at listenInCluster (node:net:2437:12)
+      at Server.listen (node:net:2579:5)
+      at file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/herdr-transport.test.mjs:270:12
+      at new Promise (<anonymous>)
+      at TestContext.<anonymous> (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/herdr-transport.test.mjs:268:9)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    code: 'EPERM',
+    errno: -1,
+    syscall: 'listen',
+    address: '/var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/herdr-v1-transport-3LMUVG/h.sock',
+    port: -1
+  }
+
+test at .v1-test/native.test.mjs:1790:1
+✖ native adapter registers, launches AGY in an owned tab, prompts, settles, and cleans up (2.332458ms)
+  Error: listen EPERM: operation not permitted /var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/marionette-v1-native-dcbKFv/herdr.sock
+      at Server.setupListenHandle [as _listen2] (node:net:2306:21)
+      at listenInCluster (node:net:2437:12)
+      at Server.listen (node:net:2579:5)
+      at file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/native.test.mjs:1722:12
+      at new Promise (<anonymous>)
+      at fakeHerdr (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/native.test.mjs:1720:9)
+      at TestContext.<anonymous> (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/native.test.mjs:1795:24)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18) {
+    code: 'EPERM',
+    errno: -1,
+    syscall: 'listen',
+    address: '/var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/marionette-v1-native-dcbKFv/herdr.sock',
+    port: -1
+  }
+
+test at .v1-test/native.test.mjs:1899:1
+✖ native cleanup does not close a tab after another pane joins it (0.984709ms)
+  Error: listen EPERM: operation not permitted /var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/marionette-v1-native-3nevIi/herdr.sock
+      at Server.setupListenHandle [as _listen2] (node:net:2306:21)
+      at listenInCluster (node:net:2437:12)
+      at Server.listen (node:net:2579:5)
+      at file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/native.test.mjs:1722:12
+      at new Promise (<anonymous>)
+      at fakeHerdr (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/native.test.mjs:1720:9)
+      at TestContext.<anonymous> (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/native.test.mjs:1904:24)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18) {
+    code: 'EPERM',
+    errno: -1,
+    syscall: 'listen',
+    address: '/var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/marionette-v1-native-3nevIi/herdr.sock',
+    port: -1
+  }
+
+test at .v1-test/native.test.mjs:1959:1
+✖ native trust screen is manual-required and never receives a prompt or key press (1.044ms)
+  Error: listen EPERM: operation not permitted /var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/marionette-v1-native-RslVFK/herdr.sock
+      at Server.setupListenHandle [as _listen2] (node:net:2306:21)
+      at listenInCluster (node:net:2437:12)
+      at Server.listen (node:net:2579:5)
+      at file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/native.test.mjs:1722:12
+      at new Promise (<anonymous>)
+      at fakeHerdr (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/native.test.mjs:1720:9)
+      at TestContext.<anonymous> (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/native.test.mjs:1963:24)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18) {
+    code: 'EPERM',
+    errno: -1,
+    syscall: 'listen',
+    address: '/var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/marionette-v1-native-RslVFK/herdr.sock',
+    port: -1
+  }
+
+test at .v1-test/native.test.mjs:2015:1
+✖ native adapter uses a foreground process start identity when AGY has no native session (0.965125ms)
+  Error: listen EPERM: operation not permitted /var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/marionette-v1-native-sMSqEV/herdr.sock
+      at Server.setupListenHandle [as _listen2] (node:net:2306:21)
+      at listenInCluster (node:net:2437:12)
+      at Server.listen (node:net:2579:5)
+      at file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/native.test.mjs:1722:12
+      at new Promise (<anonymous>)
+      at fakeHerdr (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/native.test.mjs:1720:9)
+      at TestContext.<anonymous> (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/native.test.mjs:2020:24)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18) {
+    code: 'EPERM',
+    errno: -1,
+    syscall: 'listen',
+    address: '/var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/marionette-v1-native-sMSqEV/herdr.sock',
+    port: -1
+  }
+
+test at .v1-test/native.test.mjs:2096:1
+✖ native recovery reopens only an unchanged session locator (0.685041ms)
+  Error: listen EPERM: operation not permitted /var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/marionette-v1-native-ei8SBE/herdr.sock
+      at Server.setupListenHandle [as _listen2] (node:net:2306:21)
+      at listenInCluster (node:net:2437:12)
+      at Server.listen (node:net:2579:5)
+      at file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/native.test.mjs:1722:12
+      at new Promise (<anonymous>)
+      at fakeHerdr (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/native.test.mjs:1720:9)
+      at TestContext.<anonymous> (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/native.test.mjs:2100:24)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18) {
+    code: 'EPERM',
+    errno: -1,
+    syscall: 'listen',
+    address: '/var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/marionette-v1-native-ei8SBE/herdr.sock',
+    port: -1
+  }
+
+test at .v1-test/native.test.mjs:2148:1
+✖ native fixture adoption pins an observed AGY process after exact caller authorization (0.421792ms)
+  Error: listen EPERM: operation not permitted /var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/marionette-v1-native-JbfBcr/herdr.sock
+      at Server.setupListenHandle [as _listen2] (node:net:2306:21)
+      at listenInCluster (node:net:2437:12)
+      at Server.listen (node:net:2579:5)
+      at file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/native.test.mjs:1722:12
+      at new Promise (<anonymous>)
+      at fakeHerdr (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/native.test.mjs:1720:9)
+      at TestContext.<anonymous> (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/native.test.mjs:2152:24)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18) {
+    code: 'EPERM',
+    errno: -1,
+    syscall: 'listen',
+    address: '/var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/marionette-v1-native-JbfBcr/herdr.sock',
+    port: -1
+  }
+
+test at .v1-test/native.test.mjs:2228:1
+✖ native launch retains a known locator when the started agent is not explicitly ready (1.032834ms)
+  Error: listen EPERM: operation not permitted /var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/marionette-v1-native-KFs3R1/herdr.sock
+      at Server.setupListenHandle [as _listen2] (node:net:2306:21)
+      at listenInCluster (node:net:2437:12)
+      at Server.listen (node:net:2579:5)
+      at file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/native.test.mjs:1722:12
+      at new Promise (<anonymous>)
+      at fakeHerdr (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/native.test.mjs:1720:9)
+      at TestContext.<anonymous> (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/native.test.mjs:2231:24)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18) {
+    code: 'EPERM',
+    errno: -1,
+    syscall: 'listen',
+    address: '/var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/marionette-v1-native-KFs3R1/herdr.sock',
+    port: -1
+  }
+
+test at .v1-test/native.test.mjs:2272:1
+✖ native adapter does not prompt when socket identity changes after registration (0.638667ms)
+  Error: listen EPERM: operation not permitted /var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/marionette-v1-native-rDqQ2J/herdr.sock
+      at Server.setupListenHandle [as _listen2] (node:net:2306:21)
+      at listenInCluster (node:net:2437:12)
+      at Server.listen (node:net:2579:5)
+      at file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/native.test.mjs:1722:12
+      at new Promise (<anonymous>)
+      at fakeHerdr (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/native.test.mjs:1720:9)
+      at TestContext.<anonymous> (file:///Users/ankeethsuvarna/.codex/worktrees/4c53/marionette/.v1-test/native.test.mjs:2276:24)
+      at Test.runInAsyncScope (node:async_hooks:226:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18) {
+    code: 'EPERM',
+    errno: -1,
+    syscall: 'listen',
+    address: '/var/folders/k9/5_yqgvnj5jgcsytf6my45yy80000gn/T/marionette-v1-native-rDqQ2J/herdr.sock',
+    port: -1
+  }

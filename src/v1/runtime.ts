@@ -350,7 +350,7 @@ export class Runtime {
       );
       workflowInstructions = `\n\nWorkflow step: ${step.name}. Read these pinned resources before working:\n${resources.join('\n')}\nOutput contract: ${step.outputContract}\nRequired evidence claims: ${step.requiredEvidence.join(', ')}. Permitted methods: ${step.permittedMethods.join(', ')}.`;
     }
-    return `You are working on Marionette job ${attempt.jobId}, attempt ${id}. Adopt brief revision ${attempt.briefRevision} before working. Your MARIONETTE_CONTEXT already identifies this project and session. Use the CLI through ${JSON.stringify(process.execPath)} ${JSON.stringify(cli)}.\n\nCurrent brief:\n${JSON.stringify(brief.content, null, 2)}${workflowInstructions}\n\nAcknowledge with the brief.acknowledge operation, attemptId ${id}, briefRevision ${attempt.briefRevision}, and a stable idempotencyKey. Use board posts for findings and questions. Record a durable result through result.record when your work is ready. A native idle state alone does not mean the result was accepted. Do not change unrelated files.`;
+    return `You are working on Marionette job ${attempt.jobId}, attempt ${id}. Adopt brief revision ${attempt.briefRevision} before working. Your MARIONETTE_CONTEXT already identifies this project and session. Use the CLI through ${JSON.stringify(process.execPath)} ${JSON.stringify(cli)}.\n\nCurrent brief:\n${JSON.stringify(brief.content, null, 2)}${workflowInstructions}\n\nAcknowledge with the brief.acknowledge operation, attemptId ${id}, briefRevision ${attempt.briefRevision}, and a stable idempotencyKey. Use board posts for findings and questions. Subscribe explicitly to the brief-named discussion thread, then read board.inbox at safe task boundaries for catch-up. Mark a thread read only after consuming its posts; never implicitly subscribe to unrelated project traffic. Record a durable result through result.record when your work is ready. A native idle state alone does not mean the result was accepted. Do not change unrelated files.`;
   }
 
   private async submit(id: AttemptId) {
@@ -458,6 +458,18 @@ export class Runtime {
     });
     this.update(id, 'settled');
     return { ...observed, attempt };
+  }
+
+  /**
+   * Whether `start` still owes this attempt launch or prompt progress. In every
+   * other phase `start` falls through to a bare `inspect`, which the following
+   * `reconcile` immediately repeats; skipping it halves the native observations
+   * a watcher pass costs for an attempt that is already running.
+   */
+  needsStartProgress(id: AttemptId): boolean {
+    this.assertController();
+    const phase = this.row(id).phase;
+    return phase === 'admitted' || phase === 'launched';
   }
 
   activeAttempts() {

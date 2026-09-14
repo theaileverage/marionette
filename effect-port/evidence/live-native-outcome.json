@@ -1,0 +1,25 @@
+{
+  "verdict": "INCONCLUSIVE",
+  "reason": "Sonnet 5 provider safeguard [cyber] before worker execution",
+  "resultId": "result_afc386a1-272b-48c5-9fc7-7eee570318fa",
+  "recordedBy": "lead",
+  "decision": {
+    "id": "acceptance_67e49f1b-81bd-4956-8b6b-8d0012f21bdd",
+    "resultId": "result_afc386a1-272b-48c5-9fc7-7eee570318fa",
+    "briefId": "brief_c3742770-e4df-432c-8beb-aa57a8877a30",
+    "decision": "rejected",
+    "createdAt": "2026-09-13T23:52:17.805Z",
+    "replayed": false
+  },
+  "artifactDigest": "6a29c8ad1b2a3863cc75f2f0cbcabc547c4e78c9da3ca5c81943b6c49ae256cd",
+  "launchAndPrompt": "VERIFIED",
+  "workerExecution": "NOT VERIFIED",
+  "attemptPhase": "settled",
+  "watcherSettled": true,
+  "reservations": [
+    {
+      "state": "released",
+      "count": 1
+    }
+  ]
+}

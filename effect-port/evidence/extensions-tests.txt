@@ -1,0 +1,16 @@
+BASELINE VERIFIED 231fe3bc22fab4f1c6e550ec6b08983bf8e03c69 (85 files)
+✔ resolves a derived idea by exact version and digest through an Effect layer (15.539542ms)
+✔ catalog snapshots do not mutate or retain mutable caller resource objects (0.4675ms)
+✔ rejects authority fields, executable payloads, unsupported versions and unsafe paths (3.002917ms)
+✔ rejects duplicate identities, missing parents and changed resource or parent bytes (0.63575ms)
+✔ resolution never falls back to another version or accepts an incorrect digest (0.328709ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 193.939583
+Evidence: .test-output/logs/2026-09-13T22-58-35.456Z-parity.log
+PARITY SLICE VERIFIED (1 test files)

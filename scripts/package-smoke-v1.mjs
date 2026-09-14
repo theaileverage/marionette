@@ -65,9 +65,31 @@ export function smokePackage(tarball) {
       'dist/herdr-streams.js',
       'dist/herdr-transport.js',
       'workflows/feature.json',
+      'skills/marionette/SKILL.md',
+      'skills/marionette/references/coordination-loop.md',
+      'skills/marionette/references/cli-reference.md',
       'vendor/herdr-0.9.0/LICENSE',
     ])
       assert.ok(existsSync(join(installed, path)), `Package omits ${path}`);
+    const cliProject = join(directory, 'cli-project');
+    const cliStateHome = join(directory, 'cli-state');
+    mkdirSync(cliProject);
+    const initialized = JSON.parse(
+      run(process.execPath, [cli, 'init', '--project', cliProject, '--output', 'json'], {
+        cwd: directory,
+        env: {
+          ...process.env,
+          MARIONETTE_CONTEXT: '',
+          MARIONETTE_STATE_HOME: cliStateHome,
+        },
+      }),
+    );
+    const installedSkill = join(cliProject, '.agents', 'skills', 'marionette', 'SKILL.md');
+    assert.deepEqual(initialized.onboarding.skill, {
+      status: 'installed',
+      path: installedSkill,
+    });
+    assert.match(readFileSync(installedSkill, 'utf8'), /^---\nname: marionette\n/);
     const project = join(directory, 'project');
     const stateHome = join(directory, 'state');
     mkdirSync(project);

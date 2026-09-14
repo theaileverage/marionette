@@ -27,6 +27,7 @@ import {
   globalOptions,
 } from './command-registry.js';
 import { defaultOutput, outputModeSchema, writeError, writeOutput } from './output.js';
+import { installProjectSkill } from './onboarding.js';
 
 let output = requestedOutput(process.argv.slice(2)) ?? defaultOutput();
 let activeCommand: string | undefined;
@@ -184,8 +185,9 @@ async function main() {
       writeOutput(
         {
           usage: 'marionette init --project PATH [--state-home PATH]',
-          effect: 'Create project binding, private local session and SQLite state.',
-          output: 'Project context without credentials.',
+          effect:
+            'Create project binding, private local session and SQLite state, then install the project-local Marionette skill when absent.',
+          output: 'Project context, installed skill path and a first lead-agent prompt.',
         },
         output,
       );
@@ -197,7 +199,18 @@ async function main() {
       stateHome: stringOption(values, 'state-home'),
     });
     try {
-      writeOutput(client.context(), output);
+      const context = client.context();
+      writeOutput(
+        {
+          ...context,
+          onboarding: {
+            skill: installProjectSkill(context.project.repositoryRoot),
+            nextPrompt:
+              'Use Marionette to coordinate this task: inspect the repository and report how to run its tests.',
+          },
+        },
+        output,
+      );
     } finally {
       client.close();
     }

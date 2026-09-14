@@ -1,0 +1,14 @@
+BASELINE VERIFIED 231fe3bc22fab4f1c6e550ec6b08983bf8e03c69 (85 files)
+✔ desktop delivery starts an idle registered thread without changing its settings (1.052292ms)
+✔ desktop delivery steers only the registered active turn and starts after an explicit mismatch reaches idle (0.342208ms)
+✔ desktop delivery rejects an endpoint registered to another execution host (0.132958ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 293.46425
+Evidence: .test-output/logs/2026-09-13T23-07-59.348Z-parity.log
+SELECTED CHECKS VERIFIED (1 test files); whole-project parity is not established
