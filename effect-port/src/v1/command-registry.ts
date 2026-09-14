@@ -102,6 +102,10 @@ export const commandMetadata = {
   'board.list': { summary: 'Read a bounded page of discussion threads.', effect: 'read' },
   'board.read': { summary: 'Read a bounded page of thread messages.', effect: 'read' },
   'board.search': { summary: 'Search a bounded page of board messages.', effect: 'read' },
+  'board.inbox': {
+    summary: 'Read unread subscribed posts across threads using durable cursors.',
+    effect: 'read',
+  },
   'board.subscribe': {
     summary: 'Subscribe this session to board notifications.',
     effect: 'local-write',

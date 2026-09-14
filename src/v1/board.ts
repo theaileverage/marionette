@@ -28,6 +28,12 @@ export const BoardPostKindSchema = z.enum([
   'progress',
 ]);
 export type BoardPostKind = z.infer<typeof BoardPostKindSchema>;
+export const BoardSubscriptionStartPolicySchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('latest') }).strict(),
+  z.object({ kind: z.literal('beginning') }).strict(),
+  z.object({ kind: z.literal('sequence'), sequence: z.number().int().nonnegative() }).strict(),
+]);
+export type BoardSubscriptionStartPolicy = z.infer<typeof BoardSubscriptionStartPolicySchema>;
 const DefaultSubscriptionEventKinds = [
   'question',
   'blocker',
@@ -91,10 +97,20 @@ const SearchCursorSchema = z.object({
   createdAt: z.string().datetime(),
   id: z.string().uuid(),
 });
+const InboxCursorSchema = z.object({
+  kind: z.literal('inbox'),
+  projectId: z.string().min(1),
+  recipientKind: z.enum(['desktop', 'session', 'user']),
+  recipientId: z.string().min(1),
+  recipientGeneration: z.number().int().nonnegative(),
+  createdAt: z.string().datetime(),
+  id: z.string().uuid(),
+});
 const CursorSchema = z.discriminatedUnion('kind', [
   ThreadCursorSchema,
   PostCursorSchema,
   SearchCursorSchema,
+  InboxCursorSchema,
 ]);
 type Cursor = z.infer<typeof CursorSchema>;
 
@@ -122,13 +138,20 @@ const PostRowSchema = AuthorRowSchema.extend({
 });
 const ReferenceRowSchema = z.object({ ref_kind: z.string().min(1), ref_value: z.string().min(1) });
 const NextSequenceRowSchema = z.object({ sequence: z.number().int().positive() });
+const ThreadHeadRowSchema = z.object({
+  id: z.string().uuid(),
+  head: z.number().int().nonnegative(),
+});
+const IdRowSchema = z.object({ id: z.string().uuid() });
 const SubscriptionRowSchema = z.object({
   id: z.string().uuid(),
   subscriber_kind: z.enum(['desktop', 'session', 'user']),
   subscriber_id: z.string().min(1),
   subscriber_generation: z.number().int().positive().nullable(),
+  thread_id: z.string().uuid().nullable(),
   event_kinds_json: z.string(),
   created_at: z.string().datetime(),
+  deactivated_at: z.string().datetime().nullable(),
 });
 const EventKindsSchema = z
   .array(BoardPostKindSchema)
@@ -242,6 +265,21 @@ function sameReferences(left: readonly BoardReference[], right: readonly BoardRe
         reference.kind === right[index]?.kind && reference.value === right[index]?.value,
     )
   );
+}
+
+function recipientGeneration(recipient: BoardRecipient) {
+  return recipient.generation ?? 0;
+}
+
+function startSequence(policy: BoardSubscriptionStartPolicy, head: number) {
+  switch (policy.kind) {
+    case 'latest':
+      return head;
+    case 'beginning':
+      return 0;
+    case 'sequence':
+      return Math.min(policy.sequence, head);
+  }
 }
 
 export class Board {
@@ -448,21 +486,31 @@ export class Board {
           continue;
         const eventKinds = EventKindsSchema.parse(JSON.parse(subscription.event_kinds_json));
         if (!eventKinds.includes(input.kind)) continue;
-        const eventId = randomUUID();
         db.prepare(
-          'INSERT INTO notification_events(id,project_id,post_id,subscription_id,event_kind,created_at) VALUES(?,?,?,?,?,?)',
-        ).run(eventId, this.projectId, id, subscription.id, 'post', createdAt);
+          `INSERT INTO board_subscription_threads(subscription_id,project_id,thread_id,start_sequence,latest_sequence,updated_at)
+           VALUES(?,?,?,?,?,?)
+           ON CONFLICT(subscription_id,thread_id) DO UPDATE SET
+             latest_sequence=MAX(latest_sequence,excluded.latest_sequence),updated_at=excluded.updated_at`,
+        ).run(subscription.id, this.projectId, threadId, 0, next.sequence, createdAt);
         db.prepare(
-          'INSERT INTO notification_deliveries(id,event_id,project_id,recipient_kind,recipient_id,recipient_generation,state,payload_json) VALUES(?,?,?,?,?,?,?,?)',
+          `INSERT INTO board_subscription_wakes(
+             subscription_id,project_id,recipient_kind,recipient_id,recipient_generation,
+             state,wake_revision,next_attempt_at,dirty_at
+           ) VALUES(?,?,?,?,?,'pending',1,?,?)
+           ON CONFLICT(subscription_id) DO UPDATE SET
+             wake_revision=wake_revision+1,
+             state=CASE WHEN state IN ('claimed','unconfirmed') THEN state ELSE 'pending' END,
+             next_attempt_at=CASE WHEN state IN ('claimed','unconfirmed') THEN next_attempt_at ELSE excluded.next_attempt_at END,
+             dirty_at=COALESCE(dirty_at,excluded.dirty_at),
+             last_error=CASE WHEN state IN ('claimed','unconfirmed') THEN last_error ELSE NULL END`,
         ).run(
-          randomUUID(),
-          eventId,
+          subscription.id,
           this.projectId,
           subscriber.kind,
           subscriber.id,
-          subscriber.generation ?? null,
-          'pending',
-          JSON.stringify({ threadId, postId: id, sequence: next.sequence }),
+          recipientGeneration(subscriber),
+          createdAt,
+          createdAt,
         );
       }
       return {
@@ -613,14 +661,100 @@ export class Board {
     });
   }
 
+  inbox(input: {
+    readonly recipient: BoardRecipient;
+    readonly cursor?: string;
+    readonly limit?: number;
+  }): Page<BoardPost> {
+    const limit = boundedLimit(input.limit);
+    const rawCursor = assertCursor(input.cursor, 'inbox', this.projectId);
+    if (rawCursor !== undefined && rawCursor.kind !== 'inbox')
+      throw new Error('board cursor does not match this inbox');
+    const cursor = rawCursor;
+    const generation = recipientGeneration(input.recipient);
+    if (
+      cursor !== undefined &&
+      (cursor.recipientKind !== input.recipient.kind ||
+        cursor.recipientId !== input.recipient.id ||
+        cursor.recipientGeneration !== generation)
+    )
+      throw new Error('board cursor does not match this recipient generation');
+    return this.#store.read((db) => {
+      this.assertRecipient(db, input.recipient);
+      const rows = db
+        .prepare(
+          `SELECT DISTINCT p.* FROM board_posts p
+           JOIN board_subscription_threads st
+             ON st.project_id=p.project_id AND st.thread_id=p.thread_id
+           JOIN board_subscriptions s
+             ON s.id=st.subscription_id AND s.project_id=st.project_id
+           LEFT JOIN board_read_cursors c
+             ON c.project_id=s.project_id
+            AND c.reader_kind=s.subscriber_kind
+            AND c.reader_id=s.subscriber_id
+            AND c.reader_generation=COALESCE(s.subscriber_generation,0)
+            AND c.thread_id=p.thread_id
+           WHERE p.project_id=?
+             AND s.deactivated_at IS NULL
+             AND s.subscriber_kind=? AND s.subscriber_id=?
+             AND COALESCE(s.subscriber_generation,0)=?
+             AND p.sequence>MAX(st.start_sequence,COALESCE(c.last_sequence,0))
+             AND p.sequence<=st.latest_sequence
+             AND p.kind IN (SELECT value FROM json_each(s.event_kinds_json))
+             AND NOT (p.source_author_kind=s.subscriber_kind
+                      AND p.source_author_id=s.subscriber_id
+                      AND COALESCE(p.source_author_generation,0)=COALESCE(s.subscriber_generation,0))
+             AND (? IS NULL OR p.created_at>? OR (p.created_at=? AND p.id>?))
+           ORDER BY p.created_at,p.id LIMIT ?`,
+        )
+        .all(
+          this.projectId,
+          input.recipient.kind,
+          input.recipient.id,
+          generation,
+          cursor?.createdAt ?? null,
+          cursor?.createdAt ?? '',
+          cursor?.createdAt ?? '',
+          cursor?.id ?? '',
+          limit + 1,
+        );
+      const entries = rows.slice(0, limit).map((raw) => {
+        const row = PostRowSchema.parse(raw);
+        return postFromRow(row, referencesFor(db, row.id));
+      });
+      const tail = entries.at(-1);
+      return {
+        entries,
+        nextCursor:
+          rows.length > limit && tail !== undefined
+            ? encodeCursor({
+                kind: 'inbox',
+                projectId: this.projectId,
+                recipientKind: input.recipient.kind,
+                recipientId: input.recipient.id,
+                recipientGeneration: generation,
+                createdAt: tail.createdAt,
+                id: tail.id,
+              })
+            : null,
+      };
+    });
+  }
+
   subscribe(input: {
     readonly subscriber: BoardRecipient;
     readonly threadId?: string;
     readonly eventKinds?: readonly BoardPostKind[];
+    readonly startPolicy?: BoardSubscriptionStartPolicy;
     readonly id?: string;
   }): BoardSubscription {
     const createdAt = now();
     const eventKinds = EventKindsSchema.parse(input.eventKinds ?? DefaultSubscriptionEventKinds);
+    const requestedStartPolicy =
+      input.startPolicy === undefined
+        ? undefined
+        : BoardSubscriptionStartPolicySchema.parse(input.startPolicy);
+    const newStartPolicy = requestedStartPolicy ?? { kind: 'latest' as const };
     return this.#store.transaction((db) => {
       this.assertRecipient(db, input.subscriber);
       const threadId = input.threadId ?? null;
@@ -647,6 +781,14 @@ export class Board {
         db.prepare(
           'UPDATE board_subscriptions SET deactivated_at=NULL,event_kinds_json=? WHERE id=?',
         ).run(JSON.stringify(eventKinds), subscription.id);
+        if (requestedStartPolicy !== undefined)
+          this.resetSubscription(
+            db,
+            subscription.id,
+            input.subscriber,
+            threadId,
+            requestedStartPolicy,
+          );
         return {
           id: subscription.id,
           subscriber: input.subscriber,
@@ -668,8 +810,109 @@ export class Board {
         JSON.stringify(eventKinds),
         createdAt,
       );
-      return { id, subscriber: input.subscriber, threadId, eventKinds, createdAt };
+      db.prepare(
+        `INSERT INTO board_subscription_wakes(
+           subscription_id,project_id,recipient_kind,recipient_id,recipient_generation,state,wake_revision,read_at
+         ) VALUES(?,?,?,?,?,'read',0,?)`,
+      ).run(
+        id,
+        this.projectId,
+        input.subscriber.kind,
+        input.subscriber.id,
+        recipientGeneration(input.subscriber),
+        createdAt,
+      );
+      this.resetSubscription(db, id, input.subscriber, threadId, newStartPolicy);
+      return {
+        id,
+        subscriber: input.subscriber,
+        threadId,
+        eventKinds,
+        createdAt,
+      };
     });
+  }
+
+  private resetSubscription(
+    db: DatabaseSync,
+    subscriptionId: string,
+    subscriber: BoardRecipient,
+    threadId: string | null,
+    policy: BoardSubscriptionStartPolicy,
+  ) {
+    const timestamp = now();
+    db.prepare('DELETE FROM board_subscription_threads WHERE subscription_id=?').run(
+      subscriptionId,
+    );
+    const threads = db
+      .prepare(
+        `SELECT t.id,COALESCE(MAX(p.sequence),0) AS head
+         FROM board_threads t LEFT JOIN board_posts p
+           ON p.project_id=t.project_id AND p.thread_id=t.id
+         WHERE t.project_id=? AND (? IS NULL OR t.id=?)
+         GROUP BY t.id ORDER BY t.created_at,t.id`,
+      )
+      .all(this.projectId, threadId, threadId)
+      .map((row) => ThreadHeadRowSchema.parse(row));
+    for (const thread of threads) {
+      const start = startSequence(policy, Number(thread.head));
+      const latest = Number(
+        db
+          .prepare(
+            `SELECT COALESCE(MAX(p.sequence),0) AS sequence FROM board_posts p
+             JOIN board_subscriptions s ON s.id=?
+             WHERE p.project_id=? AND p.thread_id=?
+               AND p.kind IN (SELECT value FROM json_each(s.event_kinds_json))
+               AND NOT (p.source_author_kind=? AND p.source_author_id=?
+                        AND COALESCE(p.source_author_generation,0)=?)`,
+          )
+          .get(
+            subscriptionId,
+            this.projectId,
+            thread.id,
+            subscriber.kind,
+            subscriber.id,
+            recipientGeneration(subscriber),
+          )?.sequence ?? 0,
+      );
+      db.prepare(
+        'INSERT INTO board_subscription_threads(subscription_id,project_id,thread_id,start_sequence,latest_sequence,updated_at) VALUES(?,?,?,?,?,?)',
+      ).run(subscriptionId, this.projectId, thread.id, start, latest, timestamp);
+    }
+    const unread = db
+      .prepare(
+        `SELECT 1 FROM board_subscription_threads st
+         LEFT JOIN board_read_cursors c
+           ON c.project_id=st.project_id AND c.reader_kind=? AND c.reader_id=?
+          AND c.reader_generation=? AND c.thread_id=st.thread_id
+         WHERE st.subscription_id=?
+           AND st.latest_sequence>MAX(st.start_sequence,COALESCE(c.last_sequence,0)) LIMIT 1`,
+      )
+      .get(subscriber.kind, subscriber.id, recipientGeneration(subscriber), subscriptionId);
+    const uncertainWake = db
+      .prepare(
+        "SELECT state FROM board_subscription_wakes WHERE subscription_id=? AND state IN ('claimed','unconfirmed')",
+      )
+      .get(subscriptionId);
+    if (uncertainWake !== undefined) {
+      db.prepare(
+        'UPDATE board_subscription_wakes SET wake_revision=wake_revision+1,dirty_at=COALESCE(dirty_at,?) WHERE subscription_id=?',
+      ).run(timestamp, subscriptionId);
+      return;
+    }
+    db.prepare(
+      `UPDATE board_subscription_wakes SET
+         state=?,wake_revision=wake_revision+1,claimed_revision=NULL,owner_generation=NULL,
+         attempts=0,next_attempt_at=?,dirty_at=?,claimed_at=NULL,attempted_at=NULL,
+         submitted_at=NULL,unconfirmed_at=NULL,undeliverable_at=NULL,read_at=?,last_error=NULL
+       WHERE subscription_id=?`,
+    ).run(
+      unread === undefined ? 'read' : 'pending',
+      unread === undefined ? null : timestamp,
+      unread === undefined ? null : timestamp,
+      unread === undefined ? timestamp : null,
+      subscriptionId,
+    );
   }
 
   unsubscribe(input: { readonly subscriber: BoardRecipient; readonly threadId?: string }) {
@@ -686,6 +929,21 @@ export class Board {
           input.subscriber.generation ?? null,
           input.threadId ?? null,
         );
+      db.prepare(
+        `UPDATE board_subscription_wakes SET state='read',next_attempt_at=NULL,dirty_at=NULL,
+         owner_generation=NULL,claimed_revision=NULL,read_at=?,last_error=NULL
+         WHERE subscription_id IN (
+           SELECT id FROM board_subscriptions WHERE project_id=? AND subscriber_kind=?
+             AND subscriber_id=? AND subscriber_generation IS ? AND thread_id IS ?
+         )`,
+      ).run(
+        now(),
+        this.projectId,
+        input.subscriber.kind,
+        input.subscriber.id,
+        input.subscriber.generation ?? null,
+        input.threadId ?? null,
+      );
       return Number(result.changes) > 0;
     });
   }
@@ -705,17 +963,64 @@ export class Board {
           .get(input.threadId, this.projectId) === undefined
       )
         throw new Error('board thread does not exist in this project');
+      if (
+        input.sequence > 0 &&
+        db
+          .prepare('SELECT 1 FROM board_posts WHERE project_id=? AND thread_id=? AND sequence=?')
+          .get(this.projectId, input.threadId, input.sequence) === undefined
+      )
+        throw new Error('read sequence does not exist in this thread');
       db.prepare(
         'INSERT INTO board_read_cursors(project_id,reader_kind,reader_id,reader_generation,thread_id,last_sequence,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(project_id,reader_kind,reader_id,reader_generation,thread_id) DO UPDATE SET last_sequence=MAX(last_sequence,excluded.last_sequence),updated_at=excluded.updated_at',
       ).run(
         this.projectId,
         input.reader.kind,
         input.reader.id,
-        input.reader.generation ?? null,
+        recipientGeneration(input.reader),
         input.threadId,
         input.sequence,
         now(),
       );
+      const subscriptions = db
+        .prepare(
+          `SELECT s.id FROM board_subscriptions s
+           WHERE s.project_id=? AND s.deactivated_at IS NULL
+             AND s.subscriber_kind=? AND s.subscriber_id=?
+             AND COALESCE(s.subscriber_generation,0)=?
+             AND (s.thread_id IS NULL OR s.thread_id=?)`,
+        )
+        .all(
+          this.projectId,
+          input.reader.kind,
+          input.reader.id,
+          recipientGeneration(input.reader),
+          input.threadId,
+        )
+        .map((row) => IdRowSchema.parse(row));
+      for (const subscription of subscriptions) {
+        const unread = db
+          .prepare(
+            `SELECT 1 FROM board_subscription_threads st
+             LEFT JOIN board_read_cursors c
+               ON c.project_id=st.project_id AND c.reader_kind=? AND c.reader_id=?
+              AND c.reader_generation=? AND c.thread_id=st.thread_id
+             WHERE st.subscription_id=?
+               AND st.latest_sequence>MAX(st.start_sequence,COALESCE(c.last_sequence,0)) LIMIT 1`,
+          )
+          .get(
+            input.reader.kind,
+            input.reader.id,
+            recipientGeneration(input.reader),
+            subscription.id,
+          );
+        if (unread === undefined)
+          db.prepare(
+            `UPDATE board_subscription_wakes SET state='read',next_attempt_at=NULL,dirty_at=NULL,
+             owner_generation=NULL,claimed_revision=NULL,read_at=?,last_error=NULL
+             WHERE subscription_id=?`,
+          ).run(now(), subscription.id);
+      }
+      return true;
     });
   }
 }

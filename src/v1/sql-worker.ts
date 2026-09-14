@@ -89,6 +89,8 @@ const PUBLIC_VIEWS = new Set([
   'public_jobs',
   'public_results',
   'public_notification_events',
+  'public_board_inboxes',
+  'public_watcher_owners',
 ]);
 
 const SAFE_FUNCTIONS = new Set([

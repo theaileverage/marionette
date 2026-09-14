@@ -1,11 +1,11 @@
-import { readFileSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import { readFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 
-import { Schema } from "effect";
+import { Schema } from 'effect';
 
 const finiteNumber = Schema.Number.check(Schema.isFinite());
 const integer = Schema.Finite.check(
-  Schema.makeFilter(Number.isInteger, { expected: "an integer" }),
+  Schema.makeFilter(Number.isInteger, { expected: 'an integer' }),
 );
 const nonEmptyString = Schema.String.check(Schema.isMinLength(1));
 const SqlValueSchema = Schema.Union([Schema.String, finiteNumber, Schema.Null]);
@@ -27,12 +27,12 @@ const SqlRequestSchema = Schema.Struct({
 type SqlRequest = typeof SqlRequestSchema.Type;
 
 const BoardPostKindSchema = Schema.Literals([
-  "question",
-  "blocker",
-  "result",
-  "finding",
-  "decision",
-  "progress",
+  'question',
+  'blocker',
+  'result',
+  'finding',
+  'decision',
+  'progress',
 ]);
 const BoardReferenceSchema = Schema.Struct({
   kind: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(255)),
@@ -42,9 +42,7 @@ const nullableUuid = Schema.Union([Schema.String.check(Schema.isUUID()), Schema.
 export const ValidatedContributionSchema = Schema.Struct({
   body: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(65_536)),
   kind: BoardPostKindSchema,
-  references: Schema.mutable(
-    Schema.Array(BoardReferenceSchema).check(Schema.isMaxLength(50)),
-  ),
+  references: Schema.mutable(Schema.Array(BoardReferenceSchema).check(Schema.isMaxLength(50))),
   replyToPostId: nullableUuid,
   replacesPostId: nullableUuid,
 });
@@ -52,17 +50,16 @@ export type ValidatedContribution = typeof ValidatedContributionSchema.Type;
 const SqlContributionRequestSchema = Schema.Struct({
   sql: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(16_384)),
   parameters: Schema.Record(Schema.String, SqlValueSchema).check(
-    Schema.makeFilter(
-      (parameters) => Object.keys(parameters).length <= 100,
-      { expected: "at most 100 parameters" },
-    ),
+    Schema.makeFilter((parameters) => Object.keys(parameters).length <= 100, {
+      expected: 'at most 100 parameters',
+    }),
   ),
 });
 type SqlContributionRequest = typeof SqlContributionRequestSchema.Type;
 
 const WorkerRequestSchema = Schema.Union([
-  Schema.Struct({ ...SqlRequestSchema.fields, mode: Schema.Literal("read") }),
-  Schema.Struct({ ...SqlContributionRequestSchema.fields, mode: Schema.Literal("contribute") }),
+  Schema.Struct({ ...SqlRequestSchema.fields, mode: Schema.Literal('read') }),
+  Schema.Struct({ ...SqlContributionRequestSchema.fields, mode: Schema.Literal('contribute') }),
 ]);
 
 export const SqlResponseSchema = Schema.Struct({
@@ -81,18 +78,40 @@ const SQLITE_RECURSIVE = 33;
 const SQLITE_INSERT = 18;
 
 const PUBLIC_VIEWS = new Set([
-  "public_board_threads",
-  "public_board_posts",
-  "public_agent_sessions",
-  "public_jobs",
-  "public_results",
-  "public_notification_events",
+  'public_board_threads',
+  'public_board_posts',
+  'public_agent_sessions',
+  'public_jobs',
+  'public_results',
+  'public_notification_events',
+  'public_board_inboxes',
+  'public_watcher_owners',
 ]);
 
 const SAFE_FUNCTIONS = new Set([
-  "abs", "avg", "coalesce", "count", "group_concat", "ifnull", "instr", "length",
-  "lower", "ltrim", "max", "min", "nullif", "printf", "replace", "round", "rtrim",
-  "substr", "sum", "total", "trim", "typeof", "upper",
+  'abs',
+  'avg',
+  'coalesce',
+  'count',
+  'group_concat',
+  'ifnull',
+  'instr',
+  'length',
+  'lower',
+  'ltrim',
+  'max',
+  'min',
+  'nullif',
+  'printf',
+  'replace',
+  'round',
+  'rtrim',
+  'substr',
+  'sum',
+  'total',
+  'trim',
+  'typeof',
+  'upper',
 ]);
 
 type Authorizer = (
@@ -103,37 +122,43 @@ type Authorizer = (
   source: string | null,
 ) => number;
 
-function databaseMethod(database: DatabaseSync, name: string): (...args: ReadonlyArray<unknown>) => unknown {
+function databaseMethod(
+  database: DatabaseSync,
+  name: string,
+): (...args: ReadonlyArray<unknown>) => unknown {
   const method = Reflect.get(database, name);
-  if (typeof method !== "function") {
-    throw new Error("node:sqlite authorizer support is required for SQL queries");
+  if (typeof method !== 'function') {
+    throw new Error('node:sqlite authorizer support is required for SQL queries');
   }
   return (...args) => Reflect.apply(method, database, args);
 }
 
 function secureDatabase(database: DatabaseSync): void {
-  databaseMethod(database, "enableLoadExtension")(false);
-  databaseMethod(database, "enableDefensive")(true);
+  databaseMethod(database, 'enableLoadExtension')(false);
+  databaseMethod(database, 'enableDefensive')(true);
 }
 
 function setAuthorizer(database: DatabaseSync, authorizer: Authorizer): void {
-  databaseMethod(database, "setAuthorizer")(authorizer);
+  databaseMethod(database, 'setAuthorizer')(authorizer);
 }
 
 function installAuthorizer(database: DatabaseSync, projectId: string): void {
   secureDatabase(database);
-  database.function("marionette_project_id", () => projectId);
+  database.function('marionette_project_id', () => projectId);
   setAuthorizer(database, (action, arg1, arg2, _database, source) => {
     if (action === SQLITE_SELECT || action === SQLITE_RECURSIVE) return SQLITE_OK;
     if (action === SQLITE_READ) {
-      if ((source !== null && PUBLIC_VIEWS.has(source)) || (arg1 !== null && PUBLIC_VIEWS.has(arg1))) {
+      if (
+        (source !== null && PUBLIC_VIEWS.has(source)) ||
+        (arg1 !== null && PUBLIC_VIEWS.has(arg1))
+      ) {
         return SQLITE_OK;
       }
       return SQLITE_DENY;
     }
     if (action === SQLITE_FUNCTION) {
       return arg2 !== null &&
-          (arg2 === "marionette_project_id" || SAFE_FUNCTIONS.has(arg2.toLowerCase()))
+        (arg2 === 'marionette_project_id' || SAFE_FUNCTIONS.has(arg2.toLowerCase()))
         ? SQLITE_OK
         : SQLITE_DENY;
     }
@@ -142,22 +167,22 @@ function installAuthorizer(database: DatabaseSync, projectId: string): void {
 }
 
 function rejectMultipleStatements(sql: string): void {
-  if (sql.includes(";")) {
-    throw new Error("board contribution SQL must contain exactly one statement");
+  if (sql.includes(';')) {
+    throw new Error('board contribution SQL must contain exactly one statement');
   }
 }
 
 function installContributionAuthorizer(database: DatabaseSync): void {
   secureDatabase(database);
   setAuthorizer(database, (action, arg1) =>
-    action === SQLITE_INSERT && arg1 === "board_contributions" ? SQLITE_OK : SQLITE_DENY,
+    action === SQLITE_INSERT && arg1 === 'board_contributions' ? SQLITE_OK : SQLITE_DENY,
   );
 }
 
 function installContributionReadAuthorizer(database: DatabaseSync): void {
   setAuthorizer(database, (action, arg1) => {
     if (action === SQLITE_SELECT) return SQLITE_OK;
-    if (action === SQLITE_READ && arg1 === "board_contributions") return SQLITE_OK;
+    if (action === SQLITE_READ && arg1 === 'board_contributions') return SQLITE_OK;
     return SQLITE_DENY;
   });
 }
@@ -176,7 +201,7 @@ export function executeSqlRequest(request: SqlRequest): SqlResponse {
     let truncated = false;
     for (const row of statement.iterate(request.parameters)) {
       const object = Schema.decodeUnknownSync(SqlRowSchema)(row);
-      const rowBytes = Buffer.byteLength(JSON.stringify(object), "utf8");
+      const rowBytes = Buffer.byteLength(JSON.stringify(object), 'utf8');
       if (rows.length === request.maxRows || bytes + rowBytes > request.maxBytes) {
         truncated = true;
         break;
@@ -198,11 +223,9 @@ const ContributionRowSchema = Schema.Struct({
   replaces_post_id: nullableUuid,
 });
 
-export function executeContributionRequest(
-  request: SqlContributionRequest,
-): ValidatedContribution {
+export function executeContributionRequest(request: SqlContributionRequest): ValidatedContribution {
   rejectMultipleStatements(request.sql);
-  const database = new DatabaseSync(":memory:", { enableForeignKeyConstraints: true });
+  const database = new DatabaseSync(':memory:', { enableForeignKeyConstraints: true });
   try {
     database.exec(`
       CREATE TABLE board_contributions (
@@ -216,12 +239,12 @@ export function executeContributionRequest(
     installContributionAuthorizer(database);
     const result = database.prepare(request.sql).run(request.parameters);
     if (Number(result.changes) !== 1) {
-      throw new Error("board contribution SQL must insert exactly one row");
+      throw new Error('board contribution SQL must insert exactly one row');
     }
     installContributionReadAuthorizer(database);
     const row = database
       .prepare(
-        "SELECT body,kind,references_json,reply_to_post_id,replaces_post_id FROM board_contributions",
+        'SELECT body,kind,references_json,reply_to_post_id,replaces_post_id FROM board_contributions',
       )
       .get();
     const contribution = Schema.decodeUnknownSync(ContributionRowSchema)(row);
@@ -242,11 +265,12 @@ export function executeContributionRequest(
 function main(): void {
   try {
     const request = Schema.decodeUnknownSync(WorkerRequestSchema)(
-      JSON.parse(readFileSync(0, "utf8")),
+      JSON.parse(readFileSync(0, 'utf8')),
     );
-    const response = request.mode === "read"
-      ? { kind: "read", result: executeSqlRequest(request) }
-      : { kind: "contribution", result: executeContributionRequest(request) };
+    const response =
+      request.mode === 'read'
+        ? { kind: 'read', result: executeSqlRequest(request) }
+        : { kind: 'contribution', result: executeContributionRequest(request) };
     process.stdout.write(JSON.stringify({ ok: true, response }));
   } catch (error) {
     process.stdout.write(
@@ -256,4 +280,4 @@ function main(): void {
   }
 }
 
-if (process.argv.includes("--marionette-sql-worker")) main();
+if (process.argv.includes('--marionette-sql-worker')) main();

@@ -1,6 +1,10 @@
 import { Effect, Schema } from 'effect';
 import type { Marionette } from './client.js';
-import { BoardPostKindSchema, BoardReferenceSchema } from './board.js';
+import {
+  BoardPostKindSchema,
+  BoardReferenceSchema,
+  BoardSubscriptionStartPolicySchema,
+} from './board.js';
 import { gitStateSchema } from './git.js';
 import {
   AttemptIdSchema,
@@ -210,10 +214,12 @@ export const operationSchemas = [
   strict({ operation: Schema.Literal('board.list'), ...page }),
   strict({ operation: Schema.Literal('board.read'), threadId: key, ...page }),
   strict({ operation: Schema.Literal('board.search'), query: key, ...page }),
+  strict({ operation: Schema.Literal('board.inbox'), ...page }),
   strict({
     operation: Schema.Literal('board.subscribe'),
     threadId: optional(Schema.String),
     eventKinds: optional(array(BoardPostKindSchema)),
+    startPolicy: optional(BoardSubscriptionStartPolicySchema),
   }),
   strict({ operation: Schema.Literal('board.unsubscribe'), threadId: optional(Schema.String) }),
   strict({ operation: Schema.Literal('board.mark-read'), threadId: key, sequence: natural }),
@@ -304,18 +310,19 @@ const operationDecoders = {
   'board.list': Schema.decodeUnknownSync(operationSchemas[28]),
   'board.read': Schema.decodeUnknownSync(operationSchemas[29]),
   'board.search': Schema.decodeUnknownSync(operationSchemas[30]),
-  'board.subscribe': Schema.decodeUnknownSync(operationSchemas[31]),
-  'board.unsubscribe': Schema.decodeUnknownSync(operationSchemas[32]),
-  'board.mark-read': Schema.decodeUnknownSync(operationSchemas[33]),
-  'sql.read': Schema.decodeUnknownSync(operationSchemas[34]),
-  'profile.list': Schema.decodeUnknownSync(operationSchemas[35]),
-  'profile.configure': Schema.decodeUnknownSync(operationSchemas[36]),
-  'native.register': Schema.decodeUnknownSync(operationSchemas[37]),
-  'attempt.admit': Schema.decodeUnknownSync(operationSchemas[38]),
-  'attempt.start': Schema.decodeUnknownSync(operationSchemas[39]),
-  'attempt.inspect': Schema.decodeUnknownSync(operationSchemas[40]),
-  'attempt.reconcile': Schema.decodeUnknownSync(operationSchemas[41]),
-  'sql.contribute': Schema.decodeUnknownSync(operationSchemas[42]),
+  'board.inbox': Schema.decodeUnknownSync(operationSchemas[31]),
+  'board.subscribe': Schema.decodeUnknownSync(operationSchemas[32]),
+  'board.unsubscribe': Schema.decodeUnknownSync(operationSchemas[33]),
+  'board.mark-read': Schema.decodeUnknownSync(operationSchemas[34]),
+  'sql.read': Schema.decodeUnknownSync(operationSchemas[35]),
+  'profile.list': Schema.decodeUnknownSync(operationSchemas[36]),
+  'profile.configure': Schema.decodeUnknownSync(operationSchemas[37]),
+  'native.register': Schema.decodeUnknownSync(operationSchemas[38]),
+  'attempt.admit': Schema.decodeUnknownSync(operationSchemas[39]),
+  'attempt.start': Schema.decodeUnknownSync(operationSchemas[40]),
+  'attempt.inspect': Schema.decodeUnknownSync(operationSchemas[41]),
+  'attempt.reconcile': Schema.decodeUnknownSync(operationSchemas[42]),
+  'sql.contribute': Schema.decodeUnknownSync(operationSchemas[43]),
 };
 function isOperationName(value: string): value is keyof typeof operationDecoders {
   return Object.hasOwn(operationDecoders, value);
@@ -438,6 +445,8 @@ export function executeEffect(client: Marionette, raw: unknown) {
         return yield* invoke(() => client.readThread(input));
       case 'board.search':
         return yield* invoke(() => client.searchBoard(input));
+      case 'board.inbox':
+        return yield* invoke(() => client.inbox(input));
       case 'board.subscribe':
         return yield* invoke(() => client.subscribe(input));
       case 'board.unsubscribe':

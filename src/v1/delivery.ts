@@ -39,11 +39,13 @@ export class NativeBoardDelivery implements DeliveryPort {
     if (
       !parsed.identity_json ||
       parsed.state !== 'active' ||
-      parsed.brief_revision !== parsed.current_brief_revision ||
       (parsed.workflow_phase !== null && parsed.workflow_phase !== 'running')
     )
       return null;
-    return NativeIdentitySchema.parse(JSON.parse(parsed.identity_json));
+    return {
+      identity: NativeIdentitySchema.parse(JSON.parse(parsed.identity_json)),
+      briefChanged: parsed.brief_revision !== parsed.current_brief_revision,
+    };
   }
 
   async checkReady(input: Parameters<DeliveryPort['checkReady']>[0]): Promise<DeliveryReadiness> {
@@ -52,8 +54,8 @@ export class NativeBoardDelivery implements DeliveryPort {
       input.project.hostId !== this.store.project.hostId
     )
       return { kind: 'unsupported', reason: 'Notification belongs to another project or host' };
-    const identity = this.identity(input.recipient);
-    if (!identity)
+    const target = this.identity(input.recipient);
+    if (!target)
       return {
         kind: 'unsupported',
         reason:
@@ -62,10 +64,10 @@ export class NativeBoardDelivery implements DeliveryPort {
     const adapter = this.adapterFor({
       prepare: async () => ({ kind: 'rejected', reason: 'Readiness checks cannot send messages' }),
     });
-    const observation = await adapter.invoke('observe', { identity });
+    const observation = await adapter.invoke('observe', { identity: target.identity });
     switch (observation.kind) {
       case 'settled':
-        return { kind: 'ready' };
+        return target.briefChanged ? { kind: 'ready', briefChanged: true } : { kind: 'ready' };
       case 'working':
       case 'blocked':
         return { kind: 'busy' };
@@ -77,28 +79,31 @@ export class NativeBoardDelivery implements DeliveryPort {
   }
 
   async deliver(input: Parameters<DeliveryPort['deliver']>[0]): Promise<DeliverySubmission> {
-    const identity = this.identity(input.recipient);
-    if (!identity) return { kind: 'unsupported', reason: 'Native recipient is no longer active' };
+    const target = this.identity(input.recipient);
+    if (!target) return { kind: 'unsupported', reason: 'Native recipient is no longer active' };
+    const identity = target.identity;
     const operationId = createHash('sha256')
-      .update(JSON.stringify([...input.deliveryIds].sort()))
+      .update(
+        JSON.stringify({ ids: [...input.deliveryIds].sort(), highWaterMark: input.highWaterMark }),
+      )
       .digest('hex');
     const adapter = this.adapterFor({
       prepare: async () =>
         this.store.read((db) => {
           const current = this.identity(input.recipient);
-          if (!current || JSON.stringify(current) !== JSON.stringify(identity))
+          if (!current || JSON.stringify(current.identity) !== JSON.stringify(identity))
             return { kind: 'rejected', reason: 'Native recipient changed before delivery' };
           for (const id of input.deliveryIds) {
             const claimed = db
               .prepare(
-                "SELECT 1 FROM notification_deliveries WHERE project_id=? AND id=? AND state='claimed' AND recipient_kind=? AND recipient_id=? AND recipient_generation IS ?",
+                "SELECT 1 FROM board_subscription_wakes WHERE project_id=? AND subscription_id=? AND state='claimed' AND recipient_kind=? AND recipient_id=? AND recipient_generation=?",
               )
               .get(
                 this.store.project.id,
                 id,
                 input.recipient.kind,
                 input.recipient.id,
-                input.recipient.generation ?? null,
+                input.recipient.generation ?? 0,
               );
             if (!claimed)
               return {

@@ -36,7 +36,9 @@ function fixture(t: TestContext) {
 test('background identity and liveness expose Effects with Promise compatibility', async () => {
   const effectIdentity = await Effect.runPromise(Effect.result(currentProcessIdentityEffect()));
   const promiseIdentity = await Effect.runPromise(
-    Effect.result(Effect.tryPromise({ try: currentProcessIdentity, catch: () => 'promise-failed' as const })),
+    Effect.result(
+      Effect.tryPromise({ try: currentProcessIdentity, catch: () => 'promise-failed' as const }),
+    ),
   );
   assert.equal(Result.isSuccess(effectIdentity), Result.isSuccess(promiseIdentity));
   if (Result.isSuccess(effectIdentity) && Result.isSuccess(promiseIdentity)) {
@@ -110,6 +112,7 @@ test('native board delivery exposes Effects and preserves unsupported outcomes',
       delivery.deliverEffect({
         ...localProject,
         deliveryIds: ['11111111-1111-4111-8111-111111111111'],
+        highWaterMark: '11111111-1111-4111-8111-111111111111:1',
         message: 'No native effect may be replayed.',
       }),
     ),

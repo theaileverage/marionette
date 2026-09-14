@@ -19,7 +19,7 @@ function fixture(projectId = 'project-a') {
   return { root, store, board: Board.create({ store }) };
 }
 
-test('board posts are immutable, persist across restart, and atomically create non-self notification intents', () => {
+test('board posts are immutable, persist across restart, and atomically coalesce non-self wakes', () => {
   const f = fixture();
   try {
     const author = { kind: 'system', id: 'controller' } satisfies BoardAuthor;
@@ -45,13 +45,13 @@ test('board posts are immutable, persist across restart, and atomically create n
       f.store.read((db) =>
         Number(db.prepare('SELECT COUNT(*) AS count FROM notification_events').get()?.count),
       ),
-      1,
+      0,
     );
     assert.equal(
       f.store.read((db) =>
         Number(
           db
-            .prepare("SELECT COUNT(*) AS count FROM notification_deliveries WHERE state='pending'")
+            .prepare("SELECT COUNT(*) AS count FROM board_subscription_wakes WHERE state='pending'")
             .get()?.count,
         ),
       ),
@@ -202,10 +202,156 @@ test('default subscriptions notify questions, blockers, and results but leave pr
     });
     assert.equal(
       f.store.read((db) =>
-        Number(db.prepare('SELECT COUNT(*) AS count FROM notification_deliveries').get()?.count),
+        Number(
+          db
+            .prepare("SELECT COUNT(*) AS count FROM board_subscription_wakes WHERE state='pending'")
+            .get()?.count,
+        ),
       ),
       1,
     );
+  } finally {
+    f.store.close();
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test('inbox catches up, pages across threads, persists read cursors, and fences generations', () => {
+  const f = fixture();
+  try {
+    const author = { kind: 'system', id: 'controller' } satisfies BoardAuthor;
+    const readerOne = { kind: 'user', id: 'reader', generation: 1 } satisfies BoardRecipient;
+    const readerTwo = { kind: 'user', id: 'reader', generation: 2 } satisfies BoardRecipient;
+    const first = f.board.createThread({ title: 'First', author, idempotencyKey: 'first' });
+    const second = f.board.createThread({ title: 'Second', author, idempotencyKey: 'second' });
+    const firstPost = f.board.post({
+      threadId: first.id,
+      author,
+      body: 'first',
+      kind: 'question',
+      idempotencyKey: 'first-post',
+    });
+    const secondPost = f.board.post({
+      threadId: second.id,
+      author,
+      body: 'second',
+      kind: 'question',
+      idempotencyKey: 'second-post',
+    });
+    f.board.subscribe({ subscriber: readerOne, startPolicy: { kind: 'beginning' } });
+    f.board.subscribe({ subscriber: readerTwo, startPolicy: { kind: 'latest' } });
+
+    const page = f.board.inbox({ recipient: readerOne, limit: 1 });
+    assert.equal(page.entries.length, 1);
+    assert.ok(page.nextCursor);
+    assert.equal(
+      f.board.inbox({ recipient: readerOne, cursor: page.nextCursor ?? undefined, limit: 1 })
+        .entries.length,
+      1,
+    );
+    assert.throws(
+      () => f.board.inbox({ recipient: readerTwo, cursor: page.nextCursor ?? undefined }),
+      /generation/,
+    );
+    assert.deepEqual(f.board.inbox({ recipient: readerTwo }).entries, []);
+
+    f.board.markRead({ reader: readerOne, threadId: first.id, sequence: firstPost.sequence });
+    assert.deepEqual(
+      f.board.inbox({ recipient: readerOne }).entries.map((post) => post.id),
+      [secondPost.id],
+    );
+    f.store.close();
+    const reopened = Store.open({
+      databasePath: join(f.root, 'project.sqlite'),
+      project: ProjectBindingSchema.parse({
+        id: 'project-a',
+        hostId: 'host-a',
+        repositoryRoot: f.root,
+        stateDirectory: f.root,
+      }),
+    });
+    try {
+      const board = Board.create({ store: reopened });
+      assert.deepEqual(
+        board.inbox({ recipient: readerOne }).entries.map((post) => post.id),
+        [secondPost.id],
+      );
+      board.markRead({ reader: readerOne, threadId: second.id, sequence: secondPost.sequence });
+      board.markRead({ reader: readerOne, threadId: first.id, sequence: 0 });
+      assert.deepEqual(board.inbox({ recipient: readerOne }).entries, []);
+      assert.equal(
+        reopened.read(
+          (db) =>
+            db
+              .prepare(
+                'SELECT last_sequence FROM board_read_cursors WHERE reader_id=? AND thread_id=?',
+              )
+              .get('reader', first.id)?.last_sequence,
+        ),
+        1,
+      );
+      assert.equal(
+        reopened.read(
+          (db) =>
+            db
+              .prepare(
+                'SELECT COUNT(*) AS count FROM board_subscription_wakes WHERE recipient_id=? AND state<>?',
+              )
+              .get('reader', 'read')?.count,
+        ),
+        0,
+      );
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test('a burst of posts keeps one bounded wake row per subscription', () => {
+  const f = fixture();
+  try {
+    const author = { kind: 'system', id: 'controller' } satisfies BoardAuthor;
+    const thread = f.board.createThread({ title: 'Burst', author, idempotencyKey: 'burst-thread' });
+    f.board.subscribe({ subscriber: { kind: 'desktop', id: 'lead' }, threadId: thread.id });
+    for (let index = 0; index < 250; index += 1) {
+      if (index === 125)
+        f.board.post({
+          threadId: thread.id,
+          author,
+          body: 'non-matching sequence gap',
+          kind: 'progress',
+          idempotencyKey: 'burst-progress-gap',
+        });
+      f.board.post({
+        threadId: thread.id,
+        author,
+        body: `post ${index}`,
+        kind: 'question',
+        idempotencyKey: `burst-${index}`,
+      });
+    }
+    const wake = f.store.read((db) =>
+      db
+        .prepare(
+          'SELECT COUNT(*) AS count,MAX(wake_revision) AS revision FROM board_subscription_wakes',
+        )
+        .get(),
+    );
+    assert.equal(wake?.count, 1);
+    assert.equal(wake?.revision, 251);
+    assert.equal(
+      f.store.read((db) =>
+        Number(db.prepare('SELECT COUNT(*) AS count FROM notification_deliveries').get()?.count),
+      ),
+      0,
+    );
+    const inboxView = f.store.read((db) =>
+      db.prepare('SELECT unread_threads,unread_posts FROM public_board_inboxes').get(),
+    );
+    assert.equal(inboxView?.unread_threads, 1);
+    assert.equal(inboxView?.unread_posts, 250);
   } finally {
     f.store.close();
     rmSync(f.root, { recursive: true, force: true });

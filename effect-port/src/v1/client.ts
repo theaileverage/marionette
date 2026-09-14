@@ -384,6 +384,9 @@ export class Marionette {
     this.#authenticate();
     return this.#board.search(input);
   }
+  inbox(input: Omit<Parameters<Board['inbox']>[0], 'recipient'> = {}) {
+    return this.#board.inbox({ ...input, recipient: this.#recipient() });
+  }
   subscribe(input: Omit<Parameters<Board['subscribe']>[0], 'subscriber'> = {}) {
     return this.#board.subscribe({ ...input, subscriber: this.#recipient() });
   }

@@ -359,6 +359,7 @@ export const operationOutputSchemas = {
   'board.list': page(boardThreadSchema),
   'board.read': page(boardPostSchema),
   'board.search': page(boardPostSchema),
+  'board.inbox': page(boardPostSchema),
   'board.subscribe': publicObject({
     id: key,
     subscriber: boardRecipientSchema,

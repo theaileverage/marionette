@@ -2,11 +2,7 @@ import { createHash } from 'node:crypto';
 import { Effect, Schema } from 'effect';
 import { createHerdrAdapter, type HerdrAdapterFactory } from './adapters/herdr.js';
 import type { BoardRecipient } from './board.js';
-import {
-  NativeIdentitySchema,
-  type NativeIdentity,
-  type PreparedEffect,
-} from './native.js';
+import { NativeIdentitySchema, type NativeIdentity, type PreparedEffect } from './native.js';
 import type { Store } from './store.js';
 import {
   WatcherError,
@@ -26,8 +22,10 @@ const identityRowSchema = Schema.Struct({
   current_brief_revision: Schema.Finite,
   workflow_phase: Schema.NullOr(Schema.String),
 });
-const decode = <S extends Schema.ConstraintDecoder<unknown, never>>(schema: S, value: unknown): S['Type'] =>
-  Schema.decodeUnknownSync(schema, { onExcessProperty: 'error' })(value);
+const decode = <S extends Schema.ConstraintDecoder<unknown, never>>(
+  schema: S,
+  value: unknown,
+): S['Type'] => Schema.decodeUnknownSync(schema, { onExcessProperty: 'error' })(value);
 const watcherError = (operation: string, cause: unknown) =>
   new WatcherError({
     operation,
@@ -43,7 +41,9 @@ export class NativeBoardDelivery implements DeliveryEffectPort, DeliveryPromiseP
     private readonly adapterFor: HerdrAdapterFactory = createHerdrAdapter,
   ) {}
 
-  private identity(recipient: BoardRecipient): NativeIdentity | null {
+  private identity(
+    recipient: BoardRecipient,
+  ): { readonly identity: NativeIdentity; readonly briefChanged: boolean } | null {
     if (recipient.kind !== 'session' || recipient.generation === undefined) return null;
     const generation = recipient.generation;
     const row = this.store.read((db) =>
@@ -62,12 +62,14 @@ export class NativeBoardDelivery implements DeliveryEffectPort, DeliveryPromiseP
     if (
       !parsed.identity_json ||
       parsed.state !== 'active' ||
-      parsed.brief_revision !== parsed.current_brief_revision ||
       (parsed.workflow_phase !== null && parsed.workflow_phase !== 'running')
     ) {
       return null;
     }
-    return decode(NativeIdentitySchema, JSON.parse(parsed.identity_json));
+    return {
+      identity: decode(NativeIdentitySchema, JSON.parse(parsed.identity_json)),
+      briefChanged: parsed.brief_revision !== parsed.current_brief_revision,
+    };
   }
 
   readonly checkReadyEffect = Effect.fn('NativeBoardDelivery.checkReady')(
@@ -76,12 +78,15 @@ export class NativeBoardDelivery implements DeliveryEffectPort, DeliveryPromiseP
         input.project.id !== this.store.project.id ||
         input.project.hostId !== this.store.project.hostId
       ) {
-        return { kind: 'unsupported', reason: 'Notification belongs to another project or host' } as const;
+        return {
+          kind: 'unsupported',
+          reason: 'Notification belongs to another project or host',
+        } as const;
       }
-      const identity = yield* sync('NativeBoardDelivery.checkReady.identity', () =>
+      const target = yield* sync('NativeBoardDelivery.checkReady.identity', () =>
         this.identity(input.recipient),
       );
-      if (!identity) {
+      if (!target) {
         return {
           kind: 'unsupported',
           reason:
@@ -99,12 +104,16 @@ export class NativeBoardDelivery implements DeliveryEffectPort, DeliveryPromiseP
             reason: 'Readiness checks cannot send messages',
           }),
       });
-      const observation = yield* adapter.invokeEffect('observe', { identity }).pipe(
-        Effect.mapError((cause) => watcherError('NativeBoardDelivery.checkReady.observe', cause)),
-      );
+      const observation = yield* adapter
+        .invokeEffect('observe', { identity: target.identity })
+        .pipe(
+          Effect.mapError((cause) => watcherError('NativeBoardDelivery.checkReady.observe', cause)),
+        );
       switch (observation.kind) {
         case 'settled':
-          return { kind: 'ready' } as const;
+          return target.briefChanged
+            ? ({ kind: 'ready', briefChanged: true } as const)
+            : ({ kind: 'ready' } as const);
         case 'working':
         case 'blocked':
           return { kind: 'busy' } as const;
@@ -122,32 +131,38 @@ export class NativeBoardDelivery implements DeliveryEffectPort, DeliveryPromiseP
 
   readonly deliverEffect = Effect.fn('NativeBoardDelivery.deliver')(
     function* (this: NativeBoardDelivery, input: DeliverInput) {
-      const identity = yield* sync('NativeBoardDelivery.deliver.identity', () =>
+      const target = yield* sync('NativeBoardDelivery.deliver.identity', () =>
         this.identity(input.recipient),
       );
-      if (!identity) {
+      if (!target) {
         return { kind: 'unsupported', reason: 'Native recipient is no longer active' } as const;
       }
+      const identity = target.identity;
       const operationId = createHash('sha256')
-        .update(JSON.stringify([...input.deliveryIds].sort()))
+        .update(
+          JSON.stringify({
+            ids: [...input.deliveryIds].sort(),
+            highWaterMark: input.highWaterMark,
+          }),
+        )
         .digest('hex');
       const prepare = (): PreparedEffect =>
         this.store.read((db) => {
           const current = this.identity(input.recipient);
-          if (!current || JSON.stringify(current) !== JSON.stringify(identity)) {
+          if (!current || JSON.stringify(current.identity) !== JSON.stringify(identity)) {
             return { kind: 'rejected', reason: 'Native recipient changed before delivery' };
           }
           for (const id of input.deliveryIds) {
             const claimed = db
               .prepare(
-                "SELECT 1 FROM notification_deliveries WHERE project_id=? AND id=? AND state='claimed' AND recipient_kind=? AND recipient_id=? AND recipient_generation IS ?",
+                "SELECT 1 FROM board_subscription_wakes WHERE project_id=? AND subscription_id=? AND state='claimed' AND recipient_kind=? AND recipient_id=? AND recipient_generation=?",
               )
               .get(
                 this.store.project.id,
                 id,
                 input.recipient.kind,
                 input.recipient.id,
-                input.recipient.generation ?? null,
+                input.recipient.generation ?? 0,
               );
             if (!claimed) {
               return {
@@ -162,12 +177,14 @@ export class NativeBoardDelivery implements DeliveryEffectPort, DeliveryPromiseP
         prepare: async () => prepare(),
         prepareEffect: () => sync('NativeBoardDelivery.deliver.prepare', prepare),
       });
-      const submitted = yield* adapter.invokeEffect('prompt', {
-        identity,
-        text: input.message,
-      }).pipe(
-        Effect.mapError((cause) => watcherError('NativeBoardDelivery.deliver.prompt', cause)),
-      );
+      const submitted = yield* adapter
+        .invokeEffect('prompt', {
+          identity,
+          text: input.message,
+        })
+        .pipe(
+          Effect.mapError((cause) => watcherError('NativeBoardDelivery.deliver.prompt', cause)),
+        );
       return submitted.kind === 'submitted' ? ({ kind: 'submitted' } as const) : submitted;
     }.bind(this),
   );

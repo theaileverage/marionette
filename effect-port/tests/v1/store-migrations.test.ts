@@ -101,6 +101,7 @@ if (!isMainThread) {
           [3, '003_collaboration_handoff'],
           [4, '004_native_runtime'],
           [5, '005_artifact_media_type'],
+          [6, '006_board_inbox'],
         ],
       );
       first.close();
@@ -142,6 +143,169 @@ if (!isMainThread) {
         assert.equal(artifact?.path, '/durable/path');
         assert.equal(artifact?.byte_length, 7);
         assert.equal(artifact?.media_type, 'application/octet-stream');
+      } finally {
+        current.close();
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('retains legacy notification history while seeding coalesced inbox state', () => {
+    const { directory, databasePath } = fixture();
+    try {
+      const legacy = openDatabase({
+        path: databasePath,
+        projectId,
+        migrationSet: migrations.slice(0, 5),
+      });
+      const timestamp = '2026-09-14T00:00:00.000Z';
+      legacy.prepare('INSERT INTO hosts VALUES (?,?)').run('host', timestamp);
+      legacy
+        .prepare('INSERT INTO projects VALUES (?,?,?,?,?)')
+        .run(projectId, 'host', directory, directory, timestamp);
+      legacy
+        .prepare('INSERT INTO board_threads VALUES (?,?,?,?,?,?,?,?,?)')
+        .run(
+          '00000000-0000-4000-8000-000000000001',
+          projectId,
+          null,
+          'Legacy',
+          'system',
+          'controller',
+          null,
+          'thread',
+          timestamp,
+        );
+      legacy
+        .prepare('INSERT INTO board_posts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
+        .run(
+          '00000000-0000-4000-8000-000000000002',
+          projectId,
+          '00000000-0000-4000-8000-000000000001',
+          1,
+          'system',
+          'controller',
+          null,
+          'question',
+          'legacy post',
+          null,
+          null,
+          'post',
+          timestamp,
+        );
+      legacy
+        .prepare('INSERT INTO board_subscriptions VALUES (?,?,?,?,?,?,?,?,?)')
+        .run(
+          '00000000-0000-4000-8000-000000000003',
+          projectId,
+          'desktop',
+          'lead',
+          null,
+          '00000000-0000-4000-8000-000000000001',
+          '["question"]',
+          timestamp,
+          null,
+        );
+      legacy
+        .prepare('INSERT INTO notification_events VALUES (?,?,?,?,?,?)')
+        .run(
+          '00000000-0000-4000-8000-000000000004',
+          projectId,
+          '00000000-0000-4000-8000-000000000002',
+          '00000000-0000-4000-8000-000000000003',
+          'post',
+          timestamp,
+        );
+      legacy
+        .prepare(
+          'INSERT INTO notification_deliveries(id,event_id,project_id,recipient_kind,recipient_id,recipient_generation,state,payload_json) VALUES(?,?,?,?,?,?,?,?)',
+        )
+        .run(
+          '00000000-0000-4000-8000-000000000005',
+          '00000000-0000-4000-8000-000000000004',
+          projectId,
+          'desktop',
+          'lead',
+          null,
+          'pending',
+          '{}',
+        );
+      for (const [suffix, recipientId, state] of [
+        ['6', 'claimed-recipient', 'claimed'],
+        ['7', 'unconfirmed-recipient', 'unconfirmed'],
+        ['8', 'acknowledged-recipient', 'acknowledged'],
+      ] as const) {
+        const subscriptionId = `00000000-0000-4000-8000-0000000000${suffix}`;
+        const eventId = `10000000-0000-4000-8000-0000000000${suffix}`;
+        legacy
+          .prepare('INSERT INTO board_subscriptions VALUES (?,?,?,?,?,?,?,?,?)')
+          .run(
+            subscriptionId,
+            projectId,
+            'desktop',
+            recipientId,
+            null,
+            '00000000-0000-4000-8000-000000000001',
+            '["question"]',
+            timestamp,
+            null,
+          );
+        legacy
+          .prepare('INSERT INTO notification_events VALUES (?,?,?,?,?,?)')
+          .run(
+            eventId,
+            projectId,
+            '00000000-0000-4000-8000-000000000002',
+            subscriptionId,
+            `event-${state}`,
+            timestamp,
+          );
+        legacy
+          .prepare(
+            'INSERT INTO notification_deliveries(id,event_id,project_id,recipient_kind,recipient_id,recipient_generation,state,payload_json) VALUES(?,?,?,?,?,?,?,?)',
+          )
+          .run(
+            `20000000-0000-4000-8000-0000000000${suffix}`,
+            eventId,
+            projectId,
+            'desktop',
+            recipientId,
+            null,
+            state,
+            '{}',
+          );
+      }
+      legacy.close();
+
+      const current = openDatabase({ path: databasePath, projectId });
+      try {
+        assert.equal(
+          current.prepare('SELECT COUNT(*) AS count FROM notification_events').get()?.count,
+          4,
+        );
+        assert.equal(
+          current.prepare('SELECT COUNT(*) AS count FROM notification_deliveries').get()?.count,
+          4,
+        );
+        const wake = current
+          .prepare('SELECT state,wake_revision FROM board_subscription_wakes')
+          .get();
+        assert.equal(wake?.state, 'pending');
+        assert.equal(wake?.wake_revision, 1);
+        assert.deepEqual(
+          current
+            .prepare(
+              "SELECT recipient_id,state FROM board_subscription_wakes WHERE recipient_id<>'lead' ORDER BY recipient_id",
+            )
+            .all()
+            .map((row) => ({ ...row })),
+          [
+            { recipient_id: 'acknowledged-recipient', state: 'submitted' },
+            { recipient_id: 'claimed-recipient', state: 'unconfirmed' },
+            { recipient_id: 'unconfirmed-recipient', state: 'unconfirmed' },
+          ],
+        );
       } finally {
         current.close();
       }
