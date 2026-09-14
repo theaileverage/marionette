@@ -12,11 +12,13 @@ import { TimestampSchema } from './model.js';
  */
 
 const nonEmpty = Schema.String.check(Schema.isMinLength(1));
+
 const positiveInteger = Schema.Finite.check(
   Schema.makeFilter((value) => Number.isInteger(value) && value > 0, {
     expected: 'a positive integer',
   }),
 );
+
 const nonNegativeInteger = Schema.Finite.check(
   Schema.makeFilter((value) => Number.isInteger(value) && value >= 0, {
     expected: 'a non-negative integer',
@@ -24,9 +26,11 @@ const nonNegativeInteger = Schema.Finite.check(
 );
 
 const MAX_SESSION_ID_LENGTH = 512;
+
 const MAX_SESSION_PATH_LENGTH = 4096;
 
 export const NativeSessionReferenceKindSchema = Schema.Literals(['id', 'path', 'thread']);
+
 export type NativeSessionReferenceKind = typeof NativeSessionReferenceKindSchema.Type;
 
 export const NativeSessionPointerSchema = Schema.Struct({
@@ -35,6 +39,7 @@ export const NativeSessionPointerSchema = Schema.Struct({
   value: nonEmpty,
   source: nonEmpty,
 });
+
 export type NativeSessionPointer = typeof NativeSessionPointerSchema.Type;
 
 export const NativeSessionReferenceStatusSchema = Schema.Literals([
@@ -42,6 +47,7 @@ export const NativeSessionReferenceStatusSchema = Schema.Literals([
   'unconfirmed',
   'legacy-untyped',
 ]);
+
 export type NativeSessionReferenceStatus = typeof NativeSessionReferenceStatusSchema.Type;
 
 export const NativeSessionBindingEvidenceSchema = Schema.Struct({
@@ -53,6 +59,7 @@ export const NativeSessionBindingEvidenceSchema = Schema.Struct({
   foregroundProcess: Schema.optional(Schema.Struct({ pid: positiveInteger, startToken: nonEmpty })),
   endpointProtocolGeneration: Schema.optional(nonNegativeInteger),
 });
+
 export type NativeSessionBindingEvidence = typeof NativeSessionBindingEvidenceSchema.Type;
 
 export const NativeSessionReferenceSchema = Schema.Struct({
@@ -72,6 +79,7 @@ export const NativeSessionReferenceSchema = Schema.Struct({
   binding: NativeSessionBindingEvidenceSchema,
   rejectionReason: Schema.NullOr(nonEmpty),
 });
+
 export type NativeSessionReference = typeof NativeSessionReferenceSchema.Type;
 
 const OFFICIAL_HERDR_SOURCES = new Map<string, string>([
@@ -97,6 +105,7 @@ const OFFICIAL_HERDR_SOURCES = new Map<string, string>([
 function noControlCharacters(value: string): boolean {
   return !Array.from(value).some((character) => {
     const code = character.codePointAt(0);
+
     return code !== undefined && (code <= 0x1f || code === 0x7f);
   });
 }
@@ -125,12 +134,14 @@ export function herdrSessionPointer(input: {
   value: string;
 }): NativeSessionPointer | undefined {
   if (OFFICIAL_HERDR_SOURCES.get(input.source) !== input.agent) return undefined;
+
   if (input.kind === 'path') {
     if ((input.agent !== 'pi' && input.agent !== 'omp') || !validPath(input.value))
       return undefined;
   } else if (input.kind === 'id') {
     if (!validId(input.value)) return undefined;
   } else return undefined;
+
   return Schema.decodeSync(NativeSessionPointerSchema, { onExcessProperty: 'error' })({
     harness: harnessForHerdrAgent(input.agent),
     kind: input.kind,
@@ -141,6 +152,7 @@ export function herdrSessionPointer(input: {
 
 export function codexAppServerThreadPointer(threadId: string): NativeSessionPointer {
   if (!validId(threadId)) throw new Error('Codex app-server thread id is invalid');
+
   return Schema.decodeSync(NativeSessionPointerSchema)({
     harness: 'codex-app-server',
     kind: 'thread',
