@@ -4,6 +4,7 @@ import { BoardPostKindSchema, BoardReferenceSchema } from './board.js';
 import { gitStateSchema } from './git.js';
 import {
   AttemptIdSchema,
+  AttemptRecoverySchema,
   BriefContentSchema,
   DeliveryKindSchema,
   DigestSchema,
@@ -163,6 +164,7 @@ export const operationSchemas = [
     idempotencyKey: key,
   }),
   strict({ operation: Schema.Literal('result.get'), id: ResultIdSchema }),
+  strict({ operation: Schema.Literal('result.discover'), attemptId: AttemptIdSchema }),
   strict({
     operation: Schema.Literal('result.record'),
     attemptId: AttemptIdSchema,
@@ -250,7 +252,11 @@ export const operationSchemas = [
   }),
   strict({ operation: Schema.Literal('attempt.start'), id: AttemptIdSchema }),
   strict({ operation: Schema.Literal('attempt.inspect'), id: AttemptIdSchema }),
-  strict({ operation: Schema.Literal('attempt.reconcile'), id: AttemptIdSchema }),
+  strict({
+    operation: Schema.Literal('attempt.reconcile'),
+    id: AttemptIdSchema,
+    recovery: optional(AttemptRecoverySchema),
+  }),
   strict({
     operation: Schema.Literal('sql.contribute'),
     threadId: key,
@@ -290,25 +296,26 @@ const operationDecoders = {
   'attempt.get': Schema.decodeUnknownSync(operationSchemas[20]),
   'brief.acknowledge': Schema.decodeUnknownSync(operationSchemas[21]),
   'result.get': Schema.decodeUnknownSync(operationSchemas[22]),
-  'result.record': Schema.decodeUnknownSync(operationSchemas[23]),
-  'result.decide': Schema.decodeUnknownSync(operationSchemas[24]),
-  'board.create': Schema.decodeUnknownSync(operationSchemas[25]),
-  'board.post': Schema.decodeUnknownSync(operationSchemas[26]),
-  'board.list': Schema.decodeUnknownSync(operationSchemas[27]),
-  'board.read': Schema.decodeUnknownSync(operationSchemas[28]),
-  'board.search': Schema.decodeUnknownSync(operationSchemas[29]),
-  'board.subscribe': Schema.decodeUnknownSync(operationSchemas[30]),
-  'board.unsubscribe': Schema.decodeUnknownSync(operationSchemas[31]),
-  'board.mark-read': Schema.decodeUnknownSync(operationSchemas[32]),
-  'sql.read': Schema.decodeUnknownSync(operationSchemas[33]),
-  'profile.list': Schema.decodeUnknownSync(operationSchemas[34]),
-  'profile.configure': Schema.decodeUnknownSync(operationSchemas[35]),
-  'native.register': Schema.decodeUnknownSync(operationSchemas[36]),
-  'attempt.admit': Schema.decodeUnknownSync(operationSchemas[37]),
-  'attempt.start': Schema.decodeUnknownSync(operationSchemas[38]),
-  'attempt.inspect': Schema.decodeUnknownSync(operationSchemas[39]),
-  'attempt.reconcile': Schema.decodeUnknownSync(operationSchemas[40]),
-  'sql.contribute': Schema.decodeUnknownSync(operationSchemas[41]),
+  'result.discover': Schema.decodeUnknownSync(operationSchemas[23]),
+  'result.record': Schema.decodeUnknownSync(operationSchemas[24]),
+  'result.decide': Schema.decodeUnknownSync(operationSchemas[25]),
+  'board.create': Schema.decodeUnknownSync(operationSchemas[26]),
+  'board.post': Schema.decodeUnknownSync(operationSchemas[27]),
+  'board.list': Schema.decodeUnknownSync(operationSchemas[28]),
+  'board.read': Schema.decodeUnknownSync(operationSchemas[29]),
+  'board.search': Schema.decodeUnknownSync(operationSchemas[30]),
+  'board.subscribe': Schema.decodeUnknownSync(operationSchemas[31]),
+  'board.unsubscribe': Schema.decodeUnknownSync(operationSchemas[32]),
+  'board.mark-read': Schema.decodeUnknownSync(operationSchemas[33]),
+  'sql.read': Schema.decodeUnknownSync(operationSchemas[34]),
+  'profile.list': Schema.decodeUnknownSync(operationSchemas[35]),
+  'profile.configure': Schema.decodeUnknownSync(operationSchemas[36]),
+  'native.register': Schema.decodeUnknownSync(operationSchemas[37]),
+  'attempt.admit': Schema.decodeUnknownSync(operationSchemas[38]),
+  'attempt.start': Schema.decodeUnknownSync(operationSchemas[39]),
+  'attempt.inspect': Schema.decodeUnknownSync(operationSchemas[40]),
+  'attempt.reconcile': Schema.decodeUnknownSync(operationSchemas[41]),
+  'sql.contribute': Schema.decodeUnknownSync(operationSchemas[42]),
 };
 function isOperationName(value: string): value is keyof typeof operationDecoders {
   return Object.hasOwn(operationDecoders, value);
@@ -415,6 +422,8 @@ export function executeEffect(client: Marionette, raw: unknown) {
         return yield* invoke(() => client.acknowledgeBrief(payload(input)));
       case 'result.get':
         return yield* invoke(() => client.result(input.id));
+      case 'result.discover':
+        return yield* invoke(() => client.discoverResult(input.attemptId));
       case 'result.record':
         return yield* invoke(() => client.recordResult(payload(input)));
       case 'result.decide':
@@ -450,7 +459,12 @@ export function executeEffect(client: Marionette, raw: unknown) {
       case 'attempt.inspect':
         return yield* client.inspectAttemptEffect(input.id);
       case 'attempt.reconcile':
-        return yield* client.reconcileAttemptEffect(input.id);
+        return input.recovery === undefined
+          ? yield* client.reconcileAttemptEffect(input.id)
+          : yield* client.recoverAttemptEffect({
+              attemptId: input.id,
+              ...input.recovery,
+            });
       case 'sql.contribute':
         return yield* client.contributeEffect(payload(input));
     }

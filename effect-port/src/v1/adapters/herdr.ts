@@ -4,6 +4,7 @@ import {
   HerdrNativeAdapter,
   NativeAdoptionLocatorSchema,
   NativeBindingSchema,
+  NativeFailureSchema,
   NativeFixtureRecoveryAuthorizationSchema,
   NativeIdentitySchema,
   NativeLaunchLocatorSchema,
@@ -27,13 +28,14 @@ const positiveInteger = Schema.Finite.check(
   Schema.makeFilter((value) => Number.isInteger(value) && value > 0, { expected: 'a positive integer' }),
 );
 const reason = nonEmpty;
+const failure = Schema.optional(NativeFailureSchema);
 const unsupported = Schema.Struct({ kind: Schema.Literal('unsupported'), reason });
 export const herdrObservationSchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal('working'), identity: NativeIdentitySchema }),
-  Schema.Struct({ kind: Schema.Literal('blocked'), identity: NativeIdentitySchema, reason }),
-  Schema.Struct({ kind: Schema.Literal('manual-required'), identity: NativeIdentitySchema, reason }),
-  Schema.Struct({ kind: Schema.Literal('settled'), identity: NativeIdentitySchema, slotReady: Schema.Literal(true) }),
-  Schema.Struct({ kind: Schema.Literal('unconfirmed'), reason }),
+  Schema.Struct({ kind: Schema.Literal('blocked'), identity: NativeIdentitySchema, reason, failure }),
+  Schema.Struct({ kind: Schema.Literal('manual-required'), identity: NativeIdentitySchema, reason, failure }),
+  Schema.Struct({ kind: Schema.Literal('settled'), identity: NativeIdentitySchema, slotReady: Schema.Literal(true), failure }),
+  Schema.Struct({ kind: Schema.Literal('unconfirmed'), reason, failure }),
 ]);
 export const herdrSubmissionSchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal('submitted'), operationId: nonEmpty }),
@@ -137,5 +139,5 @@ export type HerdrAdapterOptions = { endpointInspector?: NativeEndpointInspector;
 export function createHerdrAdapter(journal: NativeJournal, options: HerdrAdapterOptions = {}): HerdrAdapter {
   return composeHerdrAdapter(new HerdrNativeAdapter(journal, options.endpointInspector, options.clientFor, options.processInspector));
 }
-export { NativeBindingSchema, NativeIdentitySchema, NativeLaunchLocatorSchema };
-export type { NativeBinding, NativeEffect, NativeEndpointInspector, NativeIdentity, NativeJournal, NativeProcessInspector } from '../native.js';
+export { NativeBindingSchema, NativeFailureSchema, NativeIdentitySchema, NativeLaunchLocatorSchema };
+export type { NativeBinding, NativeEffect, NativeEndpointInspector, NativeFailure, NativeFailureEvidence, NativeIdentity, NativeJournal, NativeObservation, NativeProcessInspector } from '../native.js';

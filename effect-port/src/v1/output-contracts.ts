@@ -182,8 +182,8 @@ const resultSchema = publicObject({
   inputDigest: DigestSchema,
   workspaceDigest: DigestSchema,
   content: ResultContentSchema,
-  evidenceClaims: array(string),
-  evidence: array(EvidenceSchema),
+  evidenceClaims: Schema.mutable(Schema.Array(string)),
+  evidence: Schema.mutable(Schema.Array(EvidenceSchema)),
   verification: VerificationSchema,
   createdAt: TimestampSchema,
 });
@@ -341,6 +341,10 @@ export const operationOutputSchemas = {
   'attempt.reconcile': attemptNativeSchema,
   'brief.acknowledge': briefSchema,
   'result.get': resultSchema,
+  'result.discover': Schema.Union([
+    publicObject({ kind: Schema.Literal('found'), result: resultSchema }),
+    publicObject({ kind: Schema.Literal('pending') }),
+  ]),
   'result.record': publicObject({ ...resultSchema.fields, replayed: Schema.Boolean }),
   'result.decide': publicObject({
     id: key,

@@ -21,6 +21,7 @@ import {
   type AttemptId,
 } from './model.js';
 import { loadPackage, route } from './packages.js';
+import type { NativeObservation } from './native.js';
 import { Settings, profileSchema } from './settings.js';
 import { SqlQueryService, type SqlRead } from './sql.js';
 import { Runtime } from './runtime.js';
@@ -46,6 +47,7 @@ import {
   type RecordResultInput,
   type ResultDecisionInput,
   type AcknowledgeBriefInput,
+  type RecoverAttemptInput,
 } from './store.js';
 
 export class ClientOperationError extends Schema.TaggedError<ClientOperationError>()(
@@ -344,6 +346,10 @@ export class Marionette {
     this.#authenticate();
     return this.#store.getResult(id);
   }
+  discoverResult(attemptId: AttemptId) {
+    this.#authenticate();
+    return this.#store.discoverResult(attemptId);
+  }
 
   acknowledgeBrief(input: Omit<AcknowledgeBriefInput, 'actor'>) {
     this.#authenticate();
@@ -470,6 +476,46 @@ export class Marionette {
   });
   reconcileAttempt(id: AttemptId) {
     return Effect.runPromise(this.reconcileAttemptEffect(id));
+  }
+
+  recoverAttemptEffect = Effect.fn('Marionette.recoverAttempt')(function* (
+    this: Marionette,
+    input: Omit<RecoverAttemptInput, 'actor'>,
+  ) {
+    const session = yield* clientCall('recoverAttempt.authenticate', () => this.#authenticate());
+    if (session.role === 'worker')
+      return yield* clientError(
+        'recoverAttempt',
+        new Error('An active controller or user is required'),
+      );
+    const attempt = yield* clientCall('recoverAttempt.getAttempt', () =>
+      this.#store.getAttempt(input.attemptId),
+    );
+    let native: NativeObservation = {
+      kind: 'unconfirmed',
+      reason: 'Attempt recovery did not perform native inspection',
+    };
+    if (!['pending', 'settled', 'closed'].includes(attempt.phase)) {
+      const observed = yield* this.#runtime.inspectEffect(input.attemptId);
+      if (observed.native.kind === 'working')
+        return yield* clientError(
+          'recoverAttempt',
+          new Error('A working native attempt cannot be recovered'),
+        );
+      if (observed.native.kind === 'unconfirmed')
+        return yield* clientError(
+          'recoverAttempt',
+          new Error('Native state must be confirmed non-running before recovery'),
+        );
+      native = observed.native;
+    }
+    const recovered = yield* clientCall('recoverAttempt.settle', () =>
+      this.#store.recoverAttempt({ ...input, actor: this.#identity }),
+    );
+    return { ...recovered, native };
+  });
+  recoverAttempt(input: Omit<RecoverAttemptInput, 'actor'>) {
+    return Effect.runPromise(this.recoverAttemptEffect(input));
   }
 
   ensureWatcherEffect = Effect.fn('Marionette.ensureWatcher')(function* (this: Marionette) {

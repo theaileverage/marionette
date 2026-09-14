@@ -53,6 +53,20 @@ export {
 } from './adapters/codex-app-server.js';
 export { executeEffect } from './operations.js';
 export { MarionetteService, acquireMarionette, marionetteLayer } from './service.js';
+export {
+  DelegationOperations,
+  DelegationProviderError,
+  DelegationInputError,
+  DelegationDecisionUnavailable,
+  marionetteDelegationOperationsLayer,
+  delegate,
+  type DelegationOperationsInterface,
+  type ResultDiscovery,
+  type ResultDiscoveryOutcome,
+  type DelegationInput,
+  type DelegationOutcome,
+  type DelegationHandle,
+} from './delegation.js';
 export * from '../extensions.js';
 export { OperationError } from './operations.js';
 export { ClientOperationError } from './client.js';

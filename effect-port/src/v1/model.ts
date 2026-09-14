@@ -270,6 +270,14 @@ export const AttemptPhaseSchema = Schema.Literals([
 ]);
 export type AttemptPhase = typeof AttemptPhaseSchema.Type;
 
+export const AttemptRecoverySchema = Schema.Struct({
+  expectedBriefRevision: RevisionSchema,
+  outcome: Schema.Literals(["failed", "interrupted"]),
+  reason: nonEmptyString,
+  idempotencyKey: nonEmptyString,
+});
+export type AttemptRecovery = typeof AttemptRecoverySchema.Type;
+
 export const WorkflowPhaseSchema = Schema.Literals([
   "running",
   "pausing",

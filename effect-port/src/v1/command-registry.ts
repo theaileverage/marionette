@@ -80,6 +80,10 @@ export const commandMetadata = {
     effect: 'local-write',
   },
   'result.get': { summary: 'Read a durable result.', effect: 'read' },
+  'result.discover': {
+    summary: 'Discover whether an attempt has recorded a durable result.',
+    effect: 'read',
+  },
   'result.record': {
     summary: 'Record an active attempt result and verified evidence.',
     effect: 'local-write',

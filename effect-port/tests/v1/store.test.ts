@@ -531,6 +531,9 @@ test('fences attempt launch, persists immutable results, and releases settled re
     nativeLocator: 'pane-1',
     idempotencyKey: 'observe-result-attempt',
   });
+
+  assert.deepEqual(current.store.discoverResult(admission.attempt.id), { kind: 'pending' });
+
   const files = new ArtifactFiles(current.project.stateDirectory);
   const artifact = files.put(Buffer.from('verified command output'));
   const artifactDigest = Schema.decodeUnknownSync(DigestSchema)(artifact.digest);
@@ -557,7 +560,13 @@ test('fences attempt launch, persists immutable results, and releases settled re
     upstreamResultIds: [],
     idempotencyKey: 'record-result',
   });
+
   assert.deepEqual(current.store.getResult(result.id), result);
+  assert.deepEqual(current.store.discoverResult(admission.attempt.id), {
+    kind: 'found',
+    result,
+  });
+
   assert.equal(
     current.store.read(
       (database) =>

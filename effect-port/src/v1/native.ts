@@ -150,6 +150,28 @@ export class NativeBoundaryError extends Schema.TaggedError<NativeBoundaryError>
   cause: Schema.Defect(),
 }) {}
 
+const nativeFailureDiagnosticSchema = Schema.Struct({
+  source: Schema.Literals(['pane', 'status', 'transport', 'adapter']),
+  detail: Schema.String,
+  operation: Schema.optional(nonEmpty),
+  code: Schema.optional(nonEmpty),
+  truncated: Schema.optional(Schema.Boolean),
+});
+
+export const NativeFailureSchema = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal('trust-required'), diagnostic: nativeFailureDiagnosticSchema }),
+  Schema.Struct({ kind: Schema.Literal('provider-refusal'), diagnostic: nativeFailureDiagnosticSchema }),
+  Schema.Struct({ kind: Schema.Literal('idle-without-result'), diagnostic: nativeFailureDiagnosticSchema }),
+  Schema.Struct({ kind: Schema.Literal('transport-failure'), diagnostic: nativeFailureDiagnosticSchema }),
+  Schema.Struct({ kind: Schema.Literal('unknown'), diagnostic: nativeFailureDiagnosticSchema }),
+]);
+export type NativeFailure = typeof NativeFailureSchema.Type;
+
+export type NativeFailureEvidence =
+  | { source: 'pane'; status: ResponseTypes.AgentStatus; text: string; truncated: boolean; interactiveReady?: boolean; launchPending?: boolean }
+  | { source: 'boundary'; operation: string; cause: unknown }
+  | { source: 'adapter'; detail: string };
+
 const processIdSchema = Schema.String.check(Schema.isPattern(/^\d+$/));
 const processStartSchema = nonEmpty;
 
@@ -230,10 +252,10 @@ export type NativeSubmission =
 
 export type NativeObservation =
   | { kind: 'working'; identity: NativeIdentity }
-  | { kind: 'blocked'; identity: NativeIdentity; reason: string }
-  | { kind: 'manual-required'; identity: NativeIdentity; reason: string }
-  | { kind: 'settled'; identity: NativeIdentity; slotReady: true }
-  | { kind: 'unconfirmed'; reason: string };
+  | { kind: 'blocked'; identity: NativeIdentity; reason: string; failure?: NativeFailure }
+  | { kind: 'manual-required'; identity: NativeIdentity; reason: string; failure?: NativeFailure }
+  | { kind: 'settled'; identity: NativeIdentity; slotReady: true; failure?: NativeFailure }
+  | { kind: 'unconfirmed'; reason: string; failure?: NativeFailure };
 
 export type LaunchRequest = {
   cwd: string;
@@ -365,6 +387,46 @@ function manualRequirement(text: string) {
   if (/approval required/i.test(text) || /awaiting (?:your )?approval/i.test(text))
     return 'Native approval prompt requires an explicit user action';
   return undefined;
+}
+
+function explicitProviderRefusal(text: string) {
+  return /^(?:(?:i(?:['’]m| am) sorry)[,.:;]?\s*(?:but\s+)?)?i (?:can(?:not|['’]t)|won['’]t|am unable to) (?:assist|help|comply|continue|proceed|fulfill)\b/im.test(text) ||
+    /^provider (?:refused|rejected|declined) (?:the )?(?:request|prompt|task)\b/im.test(text);
+}
+
+function boundaryDiagnostic(evidence: Extract<NativeFailureEvidence, { source: 'boundary' }>) {
+  const cause = evidence.cause instanceof NativeBoundaryError ? evidence.cause.cause : evidence.cause;
+  const operation = evidence.cause instanceof NativeBoundaryError ? evidence.cause.operation : evidence.operation;
+  const detail = cause instanceof Error && cause.message ? cause.message : boundaryReason(evidence.cause, 'Native boundary failed');
+  const code = cause instanceof HerdrError && cause.code ? cause.code : undefined;
+  const diagnostic: { source: 'transport' | 'adapter'; detail: string; operation: string; code?: string } = {
+    source: code?.startsWith('herdr_') ? 'transport' : 'adapter', detail, operation,
+  };
+  if (code) diagnostic.code = code;
+  return diagnostic;
+}
+
+/** Classifies only explicit Herdr evidence; ambiguous strings deliberately remain unknown. */
+export function classifyNativeFailure(evidence: NativeFailureEvidence): NativeFailure {
+  if (evidence.source === 'pane') {
+    const diagnostic = { source: 'pane' as const, detail: evidence.text, truncated: evidence.truncated };
+    if (manualRequirement(evidence.text)?.startsWith('Native trust prompt')) return { kind: 'trust-required', diagnostic };
+    if (explicitProviderRefusal(evidence.text)) return { kind: 'provider-refusal', diagnostic };
+    if ((evidence.status === 'idle' || evidence.status === 'done') && evidence.launchPending === false && evidence.interactiveReady === true)
+      return { kind: 'idle-without-result', diagnostic };
+    return { kind: 'unknown', diagnostic };
+  }
+  if (evidence.source === 'boundary') {
+    const diagnostic = boundaryDiagnostic(evidence);
+    if (diagnostic.code && ['provider_refusal', 'provider_refused', 'provider_rejected'].includes(diagnostic.code))
+      return { kind: 'provider-refusal', diagnostic };
+    return { kind: diagnostic.source === 'transport' ? 'transport-failure' : 'unknown', diagnostic };
+  }
+  return { kind: 'unknown', diagnostic: { source: 'adapter', detail: evidence.detail } };
+}
+
+function unconfirmedObservation(reason: string, evidence: NativeFailureEvidence = { source: 'adapter', detail: reason }): NativeObservation {
+  return { kind: 'unconfirmed', reason, failure: classifyNativeFailure(evidence) };
 }
 
 function launchLocator(
@@ -512,60 +574,62 @@ export class HerdrNativeAdapter {
       const client = yield* self.clientEffect(identity.binding);
       const current = yield* self.boundary('Herdr.agent.get', () => client.request('agent.get', { target: identity.paneId }));
       if (current.type !== 'agent_info' || !(yield* self.sameIdentityEffect(client, identity, current.agent)))
-        return { kind: 'unconfirmed', reason: 'Native agent identity changed' } as NativeObservation;
-      if (current.agent.agent_status === 'idle' || current.agent.agent_status === 'done') {
+        return unconfirmedObservation('Native agent identity changed');
+      if (current.agent.agent_status === 'idle' || current.agent.agent_status === 'done' || current.agent.agent_status === 'blocked') {
         const screen = yield* self.boundary('Herdr.pane.read', () => client.request('pane.read', { pane_id: identity.paneId, source: 'recent_unwrapped', format: 'text', lines: 120, strip_ansi: true }));
         if (screen.type !== 'pane_read' || screen.read.pane_id !== identity.paneId || screen.read.tab_id !== identity.tabId || screen.read.workspace_id !== identity.binding.workspaceId)
-          return { kind: 'unconfirmed', reason: 'Native pane read did not match the registered pane' } as NativeObservation;
+          return unconfirmedObservation('Native pane read did not match the registered pane');
+        const failure = classifyNativeFailure({ source: 'pane', status: current.agent.agent_status, text: screen.read.text, truncated: screen.read.truncated === true, interactiveReady: current.agent.interactive_ready, launchPending: current.agent.launch_pending });
         const required = manualRequirement(screen.read.text);
-        if (required) return { kind: 'manual-required', identity, reason: required } as NativeObservation;
+        if (required) return { kind: 'manual-required', identity, reason: required, failure } satisfies NativeObservation;
+        if (failure.kind === 'provider-refusal') return { kind: 'blocked', identity, reason: 'Native provider refused the request', failure } satisfies NativeObservation;
+        if (current.agent.agent_status === 'blocked') return { kind: 'blocked', identity, reason: 'Native agent is blocked', failure } satisfies NativeObservation;
+        if (!current.agent.launch_pending && current.agent.interactive_ready === true)
+          return { kind: 'settled', identity, slotReady: true, failure } satisfies NativeObservation;
       }
       if (current.agent.agent_status === 'working') return { kind: 'working', identity } as NativeObservation;
-      if (current.agent.agent_status === 'blocked') return { kind: 'blocked', identity, reason: 'Native agent is blocked' } as NativeObservation;
-      if ((current.agent.agent_status === 'idle' || current.agent.agent_status === 'done') && !current.agent.launch_pending && current.agent.interactive_ready === true)
-        return { kind: 'settled', identity, slotReady: true } as NativeObservation;
-      return { kind: 'unconfirmed', reason: 'Native agent is not explicitly ready' } as NativeObservation;
+      return unconfirmedObservation('Native agent is not explicitly ready', { source: 'adapter', detail: `Herdr reported status=${current.agent.agent_status}, interactive_ready=${String(current.agent.interactive_ready)}, launch_pending=${String(current.agent.launch_pending)}` });
     });
-    return yield* workflow.pipe(Effect.catch((cause) => Effect.succeed({ kind: 'unconfirmed', reason: boundaryReason(cause, 'Native observation failed') } as NativeObservation)));
+    return yield* workflow.pipe(Effect.catch((cause) => Effect.succeed(unconfirmedObservation(boundaryReason(cause, 'Native observation failed'), { source: 'boundary', operation: cause instanceof NativeBoundaryError ? cause.operation : 'HerdrNativeAdapter.observe', cause }))));
   }.bind(this));
 
   readonly recoverEffect = Effect.fn('HerdrNativeAdapter.recover')(function* (this: HerdrNativeAdapter, binding: NativeBinding, locator: NativeLaunchLocator) {
-    if (decodeOptional(NativeLaunchLocatorSchema, locator) === undefined) return { kind: 'unconfirmed', reason: 'Persisted native launch locator is invalid' } as NativeObservation;
-    if (!sameBinding(binding, locator.binding) || locator.ownedTabId !== locator.tabId) return { kind: 'unconfirmed', reason: 'Persisted native launch locator changed' } as NativeObservation;
+    if (decodeOptional(NativeLaunchLocatorSchema, locator) === undefined) return unconfirmedObservation('Persisted native launch locator is invalid');
+    if (!sameBinding(binding, locator.binding) || locator.ownedTabId !== locator.tabId) return unconfirmedObservation('Persisted native launch locator changed');
     const self = this;
     const workflow = Effect.gen(function* () {
       const client = yield* self.clientEffect(binding);
       const current = yield* self.boundary('Herdr.agent.get', () => client.request('agent.get', { target: locator.paneId }));
-      if (current.type !== 'agent_info' || !sameAgent(locator, current.agent)) return { kind: 'unconfirmed', reason: 'Native agent locator no longer matches' } as NativeObservation;
+      if (current.type !== 'agent_info' || !sameAgent(locator, current.agent)) return unconfirmedObservation('Native agent locator no longer matches');
       if (locator.nativeSession) {
-        if (current.agent.agent_session?.value !== locator.nativeSession) return { kind: 'unconfirmed', reason: 'Native agent session changed' } as NativeObservation;
+        if (current.agent.agent_session?.value !== locator.nativeSession) return unconfirmedObservation('Native agent session changed');
         const identity = agentIdentity(binding, current.agent, locator, locator.ownedTabId);
-        return identity ? yield* self.observeEffect(identity) : { kind: 'unconfirmed', reason: 'Native agent identity is unavailable' } as NativeObservation;
+        return identity ? yield* self.observeEffect(identity) : unconfirmedObservation('Native agent identity is unavailable');
       }
-      if (!locator.foregroundProcess) return { kind: 'unconfirmed', reason: 'Native process identity is unavailable' } as NativeObservation;
+      if (!locator.foregroundProcess) return unconfirmedObservation('Native process identity is unavailable');
       const foregroundProcess = yield* self.foregroundProcessEffect(client, locator.paneId, locator.agentKind);
       if (foregroundProcess?.pid !== locator.foregroundProcess.pid || foregroundProcess.startToken !== locator.foregroundProcess.startToken)
-        return { kind: 'unconfirmed', reason: 'Native foreground process changed' } as NativeObservation;
+        return unconfirmedObservation('Native foreground process changed');
       const identity = agentIdentity(binding, current.agent, locator, locator.ownedTabId, foregroundProcess);
-      return identity ? yield* self.observeEffect(identity) : { kind: 'unconfirmed', reason: 'Native agent identity is unavailable' } as NativeObservation;
+      return identity ? yield* self.observeEffect(identity) : unconfirmedObservation('Native agent identity is unavailable');
     });
-    return yield* workflow.pipe(Effect.catch((cause) => Effect.succeed({ kind: 'unconfirmed', reason: boundaryReason(cause, 'Native recovery failed') } as NativeObservation)));
+    return yield* workflow.pipe(Effect.catch((cause) => Effect.succeed(unconfirmedObservation(boundaryReason(cause, 'Native recovery failed'), { source: 'boundary', operation: cause instanceof NativeBoundaryError ? cause.operation : 'HerdrNativeAdapter.recover', cause }))));
   }.bind(this));
 
   readonly adoptEffect = Effect.fn('HerdrNativeAdapter.adopt')(function* (this: HerdrNativeAdapter, binding: NativeBinding, locator: NativeLaunchLocator, authorization: NativeFixtureRecoveryAuthorization) {
-    if (decodeOptional(NativeAdoptionLocatorSchema, locator) === undefined) return { kind: 'unconfirmed', reason: 'Native fixture adoption locator is invalid' } as NativeObservation;
-    if (decodeOptional(NativeFixtureRecoveryAuthorizationSchema, authorization) === undefined) return { kind: 'unconfirmed', reason: 'Native fixture adoption authorization is invalid' } as NativeObservation;
+    if (decodeOptional(NativeAdoptionLocatorSchema, locator) === undefined) return unconfirmedObservation('Native fixture adoption locator is invalid');
+    if (decodeOptional(NativeFixtureRecoveryAuthorizationSchema, authorization) === undefined) return unconfirmedObservation('Native fixture adoption authorization is invalid');
     if (!sameBinding(binding, locator.binding) || !sameBinding(binding, authorization.binding) || locator.ownedTabId !== locator.tabId || !sameFixtureAuthorization(locator, authorization))
-      return { kind: 'unconfirmed', reason: 'Native fixture adoption target changed' } as NativeObservation;
+      return unconfirmedObservation('Native fixture adoption target changed');
     const self = this;
     const workflow = Effect.gen(function* () {
       const client = yield* self.clientEffect(binding);
       const current = yield* self.boundary('Herdr.agent.get', () => client.request('agent.get', { target: locator.paneId }));
-      if (current.type !== 'agent_info' || !sameAgent(locator, current.agent)) return { kind: 'unconfirmed', reason: 'Native fixture agent locator no longer matches' } as NativeObservation;
+      if (current.type !== 'agent_info' || !sameAgent(locator, current.agent)) return unconfirmedObservation('Native fixture agent locator no longer matches');
       const identity = yield* self.identityEffect(client, binding, current.agent, locator, locator.ownedTabId);
-      return identity ? yield* self.observeEffect(identity) : { kind: 'unconfirmed', reason: 'Native fixture agent identity is unavailable' } as NativeObservation;
+      return identity ? yield* self.observeEffect(identity) : unconfirmedObservation('Native fixture agent identity is unavailable');
     });
-    return yield* workflow.pipe(Effect.catch((cause) => Effect.succeed({ kind: 'unconfirmed', reason: boundaryReason(cause, 'Native fixture adoption failed') } as NativeObservation)));
+    return yield* workflow.pipe(Effect.catch((cause) => Effect.succeed(unconfirmedObservation(boundaryReason(cause, 'Native fixture adoption failed'), { source: 'boundary', operation: cause instanceof NativeBoundaryError ? cause.operation : 'HerdrNativeAdapter.adopt', cause }))));
   }.bind(this));
 
   readonly registerEffect = Effect.fn('HerdrNativeAdapter.register')(function* (this: HerdrNativeAdapter, input: { hostId: string; socketPath: string; workspaceId: string }) {

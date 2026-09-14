@@ -25,18 +25,25 @@ function operation(name: string) {
   return description;
 }
 
-test('ports the complete operation registry without product imports from the baseline', () => {
-  const baselineNames = baselineOperationSchema.options.map(
+test('ports the complete baseline registry plus public result discovery', () => {
+  const baselineNames = baselineOperationSchema.options.map<string>(
     (schema) => schema.shape.operation.value,
   );
+
+  const resultRecordIndex = baselineNames.indexOf('result.record');
+
+  assert.notEqual(resultRecordIndex, -1);
+
+  const expectedNames = baselineNames.toSpliced(resultRecordIndex, 0, 'result.discover');
+
   assert.deepEqual(
     operationDescriptions().map((entry) => entry.operation),
-    baselineNames,
+    expectedNames,
   );
-  assert.equal(operationSchemas.length, baselineNames.length);
+  assert.equal(operationSchemas.length, baselineNames.length + 1);
   assert.deepEqual(
     commands.map((command) => command.name),
-    baselineNames,
+    expectedNames,
   );
   assert.deepEqual(exitCodes, { success: 0, operationFailed: 1, invalidInput: 2 });
 
@@ -164,6 +171,12 @@ test('preserves discoverable defaults, bounds, watcher and dry-run metadata', ()
   );
   assert.deepEqual(operation('attempt.admit').fields.inputResultIds.default, []);
   assert.deepEqual(operation('workflow.create').fields.boundary.default, 'all');
+  assert.deepEqual(operation('result.discover').fields.attemptId, {
+    type: 'string',
+    minLength: 1,
+    maxLength: 255,
+    required: true,
+  });
   assert.deepEqual(operation('board.list').fields.limit, {
     type: 'number',
     integer: true,
@@ -173,6 +186,7 @@ test('preserves discoverable defaults, bounds, watcher and dry-run metadata', ()
   });
   assert.equal(commandMetadata['board.post'].watcher, true);
   assert.equal(commandMetadata['workspace.retire'].effect, 'destructive');
+  assert.equal(commandMetadata['result.discover'].effect, 'read');
 });
 
 test('preserves argument conflict ordering and additive output fields', () => {
@@ -190,6 +204,11 @@ test('preserves argument conflict ordering and additive output fields', () => {
   });
   assert.equal(Object.hasOwn(value, 'future'), true);
   assert.equal(Object.hasOwn(value.author, 'generation'), true);
+
+  assert.deepEqual(parseOperationOutput('result.discover', { kind: 'pending', future: true }), {
+    kind: 'pending',
+    future: true,
+  });
 });
 
 test('keeps operation failures typed in Effect and unwraps them for the Promise API', async () => {

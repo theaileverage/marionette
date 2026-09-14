@@ -30,6 +30,7 @@ import {
   type AgentSessionId,
   type Attempt,
   type AttemptId,
+  type AttemptRecovery,
   type BriefContent,
   type BriefId,
   type BriefRevision,
@@ -244,6 +245,17 @@ export type SettleAttemptInput = {
   idempotencyKey: string;
 };
 
+export type RecoverAttemptInput = AttemptRecovery & {
+  actor: SessionIdentity;
+  attemptId: AttemptId;
+  idempotencyKey: string;
+};
+
+export type RecoveredAttempt = {
+  attempt: Attempt;
+  replayed: boolean;
+};
+
 export type ResultDecisionInput = {
   actor: SessionIdentity;
   resultId: ResultId;
@@ -261,6 +273,10 @@ export type ResultDecision = {
   createdAt: Timestamp;
   replayed: boolean;
 };
+
+export type ResultDiscovery =
+  | { readonly kind: 'found'; readonly result: Result }
+  | { readonly kind: 'pending' };
 
 export type AcknowledgeBriefInput = {
   actor: SessionIdentity;
@@ -537,6 +553,23 @@ const nativeIdentitySchema = Schema.Union([
     locator: nonEmptyString,
   }),
 ]);
+const recoverableNativeObservationSchema = Schema.Struct({
+  kind: Schema.Literal('settled'),
+});
+const recoveryRuntimeRowSchema = Schema.Struct({
+  phase: Schema.Literals([
+    'admitted',
+    'launch-claimed',
+    'launched',
+    'prompt-claimed',
+    'active',
+    'settled',
+    'unconfirmed',
+  ]),
+  identity_json: nullable(Schema.String),
+  last_observation_json: nullable(Schema.String),
+  effect_count: nonnegativeInteger,
+});
 
 type SqliteRow = Record<string, SQLOutputValue>;
 
@@ -1950,6 +1983,20 @@ export class Store {
     return this.read((database) => this.#requireResult(database, id));
   }
 
+  discoverResult(attemptId: AttemptId): ResultDiscovery {
+    return this.read((database) => {
+      this.#requireAttempt(database, attemptId);
+
+      const row = database
+        .prepare('SELECT * FROM results WHERE project_id = ? AND attempt_id = ?')
+        .get(this.project.id, attemptId);
+
+      return row === undefined
+        ? { kind: 'pending' }
+        : { kind: 'found', result: this.#resultFromRow(row) };
+    });
+  }
+
   listResults(jobId?: JobId): Result[] {
     return this.read((database) => {
       const rows =
@@ -2330,6 +2377,68 @@ export class Store {
     return this.getAttempt(result.value);
   }
 
+  recoverAttempt(input: RecoverAttemptInput): RecoveredAttempt {
+    this.#requireActor(input.actor, ['user', 'controller']);
+    const result = this.idempotent(
+      'recover-attempt',
+      input.idempotencyKey,
+      input,
+      AttemptIdSchema,
+      (database) => {
+        const attempt = this.#requireAttempt(database, input.attemptId);
+        const job = this.#requireJob(database, attempt.jobId);
+        if (
+          attempt.briefRevision !== input.expectedBriefRevision ||
+          job.currentBriefRevision !== input.expectedBriefRevision
+        ) {
+          throw new StoreError('stale-revision', 'Attempt brief is no longer current');
+        }
+        if (['settled', 'closed'].includes(attempt.phase)) {
+          throw new StoreError('invalid-state', `Attempt ${attempt.id} is ${attempt.phase}`);
+        }
+        const runtime = decode(
+          recoveryRuntimeRowSchema,
+          requireValue(
+            database
+              .prepare(
+                `SELECT n.phase, n.identity_json, n.last_observation_json,
+                        count(e.id) AS effect_count
+                 FROM native_attempts n
+                 LEFT JOIN native_effects e
+                   ON e.project_id = n.project_id AND e.attempt_id = n.attempt_id
+                 WHERE n.project_id = ? AND n.attempt_id = ?
+                 GROUP BY n.attempt_id`,
+              )
+              .get(this.project.id, attempt.id),
+            'invalid-state',
+            `Attempt ${attempt.id} has no native runtime record`,
+          ),
+        );
+        const neverStarted =
+          attempt.phase === 'pending' &&
+          runtime.phase === 'admitted' &&
+          runtime.identity_json === null &&
+          runtime.effect_count === 0;
+        const observedNonRunning =
+          runtime.last_observation_json !== null &&
+          Schema.is(recoverableNativeObservationSchema)(JSON.parse(runtime.last_observation_json));
+        if (!neverStarted && !observedNonRunning) {
+          throw new StoreError(
+            'invalid-state',
+            `Attempt ${attempt.id} has not been confirmed non-running`,
+          );
+        }
+        this.#applyAttemptSettlement(database, attempt, {
+          kind: 'settled',
+          outcome: input.outcome,
+          reason: input.reason,
+        });
+        return attempt.id;
+      },
+    );
+    return { attempt: this.getAttempt(result.value), replayed: result.replayed };
+  }
+
   settleAttempt(input: SettleAttemptInput): Attempt {
     this.#requireActor(input.actor, ['user', 'controller']);
     const result = this.idempotent(
@@ -2342,103 +2451,105 @@ export class Store {
         if (['settled', 'closed'].includes(attempt.phase)) {
           throw new StoreError('invalid-state', `Attempt ${attempt.id} is ${attempt.phase}`);
         }
-        const now = this.#now();
-        if (input.observation.kind === 'unconfirmed') {
-          database
-            .prepare(
-              `UPDATE attempts SET phase = 'unconfirmed', settlement_reason = ?, settled_at = ?
-               WHERE project_id = ? AND id = ?`,
-            )
-            .run(input.observation.reason, now, this.project.id, attempt.id);
-          database
-            .prepare(
-              `UPDATE execution_reservations SET state = 'unconfirmed', release_reason = ?
-               WHERE project_id = ? AND attempt_id = ? AND state = 'held'`,
-            )
-            .run(input.observation.reason, this.project.id, attempt.id);
-          database
-            .prepare(
-              `UPDATE handoff_claims SET state = 'unconfirmed', settled_at = ?
-               WHERE project_id = ? AND attempt_id = ? AND state = 'active'`,
-            )
-            .run(now, this.project.id, attempt.id);
-          database
-            .prepare(
-              `UPDATE writer_reservations SET state = 'unconfirmed', release_reason = ?
-               WHERE project_id = ? AND owner_attempt_id = ? AND state = 'held'`,
-            )
-            .run(input.observation.reason, this.project.id, attempt.id);
-          database
-            .prepare(
-              `UPDATE handoffs SET state = 'unconfirmed', reason = ?, updated_at = ?
-               WHERE project_id = ? AND claimed_attempt_id = ? AND state = 'integrating'`,
-            )
-            .run(input.observation.reason, now, this.project.id, attempt.id);
-          database
-            .prepare(
-              `UPDATE agent_sessions SET state = 'unconfirmed', settled_at = ?
-               WHERE project_id = ? AND id = ? AND generation = ?`,
-            )
-            .run(now, this.project.id, attempt.sessionId, attempt.sessionGeneration);
-          database
-            .prepare(
-              `UPDATE attempt_control_intents SET state = 'unconfirmed', settled_at = ?
-               WHERE project_id = ? AND attempt_id = ? AND state = 'requested'`,
-            )
-            .run(now, this.project.id, attempt.id);
-        } else {
-          database
-            .prepare(
-              `UPDATE attempts
-               SET phase = 'settled', outcome = ?, settlement_reason = ?, settled_at = ?
-               WHERE project_id = ? AND id = ?`,
-            )
-            .run(
-              input.observation.outcome,
-              input.observation.reason,
-              now,
-              this.project.id,
-              attempt.id,
-            );
-          database
-            .prepare(
-              `UPDATE execution_reservations
-               SET state = 'released', released_at = ?, release_reason = ?
-               WHERE project_id = ? AND attempt_id = ? AND state IN ('held', 'unconfirmed')`,
-            )
-            .run(now, input.observation.reason, this.project.id, attempt.id);
-          database
-            .prepare(
-              `UPDATE handoff_claims SET state = 'settled', settled_at = ?
-               WHERE project_id = ? AND attempt_id = ? AND state IN ('active', 'unconfirmed')`,
-            )
-            .run(now, this.project.id, attempt.id);
-          database
-            .prepare(
-              `UPDATE writer_reservations
-               SET state = 'released', released_at = ?, release_reason = ?
-               WHERE project_id = ? AND owner_attempt_id = ?
-                 AND state IN ('held', 'unconfirmed')`,
-            )
-            .run(now, input.observation.reason, this.project.id, attempt.id);
-          database
-            .prepare(
-              `UPDATE agent_sessions SET state = 'settled', settled_at = ?
-               WHERE project_id = ? AND id = ? AND generation = ?`,
-            )
-            .run(now, this.project.id, attempt.sessionId, attempt.sessionGeneration);
-          database
-            .prepare(
-              `UPDATE attempt_control_intents SET state = 'confirmed', settled_at = ?
-               WHERE project_id = ? AND attempt_id = ? AND state IN ('requested', 'unconfirmed')`,
-            )
-            .run(now, this.project.id, attempt.id);
-        }
-        this.#finishSettledControls(database);
+        this.#applyAttemptSettlement(database, attempt, input.observation);
         return attempt.id;
       },
     );
     return this.getAttempt(result.value);
+  }
+
+  #applyAttemptSettlement(
+    database: DatabaseSync,
+    attempt: Attempt,
+    observation: SettleAttemptInput['observation'],
+  ): void {
+    const now = this.#now();
+    if (observation.kind === 'unconfirmed') {
+      database
+        .prepare(
+          `UPDATE attempts SET phase = 'unconfirmed', settlement_reason = ?, settled_at = ?
+           WHERE project_id = ? AND id = ?`,
+        )
+        .run(observation.reason, now, this.project.id, attempt.id);
+      database
+        .prepare(
+          `UPDATE execution_reservations SET state = 'unconfirmed', release_reason = ?
+           WHERE project_id = ? AND attempt_id = ? AND state = 'held'`,
+        )
+        .run(observation.reason, this.project.id, attempt.id);
+      database
+        .prepare(
+          `UPDATE handoff_claims SET state = 'unconfirmed', settled_at = ?
+           WHERE project_id = ? AND attempt_id = ? AND state = 'active'`,
+        )
+        .run(now, this.project.id, attempt.id);
+      database
+        .prepare(
+          `UPDATE writer_reservations SET state = 'unconfirmed', release_reason = ?
+           WHERE project_id = ? AND owner_attempt_id = ? AND state = 'held'`,
+        )
+        .run(observation.reason, this.project.id, attempt.id);
+      database
+        .prepare(
+          `UPDATE handoffs SET state = 'unconfirmed', reason = ?, updated_at = ?
+           WHERE project_id = ? AND claimed_attempt_id = ? AND state = 'integrating'`,
+        )
+        .run(observation.reason, now, this.project.id, attempt.id);
+      database
+        .prepare(
+          `UPDATE agent_sessions SET state = 'unconfirmed', settled_at = ?
+           WHERE project_id = ? AND id = ? AND generation = ?`,
+        )
+        .run(now, this.project.id, attempt.sessionId, attempt.sessionGeneration);
+      database
+        .prepare(
+          `UPDATE attempt_control_intents SET state = 'unconfirmed', settled_at = ?
+           WHERE project_id = ? AND attempt_id = ? AND state = 'requested'`,
+        )
+        .run(now, this.project.id, attempt.id);
+    } else {
+      database
+        .prepare(
+          `UPDATE attempts
+           SET phase = 'settled', outcome = ?, settlement_reason = ?, settled_at = ?
+           WHERE project_id = ? AND id = ?`,
+        )
+        .run(observation.outcome, observation.reason, now, this.project.id, attempt.id);
+      database
+        .prepare(
+          `UPDATE execution_reservations
+           SET state = 'released', released_at = ?, release_reason = ?
+           WHERE project_id = ? AND attempt_id = ? AND state IN ('held', 'unconfirmed')`,
+        )
+        .run(now, observation.reason, this.project.id, attempt.id);
+      database
+        .prepare(
+          `UPDATE handoff_claims SET state = 'settled', settled_at = ?
+           WHERE project_id = ? AND attempt_id = ? AND state IN ('active', 'unconfirmed')`,
+        )
+        .run(now, this.project.id, attempt.id);
+      database
+        .prepare(
+          `UPDATE writer_reservations
+           SET state = 'released', released_at = ?, release_reason = ?
+           WHERE project_id = ? AND owner_attempt_id = ?
+             AND state IN ('held', 'unconfirmed')`,
+        )
+        .run(now, observation.reason, this.project.id, attempt.id);
+      database
+        .prepare(
+          `UPDATE agent_sessions SET state = 'settled', settled_at = ?
+           WHERE project_id = ? AND id = ? AND generation = ?`,
+        )
+        .run(now, this.project.id, attempt.sessionId, attempt.sessionGeneration);
+      database
+        .prepare(
+          `UPDATE attempt_control_intents SET state = 'confirmed', settled_at = ?
+           WHERE project_id = ? AND attempt_id = ? AND state IN ('requested', 'unconfirmed')`,
+        )
+        .run(now, this.project.id, attempt.id);
+    }
+    this.#finishSettledControls(database);
   }
 
   #finishSettledControls(database: DatabaseSync): void {
