@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { realpathSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, isAbsolute } from 'node:path';
-import { Clock, Effect, Schedule, Schema } from 'effect';
+import { Clock, Effect, Fiber, Ref, Result, Schedule, Schema } from 'effect';
 import { ArtifactFiles, registerArtifact } from './artifacts.js';
 import { Board, type BoardAuthor, type BoardRecipient } from './board.js';
 import {
@@ -30,13 +30,25 @@ import {
   previewRuntimeWorkspaceRetirement,
   retireRuntimeWorkspaceEffect,
 } from './runtime-retirement.js';
-import { Watcher } from './watcher.js';
+import { Watcher, type WatcherError } from './watcher.js';
 import { NativeBoardDelivery } from './delivery.js';
 import {
   currentProcessIdentityEffect,
   ensureBackgroundWatcherEffect,
   localOwnerLiveness,
 } from './background.js';
+import {
+  DEFAULT_BUSY_RETRY_MS,
+  DEFAULT_FALLBACK_INTERVAL_MS,
+  DEFAULT_MIN_DELIVERY_INTERVAL_MS,
+  DEFAULT_RECONCILE_INTERVAL_MS,
+  DEFAULT_START_PROGRESS_INTERVAL_MS,
+  MAX_BUSY_RETRY_MS,
+  WakeError,
+  WakeListener,
+  pokeWatcherEffect,
+  type PendingWorkEffectPort,
+} from './wake.js';
 import {
   Store,
   type SessionIdentity,
@@ -74,6 +86,37 @@ const clientCall = <A>(operation: string, action: () => A) =>
   });
 
 export type ConnectOptions = Omit<NonNullable<Parameters<typeof resolveContext>[0]>, 'readOnly'>;
+
+/**
+ * Reads durable delivery state directly.
+ *
+ * `Watcher.hasPendingWorkEffect()` is the agreed predicate and supersedes this:
+ * once the watcher declares it, pass the watcher itself as
+ * `watch({ pendingWork })` and this function goes away. Keeping the seam
+ * explicit rather than sniffing for the method means the idle timer cannot
+ * silently start expiring with work still queued on either side of that change.
+ */
+function deliveryPendingWork(store: Store): PendingWorkEffectPort<WakeError> {
+  return {
+    hasPendingWorkEffect: () =>
+      Effect.try({
+        try: () =>
+          store.read((db) =>
+            db
+              .prepare(
+                "SELECT 1 FROM notification_deliveries WHERE project_id=? AND state IN ('pending','claimed') LIMIT 1",
+              )
+              .get(store.project.id),
+          ) !== undefined,
+        catch: (cause) =>
+          new WakeError({
+            operation: 'Watcher.hasPendingWork',
+            message: cause instanceof Error ? cause.message : String(cause),
+            cause,
+          }),
+      }),
+  };
+}
 
 export class Marionette {
   readonly #store: Store;
@@ -523,6 +566,15 @@ export class Marionette {
 
   ensureWatcherEffect = Effect.fn('Marionette.ensureWatcher')(function* (this: Marionette) {
     const session = yield* clientCall('authenticate', () => this.#authenticate());
+    // Callers reach here after their write has committed, so a poke can only
+    // point at durable state. It carries attention, never authority: it names
+    // this project and nothing else, and the watcher re-reads the database to
+    // decide what to do. That is why a worker may wake an existing watcher even
+    // though it may never own or spawn one.
+    yield* pokeWatcherEffect({
+      stateDirectory: this.#store.project.stateDirectory,
+      projectId: this.#store.project.id,
+    });
     if (session.role === 'worker') return;
     yield* ensureBackgroundWatcherEffect(this.#store, this.#resolved.bindingPath);
   });
@@ -530,9 +582,25 @@ export class Marionette {
     return Effect.runPromise(this.ensureWatcherEffect());
   }
 
+  /**
+   * Runs the project watcher until it is interrupted or idles out.
+   *
+   * Delivery and native reconciliation are two independent fibers in one scope,
+   * so a blocked recipient cannot hold up an observation and a slow observation
+   * cannot hold up a wake. They share only the scope: the first failure or a
+   * lost ownership claim closes it, which stops the other and releases both the
+   * wake endpoint and the ownership claim.
+   */
   watchEffect = Effect.fn('Marionette.watch')(function* (
     this: Marionette,
-    options: { signal: AbortSignal; idleTimeoutMs?: number },
+    options: {
+      signal: AbortSignal;
+      idleTimeoutMs?: number;
+      fallbackIntervalMs?: number;
+      reconcileIntervalMs?: number;
+      minDeliveryIntervalMs?: number;
+      pendingWork?: PendingWorkEffectPort<WakeError | WatcherError>;
+    },
   ) {
     const session = yield* clientCall('watch.authenticate', () => this.#authenticate());
     if (session.role === 'worker')
@@ -555,50 +623,171 @@ export class Marionette {
           }),
           (watcher) => Effect.sync(() => watcher.stop()),
         );
+        // Arm the endpoint before either fiber reads durable state. Only the
+        // process holding this project's owner generation reaches here, so only
+        // it binds; anything committed after a read still pokes an armed
+        // listener, which is why no wake can fall into the gap between reading
+        // and sleeping.
+        const listener = yield* Effect.acquireRelease(
+          WakeListener.listenEffect({
+            stateDirectory: this.#store.project.stateDirectory,
+            projectId: this.#store.project.id,
+          }),
+          (listener) => Effect.sync(() => listener.close()),
+        );
         const generation = watcher.generation;
-        let idleSince = yield* Clock.currentTimeMillis;
+        const pendingWork = options.pendingWork ?? deliveryPendingWork(this.#store);
         const idleTimeoutMs = options.idleTimeoutMs ?? 30_000;
-        const pass = Effect.fn('Marionette.watch.pass')(function* (this: Marionette) {
+        const fallbackIntervalMs = options.fallbackIntervalMs ?? DEFAULT_FALLBACK_INTERVAL_MS;
+        const reconcileIntervalMs = options.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_MS;
+        const minDeliveryIntervalMs =
+          options.minDeliveryIntervalMs ?? DEFAULT_MIN_DELIVERY_INTERVAL_MS;
+        const state = yield* Ref.make({
+          idleSince: yield* Clock.currentTimeMillis,
+          retryMs: DEFAULT_BUSY_RETRY_MS,
+          deliveryPasses: 0,
+          reconcilePasses: 0,
+          reconciliations: 0,
+          deliveries: 0,
+          wakes: 0,
+        });
+
+        const deliveryPass = Effect.fn('Marionette.watch.delivery')(function* (this: Marionette) {
+          // Consume the signal before reading durable state, never after: a
+          // poke that lands during this pass must survive into the next wait.
+          const poked = listener.take();
+          const settled = yield* watcher.pollOnceEffect();
+          const pending = yield* pendingWork.hasPendingWorkEffect();
           const attempts = yield* clientCall('watch.activeAttempts', () =>
             this.#runtime.activeAttempts(),
           );
+          const now = yield* Clock.currentTimeMillis;
+          const current = yield* Ref.updateAndGet(state, (value) => ({
+            ...value,
+            wakes: poked ? value.wakes + 1 : value.wakes,
+            deliveryPasses: value.deliveryPasses + 1,
+            deliveries: value.deliveries + settled,
+            idleSince: pending || attempts.length > 0 ? now : value.idleSince,
+          }));
+          if (!pending && attempts.length === 0 && now - current.idleSince >= idleTimeoutMs)
+            return 0;
+          if (settled > 0) {
+            yield* Ref.update(state, (value) => ({ ...value, retryMs: DEFAULT_BUSY_RETRY_MS }));
+            return -1;
+          }
+          // Work that stayed put means a recipient was not ready, not that the
+          // queue is empty: another recipient may be. Retrying far sooner than
+          // the fallback bounds that starvation, and backing off keeps an
+          // indefinitely busy recipient cheap.
+          if (!pending) return fallbackIntervalMs;
+          yield* Ref.update(state, (value) => ({
+            ...value,
+            retryMs: Math.min(value.retryMs * 2, MAX_BUSY_RETRY_MS),
+          }));
+          return current.retryMs;
+        }).bind(this);
+
+        let passedAt = (yield* Clock.currentTimeMillis) - minDeliveryIntervalMs;
+        const deliveryStep = Effect.fn('Marionette.watch.deliveryStep')(function* (
+          this: Marionette,
+        ) {
+          // A floor on the pass rate, so an unbounded signal rate cannot become
+          // an unbounded transaction rate. It costs nothing after a long wait,
+          // and stays short enough that a wake still feels immediate.
+          const since = (yield* Clock.currentTimeMillis) - passedAt;
+          if (since < minDeliveryIntervalMs)
+            yield* Effect.sleep(`${minDeliveryIntervalMs - since} millis`);
+          passedAt = yield* Clock.currentTimeMillis;
+          const waitMs = yield* Effect.uninterruptible(deliveryPass());
+          if (waitMs === 0) return false;
+          if (waitMs < 0) return true;
+          const outcome = yield* listener.waitEffect({ timeoutMs: waitMs });
+          if (outcome === 'poked')
+            yield* Ref.update(state, (value) => ({ ...value, retryMs: DEFAULT_BUSY_RETRY_MS }));
+          return true;
+        }).bind(this);
+
+        const reconcilePass = Effect.fn('Marionette.watch.reconcile')(function* (
+          this: Marionette,
+        ) {
+          const attempts = yield* clientCall('watch.activeAttempts', () =>
+            this.#runtime.activeAttempts(),
+          );
+          let owedStart = false;
           for (const id of attempts) {
-            if (options.signal.aborted) break;
-            yield* this.#runtime.startEffect(id);
+            // Past launch, start() only inspects, and reconcile() inspects
+            // again; running it then costs a second native observation for
+            // nothing. Attempts still owed launch or prompt progress keep it.
+            const owed = yield* clientCall('watch.needsStartProgress', () =>
+              this.#runtime.needsStartProgress(id),
+            );
+            if (owed) {
+              owedStart = true;
+              yield* this.#runtime.startEffect(id);
+            }
             yield* this.#runtime.reconcileEffect(id);
           }
-          if (!options.signal.aborted) yield* watcher.pollOnceEffect();
-          const pending = yield* clientCall('watch.pendingDeliveries', () =>
-            this.#store.read((db) =>
-              db
-                .prepare(
-                  "SELECT 1 FROM notification_deliveries WHERE project_id=? AND state IN ('pending','claimed') LIMIT 1",
-                )
-                .get(this.#store.project.id),
-            ),
-          );
           const now = yield* Clock.currentTimeMillis;
-          if (attempts.length || pending) idleSince = now;
-          return !options.signal.aborted && now - idleSince < idleTimeoutMs;
+          yield* Ref.update(state, (value) => ({
+            ...value,
+            reconcilePasses: value.reconcilePasses + 1,
+            reconciliations: value.reconciliations + attempts.length,
+            idleSince: attempts.length > 0 ? now : value.idleSince,
+          }));
+          if (attempts.length === 0) return fallbackIntervalMs;
+          return owedStart ? DEFAULT_START_PROGRESS_INTERVAL_MS : reconcileIntervalMs;
         }).bind(this);
+
+        const reconcileStep = Effect.fn('Marionette.watch.reconcileStep')(function* (
+          this: Marionette,
+        ) {
+          const waitMs = yield* Effect.uninterruptible(reconcilePass());
+          yield* Effect.sleep(`${waitMs} millis`);
+          return true;
+        }).bind(this);
+
         const stop = Effect.callback<void>((resume) => {
           const stopped = () => resume(Effect.void);
           options.signal.addEventListener('abort', stopped, { once: true });
           if (options.signal.aborted) stopped();
           return Effect.sync(() => options.signal.removeEventListener('abort', stopped));
         });
-        const loop = pass().pipe(
-          Effect.uninterruptible,
-          Effect.repeat({ while: (running) => running, schedule: Schedule.spaced('1 second') }),
-          Effect.delay('1 second'),
+        const delivery = yield* Effect.forkChild(
+          deliveryStep().pipe(Effect.repeat({ while: (running: boolean) => running })),
         );
-        yield* Effect.raceFirst(loop, stop);
-        return { stopped: true, generation };
+        const reconcile = yield* Effect.forkChild(
+          reconcileStep().pipe(Effect.repeat({ while: (running: boolean) => running })),
+        );
+        // Whichever schedule finishes first ends the watch: an idle-out returns,
+        // and a failure propagates so the watcher fails closed instead of
+        // continuing to deliver without a claim.
+        yield* Effect.raceFirst(
+          Effect.raceFirst(Fiber.join(delivery), Fiber.join(reconcile)),
+          stop,
+        );
+        const counters = yield* Ref.get(state);
+        return {
+          stopped: true,
+          generation,
+          deliveryPasses: counters.deliveryPasses,
+          reconcilePasses: counters.reconcilePasses,
+          reconciliations: counters.reconciliations,
+          deliveries: counters.deliveries,
+          wakes: counters.wakes,
+          wakeEndpoint: listener.unavailable === null ? listener.path : null,
+        };
       }),
     );
   });
 
-  watch(options: { signal: AbortSignal; idleTimeoutMs?: number }) {
+  watch(options: {
+    signal: AbortSignal;
+    idleTimeoutMs?: number;
+    fallbackIntervalMs?: number;
+    reconcileIntervalMs?: number;
+    minDeliveryIntervalMs?: number;
+    pendingWork?: PendingWorkEffectPort<WakeError | WatcherError>;
+  }) {
     return Effect.runPromise(this.watchEffect(options));
   }
 

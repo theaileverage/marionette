@@ -165,7 +165,17 @@ test('default live layer discovers results through the public operation', async 
 
           return { kind: 'found' as const, result };
         }),
-      watch: () => Effect.succeed({ stopped: true, generation: 'test' }),
+      watch: () =>
+        Effect.succeed({
+          stopped: true,
+          generation: 'test',
+          deliveryPasses: 0,
+          reconcilePasses: 0,
+          reconciliations: 0,
+          deliveries: 0,
+          wakes: 0,
+          wakeEndpoint: null,
+        }),
     }),
   );
 
@@ -195,7 +205,17 @@ test('live layer preserves optional result discovery injection', async () => {
 
           return { kind: 'pending' as const };
         }),
-      watch: () => Effect.succeed({ stopped: true, generation: 'test' }),
+      watch: () =>
+        Effect.succeed({
+          stopped: true,
+          generation: 'test',
+          deliveryPasses: 0,
+          reconcilePasses: 0,
+          reconciliations: 0,
+          deliveries: 0,
+          wakes: 0,
+          wakeEndpoint: null,
+        }),
     }),
   );
 

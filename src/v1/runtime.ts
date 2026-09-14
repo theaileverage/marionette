@@ -460,6 +460,18 @@ export class Runtime {
     return { ...observed, attempt };
   }
 
+  /**
+   * Whether `start` still owes this attempt launch or prompt progress. In every
+   * other phase `start` falls through to a bare `inspect`, which the following
+   * `reconcile` immediately repeats; skipping it halves the native observations
+   * a watcher pass costs for an attempt that is already running.
+   */
+  needsStartProgress(id: AttemptId): boolean {
+    this.assertController();
+    const phase = this.row(id).phase;
+    return phase === 'admitted' || phase === 'launched';
+  }
+
   activeAttempts() {
     this.assertController();
     return this.store.read((db) =>

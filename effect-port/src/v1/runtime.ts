@@ -255,6 +255,18 @@ export class Runtime {
   }.bind(this));
   reconcile(id: AttemptId) { return runCompatibility(this.reconcileEffect(id)); }
 
+  /**
+   * Whether `start` still owes this attempt launch or prompt progress. In every
+   * other phase `start` falls through to a bare `inspect`, which the following
+   * `reconcile` immediately repeats; skipping it halves the native observations
+   * a watcher pass costs for an attempt that is already running.
+   */
+  needsStartProgress(id: AttemptId): boolean {
+    this.assertController();
+    const phase = this.row(id).phase;
+    return phase === 'admitted' || phase === 'launched';
+  }
+
   activeAttempts(): AttemptId[] {
     this.assertController();
     return this.store.read((db) => db.prepare("SELECT attempt_id FROM native_attempts WHERE project_id=? AND phase IN ('admitted','launch-claimed','launched','prompt-claimed','active')").all(this.store.project.id).map((row) => decode(Schema.Struct({ attempt_id: AttemptIdSchema }), row).attempt_id));

@@ -34,6 +34,17 @@ import {
   localOwnerLiveness,
 } from './background.js';
 import {
+  DEFAULT_BUSY_RETRY_MS,
+  DEFAULT_FALLBACK_INTERVAL_MS,
+  DEFAULT_MIN_DELIVERY_INTERVAL_MS,
+  DEFAULT_RECONCILE_INTERVAL_MS,
+  DEFAULT_START_PROGRESS_INTERVAL_MS,
+  MAX_BUSY_RETRY_MS,
+  WakeListener,
+  pokeWatcher,
+  type PendingWorkPort,
+} from './wake.js';
+import {
   Store,
   type SessionIdentity,
   type AgentSession,
@@ -46,6 +57,42 @@ import {
 } from './store.js';
 
 export type ConnectOptions = Omit<NonNullable<Parameters<typeof resolveContext>[0]>, 'readOnly'>;
+
+/**
+ * Reads durable delivery state directly.
+ *
+ * `Watcher.hasPendingWork()` is the agreed predicate and supersedes this: once
+ * the watcher declares it, pass the watcher itself as `watch({ pendingWork })`
+ * and this function goes away. Keeping the seam explicit rather than sniffing
+ * for the method means the idle timer cannot silently start expiring with work
+ * still queued on either side of that change.
+ */
+function deliveryPendingWork(store: Store): PendingWorkPort {
+  return {
+    hasPendingWork: async () =>
+      store.read((db) =>
+        db
+          .prepare(
+            "SELECT 1 FROM notification_deliveries WHERE project_id=? AND state IN ('pending','claimed') LIMIT 1",
+          )
+          .get(store.project.id),
+      ) !== undefined,
+  };
+}
+
+/** Sleeps, but gives the time back the moment the watcher is asked to stop. */
+function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, milliseconds);
+    signal.addEventListener('abort', finish, { once: true });
+  });
+}
 
 export class Marionette {
   readonly #store: Store;
@@ -404,11 +451,35 @@ export class Marionette {
 
   async ensureWatcher() {
     const session = this.#authenticate();
+    // Callers reach here after their write has committed, so a poke can only
+    // point at durable state. It carries attention, never authority: it names
+    // this project and nothing else, and the watcher re-reads the database to
+    // decide what to do. That is why a worker may wake an existing watcher even
+    // though it may never own or spawn one.
+    await pokeWatcher({
+      stateDirectory: this.#store.project.stateDirectory,
+      projectId: this.#store.project.id,
+    });
     if (session.role === 'worker') return;
     await ensureBackgroundWatcher(this.#store, this.#resolved.bindingPath);
   }
 
-  async watch(options: { signal: AbortSignal; idleTimeoutMs?: number }) {
+  /**
+   * Runs the project watcher until it is aborted or idles out.
+   *
+   * Delivery and native reconciliation are two independent schedules sharing one
+   * process, so a blocked recipient cannot hold up an observation and a slow
+   * observation cannot hold up a wake. They share only a stop: the first failure
+   * or a lost ownership claim ends both, and the call reports that failure.
+   */
+  async watch(options: {
+    signal: AbortSignal;
+    idleTimeoutMs?: number;
+    fallbackIntervalMs?: number;
+    reconcileIntervalMs?: number;
+    minDeliveryIntervalMs?: number;
+    pendingWork?: PendingWorkPort;
+  }) {
     const session = this.#authenticate();
     if (session.role === 'worker') throw new Error('Workers cannot own the project watcher');
     const watcher = await Watcher.start({
@@ -418,63 +489,127 @@ export class Marionette {
       processIdentity: await currentProcessIdentity(),
     });
     const generation = watcher.generation;
-    let polling = false;
-    let idleSince = Date.now();
+    const pendingWork = options.pendingWork ?? deliveryPendingWork(this.#store);
     const idleTimeoutMs = options.idleTimeoutMs ?? 30_000;
-    await new Promise<void>((resolve, reject) => {
-      let stopRequested = false;
-      let stopped = false;
-      let failure: Error | null = null;
-      const finish = () => {
-        if (stopped) return;
-        stopped = true;
-        clearInterval(timer);
-        options.signal.removeEventListener('abort', requestStop);
-        try {
-          watcher.stop();
-        } catch (error) {
-          failure = error instanceof Error ? error : new Error(String(error));
-        }
-        if (failure) reject(failure);
-        else resolve();
-      };
-      const requestStop = () => {
-        stopRequested = true;
-        if (!polling) finish();
-      };
-      const tick = async () => {
-        if (polling || stopRequested) return;
-        polling = true;
-        try {
-          const attempts = this.#runtime.activeAttempts();
-          for (const id of attempts) {
-            if (stopRequested) break;
-            await this.#runtime.start(id);
-            await this.#runtime.reconcile(id);
-          }
-          if (!stopRequested) await watcher.pollOnce();
-          const pending = this.#store.read((db) =>
-            db
-              .prepare(
-                "SELECT 1 FROM notification_deliveries WHERE project_id=? AND state IN ('pending','claimed') LIMIT 1",
-              )
-              .get(this.#store.project.id),
-          );
-          if (attempts.length || pending) idleSince = Date.now();
-          else if (Date.now() - idleSince >= idleTimeoutMs) requestStop();
-        } catch (error) {
-          failure = error instanceof Error ? error : new Error(String(error));
-          stopRequested = true;
-        } finally {
-          polling = false;
-          if (stopRequested) finish();
-        }
-      };
-      const timer = setInterval(() => void tick(), 1_000);
-      options.signal.addEventListener('abort', requestStop, { once: true });
-      if (options.signal.aborted) requestStop();
+    const fallbackIntervalMs = options.fallbackIntervalMs ?? DEFAULT_FALLBACK_INTERVAL_MS;
+    const reconcileIntervalMs = options.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_MS;
+    const minDeliveryIntervalMs = options.minDeliveryIntervalMs ?? DEFAULT_MIN_DELIVERY_INTERVAL_MS;
+    // Arm the endpoint before either schedule reads durable state. Only the
+    // process holding this project's owner generation reaches here, so only it
+    // binds; anything committed after a read still pokes an armed listener,
+    // which is why no wake can fall into the gap between reading and sleeping.
+    const listener = await WakeListener.listen({
+      stateDirectory: this.#store.project.stateDirectory,
+      projectId: this.#store.project.id,
     });
-    return { stopped: true, generation };
+    const stopping = new AbortController();
+    let failure: Error | undefined;
+    const stop = () => {
+      if (!stopping.signal.aborted) stopping.abort();
+    };
+    const fail = (error: Error) => {
+      failure ??= error;
+      stop();
+    };
+    options.signal.addEventListener('abort', stop, { once: true });
+    if (options.signal.aborted) stop();
+    let idleSince = Date.now();
+    let deliveryPasses = 0;
+    let reconcilePasses = 0;
+    let reconciliations = 0;
+    let deliveries = 0;
+    let wakes = 0;
+
+    const deliverySchedule = async () => {
+      let retryMs = DEFAULT_BUSY_RETRY_MS;
+      let passedAt = Date.now() - minDeliveryIntervalMs;
+      while (!stopping.signal.aborted) {
+        // A floor between passes, so an unbounded signal rate cannot become an
+        // unbounded transaction rate. Short enough that a wake stays prompt.
+        const since = Date.now() - passedAt;
+        if (since < minDeliveryIntervalMs)
+          await delay(minDeliveryIntervalMs - since, stopping.signal);
+        if (stopping.signal.aborted) break;
+        passedAt = Date.now();
+        // Consume the signal before reading durable state, never after: a poke
+        // that lands during this pass must survive into the next wait.
+        if (listener.take()) wakes += 1;
+        deliveryPasses += 1;
+        const settled = await watcher.pollOnce();
+        deliveries += settled;
+        const pending = await pendingWork.hasPendingWork();
+        if (pending || this.#runtime.activeAttempts().length > 0) idleSince = Date.now();
+        else if (Date.now() - idleSince >= idleTimeoutMs) {
+          stop();
+          break;
+        }
+        if (settled > 0) {
+          retryMs = DEFAULT_BUSY_RETRY_MS;
+          continue;
+        }
+        // Work that stayed put means a recipient was not ready, not that the
+        // queue is empty: another recipient may be. Retrying far sooner than
+        // the fallback bounds that starvation, and backing off keeps an
+        // indefinitely busy recipient cheap.
+        const waitMs = pending ? retryMs : fallbackIntervalMs;
+        if (pending) retryMs = Math.min(retryMs * 2, MAX_BUSY_RETRY_MS);
+        const outcome = await listener.wait({ timeoutMs: waitMs, signal: stopping.signal });
+        if (outcome === 'poked') retryMs = DEFAULT_BUSY_RETRY_MS;
+      }
+    };
+
+    const reconcileSchedule = async () => {
+      while (!stopping.signal.aborted) {
+        reconcilePasses += 1;
+        const attempts = this.#runtime.activeAttempts();
+        let owedStart = false;
+        for (const id of attempts) {
+          if (stopping.signal.aborted) break;
+          // Past launch, start() only inspects, and reconcile() inspects again;
+          // running it then costs a second native observation for nothing.
+          // Attempts still owed launch or prompt progress keep it.
+          if (this.#runtime.needsStartProgress(id)) {
+            owedStart = true;
+            await this.#runtime.start(id);
+          }
+          await this.#runtime.reconcile(id);
+          reconciliations += 1;
+        }
+        if (attempts.length > 0) idleSince = Date.now();
+        await delay(
+          attempts.length === 0
+            ? fallbackIntervalMs
+            : owedStart
+              ? DEFAULT_START_PROGRESS_INTERVAL_MS
+              : reconcileIntervalMs,
+          stopping.signal,
+        );
+      }
+    };
+
+    // Either schedule failing stops both: ownership loss reaches here from
+    // assertOwner, and the watcher must fail closed rather than keep delivering.
+    const supervise = (schedule: () => Promise<void>) =>
+      schedule().catch((cause) => fail(cause instanceof Error ? cause : new Error(String(cause))));
+    await Promise.all([supervise(deliverySchedule), supervise(reconcileSchedule)]);
+    options.signal.removeEventListener('abort', stop);
+    listener.close();
+    try {
+      watcher.stop();
+    } catch (error) {
+      failure ??= error instanceof Error ? error : new Error(String(error));
+    }
+    if (failure !== undefined) throw failure;
+    return {
+      stopped: true,
+      generation,
+      deliveryPasses,
+      reconcilePasses,
+      reconciliations,
+      deliveries,
+      wakes,
+      wakeEndpoint: listener.unavailable === null ? listener.path : null,
+    };
   }
 
   #handoffs(attemptId?: string) {
