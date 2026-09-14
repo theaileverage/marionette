@@ -50,6 +50,10 @@ const attemptInputResults = array(ResultIdSchema).pipe(
   Schema.withDecodingDefault(Effect.succeed([])),
   Schema.annotate({ default: [] }),
 );
+const refreshByDefault = Schema.Boolean.pipe(
+  Schema.withDecodingDefault(Effect.succeed(true)),
+  Schema.annotate({ default: true }),
+);
 
 const page = {
   cursor: optional(Schema.String),
@@ -259,6 +263,14 @@ export const operationSchemas = [
   strict({ operation: Schema.Literal('attempt.start'), id: AttemptIdSchema }),
   strict({ operation: Schema.Literal('attempt.inspect'), id: AttemptIdSchema }),
   strict({
+    operation: Schema.Literal('attempt.retained-work'),
+    id: AttemptIdSchema,
+    refresh: refreshByDefault,
+    cursor: optional(natural),
+    limit: optional(positiveInteger.check(Schema.isLessThanOrEqualTo(200))),
+    maxBytes: optional(positiveInteger.check(Schema.isLessThanOrEqualTo(256 * 1024))),
+  }),
+  strict({
     operation: Schema.Literal('attempt.reconcile'),
     id: AttemptIdSchema,
     recovery: optional(AttemptRecoverySchema),
@@ -321,8 +333,9 @@ const operationDecoders = {
   'attempt.admit': Schema.decodeUnknownSync(operationSchemas[39]),
   'attempt.start': Schema.decodeUnknownSync(operationSchemas[40]),
   'attempt.inspect': Schema.decodeUnknownSync(operationSchemas[41]),
-  'attempt.reconcile': Schema.decodeUnknownSync(operationSchemas[42]),
-  'sql.contribute': Schema.decodeUnknownSync(operationSchemas[43]),
+  'attempt.retained-work': Schema.decodeUnknownSync(operationSchemas[42]),
+  'attempt.reconcile': Schema.decodeUnknownSync(operationSchemas[43]),
+  'sql.contribute': Schema.decodeUnknownSync(operationSchemas[44]),
 };
 function isOperationName(value: string): value is keyof typeof operationDecoders {
   return Object.hasOwn(operationDecoders, value);
@@ -467,6 +480,8 @@ export function executeEffect(client: Marionette, raw: unknown) {
         return yield* client.startAttemptEffect(input.id);
       case 'attempt.inspect':
         return yield* client.inspectAttemptEffect(input.id);
+      case 'attempt.retained-work':
+        return yield* client.inspectRetainedWorkEffect(input.id, payload(input));
       case 'attempt.reconcile':
         return input.recovery === undefined
           ? yield* client.reconcileAttemptEffect(input.id)

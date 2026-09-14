@@ -4,6 +4,11 @@ import { statSync } from 'node:fs';
 import { promisify } from 'node:util';
 import { Effect, Schema } from 'effect';
 import { HerdrClient, HerdrError, type ResponseTypes } from '../herdr-sdk.js';
+import {
+  NativeSessionPointerSchema,
+  herdrSessionPointer,
+  type NativeSessionPointer,
+} from './native-session.js';
 
 export type NativeBinding = {
   hostId: string;
@@ -28,6 +33,8 @@ export type NativeIdentity = {
   terminalId: string;
   agentKind: string;
   agentName: string;
+  sessionReference?: NativeSessionPointer;
+  /** Present only when decoding pre-v7 persisted identity bytes. */
   nativeSession?: string;
   foregroundProcess?: NativeForegroundProcess;
   identityRevision: number;
@@ -63,11 +70,12 @@ export const NativeIdentitySchema = Schema.Struct({
   terminalId: nonEmpty,
   agentKind: nonEmpty,
   agentName: nonEmpty,
+  sessionReference: Schema.optional(NativeSessionPointerSchema),
   nativeSession: Schema.optional(nonEmpty),
   foregroundProcess: Schema.optional(foregroundProcessSchema),
   identityRevision: nonNegativeInteger,
   ownedTabId: nonEmpty,
-}).check(Schema.makeFilter((identity) => Boolean(identity.nativeSession || identity.foregroundProcess), { expected: 'a native session or foreground process instance' }));
+}).check(Schema.makeFilter((identity) => Boolean(identity.sessionReference || identity.nativeSession || identity.foregroundProcess), { expected: 'a native session or foreground process instance' }));
 
 export type NativeLaunchLocator = {
   binding: NativeBinding;
@@ -77,6 +85,8 @@ export type NativeLaunchLocator = {
   agentKind: string;
   agentName: string;
   ownedTabId: string;
+  sessionReference?: NativeSessionPointer;
+  /** Present only in pre-v7 persisted launch locators. */
   nativeSession?: string;
   foregroundProcess?: NativeForegroundProcess;
   identityRevision?: number;
@@ -90,12 +100,13 @@ const locatorFields = {
   agentKind: nonEmpty,
   agentName: nonEmpty,
   ownedTabId: nonEmpty,
+  sessionReference: Schema.optional(NativeSessionPointerSchema),
   nativeSession: Schema.optional(nonEmpty),
   foregroundProcess: Schema.optional(foregroundProcessSchema),
   identityRevision: Schema.optional(nonNegativeInteger),
 };
 export const NativeLaunchLocatorSchema = Schema.Struct(locatorFields).check(
-  Schema.makeFilter((locator) => Boolean(locator.nativeSession || locator.foregroundProcess), { expected: 'a native session or foreground process instance' }),
+  Schema.makeFilter((locator) => Boolean(locator.sessionReference || locator.nativeSession || locator.foregroundProcess), { expected: 'a native session or foreground process instance' }),
 );
 export const NativeAdoptionLocatorSchema = Schema.Struct(locatorFields);
 
@@ -255,7 +266,16 @@ export type NativeObservation =
   | { kind: 'blocked'; identity: NativeIdentity; reason: string; failure?: NativeFailure }
   | { kind: 'manual-required'; identity: NativeIdentity; reason: string; failure?: NativeFailure }
   | { kind: 'settled'; identity: NativeIdentity; slotReady: true; failure?: NativeFailure }
-  | { kind: 'unconfirmed'; reason: string; failure?: NativeFailure };
+  | {
+      kind: 'unconfirmed';
+      reason: string;
+      failure?: NativeFailure;
+      candidate?: { reference: NativeSessionPointer; identityRevision: number };
+    };
+
+type RefreshedIdentity =
+  | { kind: 'confirmed'; identity: NativeIdentity }
+  | Extract<NativeObservation, { kind: 'unconfirmed' }>;
 
 export type LaunchRequest = {
   cwd: string;
@@ -310,9 +330,9 @@ function agentIdentity(
   ownedTabId: string,
   foregroundProcess?: NativeForegroundProcess,
 ) {
-  const nativeSession = agent.agent_session?.value;
+  const sessionReference = agent.agent_session ? herdrSessionPointer(agent.agent_session) : undefined;
   if (
-    (!nativeSession && !foregroundProcess) ||
+    (!sessionReference && !foregroundProcess) ||
     agent.workspace_id !== binding.workspaceId ||
     agent.tab_id !== ownedTabId ||
     agent.agent !== request.agentKind ||
@@ -329,7 +349,7 @@ function agentIdentity(
     identityRevision: agent.revision,
     ownedTabId,
   };
-  if (nativeSession) identity.nativeSession = nativeSession;
+  if (sessionReference) identity.sessionReference = sessionReference;
   if (foregroundProcess) identity.foregroundProcess = foregroundProcess;
   return identity;
 }
@@ -425,8 +445,14 @@ export function classifyNativeFailure(evidence: NativeFailureEvidence): NativeFa
   return { kind: 'unknown', diagnostic: { source: 'adapter', detail: evidence.detail } };
 }
 
-function unconfirmedObservation(reason: string, evidence: NativeFailureEvidence = { source: 'adapter', detail: reason }): NativeObservation {
-  return { kind: 'unconfirmed', reason, failure: classifyNativeFailure(evidence) };
+function unconfirmedObservation(
+  reason: string,
+  evidence: NativeFailureEvidence = { source: 'adapter', detail: reason },
+  candidate?: { reference: NativeSessionPointer; identityRevision: number },
+): Extract<NativeObservation, { kind: 'unconfirmed' }> {
+  return candidate
+    ? { kind: 'unconfirmed', reason, failure: classifyNativeFailure(evidence), candidate }
+    : { kind: 'unconfirmed', reason, failure: classifyNativeFailure(evidence) };
 }
 
 function launchLocator(
@@ -448,6 +474,7 @@ function launchLocator(
 function identityLocator(identity: NativeIdentity): NativeLaunchLocator {
   return {
     ...identity,
+    sessionReference: identity.sessionReference,
     nativeSession: identity.nativeSession,
     identityRevision: identity.identityRevision,
   };
@@ -493,17 +520,50 @@ export class HerdrNativeAdapter {
   }.bind(this));
 
   private readonly identityEffect = Effect.fn('HerdrNativeAdapter.identity')(function* (this: HerdrNativeAdapter, client: HerdrClient, binding: NativeBinding, agent: ResponseTypes.AgentInfo, request: Pick<LaunchRequest, 'agentKind' | 'agentName'>, ownedTabId: string) {
-    if (agent.agent_session?.value) return agentIdentity(binding, agent, request, ownedTabId);
-    const foregroundProcess = yield* this.foregroundProcessEffect(client, agent.pane_id, request.agentKind);
+    const hasVerifiedReference = agent.agent_session ? herdrSessionPointer(agent.agent_session) !== undefined : false;
+    const foregroundProcess = hasVerifiedReference
+      ? undefined
+      : yield* this.foregroundProcessEffect(client, agent.pane_id, request.agentKind);
     return agentIdentity(binding, agent, request, ownedTabId, foregroundProcess);
   }.bind(this));
 
-  private readonly sameIdentityEffect = Effect.fn('HerdrNativeAdapter.sameIdentity')(function* (this: HerdrNativeAdapter, client: HerdrClient, identity: NativeIdentity, agent: ResponseTypes.AgentInfo) {
-    if (!sameAgent(identity, agent)) return false;
-    if (identity.nativeSession) return agent.agent_session?.value === identity.nativeSession;
-    if (!identity.foregroundProcess) return false;
-    const foregroundProcess = yield* this.foregroundProcessEffect(client, identity.paneId, identity.agentKind);
-    return foregroundProcess?.pid === identity.foregroundProcess.pid && foregroundProcess.startToken === identity.foregroundProcess.startToken;
+  /**
+   * Refreshes an identity's confirmation against a current Herdr observation. A
+   * process-only identity may gain a conversation reference only while the same
+   * foreground process instance is still verified; otherwise a changed reference
+   * is retained as an unconfirmed candidate rather than silently rebinding.
+   */
+  private readonly refreshedIdentityEffect = Effect.fn('HerdrNativeAdapter.refreshedIdentity')(function* (this: HerdrNativeAdapter, client: HerdrClient, identity: NativeIdentity, agent: ResponseTypes.AgentInfo): Effect.fn.Return<RefreshedIdentity, NativeBoundaryError> {
+    if (!sameAgent(identity, agent)) return unconfirmedObservation('Native agent locator no longer matches');
+    if (agent.revision < identity.identityRevision)
+      return unconfirmedObservation('Native agent identity revision moved backwards');
+    const candidate = agent.agent_session ? herdrSessionPointer(agent.agent_session) : undefined;
+    let foregroundProcess: NativeForegroundProcess | undefined;
+    if (identity.foregroundProcess) {
+      foregroundProcess = yield* this.foregroundProcessEffect(client, identity.paneId, identity.agentKind);
+      if (foregroundProcess?.pid !== identity.foregroundProcess.pid || foregroundProcess.startToken !== identity.foregroundProcess.startToken)
+        return unconfirmedObservation('Native foreground process changed');
+    }
+    if (identity.sessionReference && !foregroundProcess) {
+      const prior = identity.sessionReference;
+      if (!candidate || candidate.kind !== prior.kind || candidate.value !== prior.value || candidate.source !== prior.source || candidate.harness !== prior.harness) {
+        const reason = 'Native conversation reference changed without stable process evidence';
+        return unconfirmedObservation(
+          reason,
+          { source: 'adapter', detail: reason },
+          candidate ? { reference: candidate, identityRevision: agent.revision } : undefined,
+        );
+      }
+    }
+    if (identity.nativeSession && !identity.sessionReference && !foregroundProcess) {
+      if (agent.agent_session?.value !== identity.nativeSession)
+        return unconfirmedObservation('Legacy native session value changed');
+      return { kind: 'confirmed', identity: { ...identity, identityRevision: agent.revision } };
+    }
+    const refreshed = agentIdentity(identity.binding, agent, identity, identity.ownedTabId, foregroundProcess);
+    return refreshed
+      ? { kind: 'confirmed', identity: refreshed }
+      : unconfirmedObservation('Native agent identity is unavailable');
   }.bind(this));
 
   private readonly clientEffect = Effect.fn('HerdrNativeAdapter.client')(function* (this: HerdrNativeAdapter, binding: NativeBinding) {
@@ -573,21 +633,23 @@ export class HerdrNativeAdapter {
     const workflow = Effect.gen(function* () {
       const client = yield* self.clientEffect(identity.binding);
       const current = yield* self.boundary('Herdr.agent.get', () => client.request('agent.get', { target: identity.paneId }));
-      if (current.type !== 'agent_info' || !(yield* self.sameIdentityEffect(client, identity, current.agent)))
-        return unconfirmedObservation('Native agent identity changed');
+      if (current.type !== 'agent_info') return unconfirmedObservation('Native agent identity changed');
+      const refreshed = yield* self.refreshedIdentityEffect(client, identity, current.agent);
+      if (refreshed.kind === 'unconfirmed') return refreshed;
+      const observedIdentity = refreshed.identity;
       if (current.agent.agent_status === 'idle' || current.agent.agent_status === 'done' || current.agent.agent_status === 'blocked') {
         const screen = yield* self.boundary('Herdr.pane.read', () => client.request('pane.read', { pane_id: identity.paneId, source: 'recent_unwrapped', format: 'text', lines: 120, strip_ansi: true }));
         if (screen.type !== 'pane_read' || screen.read.pane_id !== identity.paneId || screen.read.tab_id !== identity.tabId || screen.read.workspace_id !== identity.binding.workspaceId)
           return unconfirmedObservation('Native pane read did not match the registered pane');
         const failure = classifyNativeFailure({ source: 'pane', status: current.agent.agent_status, text: screen.read.text, truncated: screen.read.truncated === true, interactiveReady: current.agent.interactive_ready, launchPending: current.agent.launch_pending });
         const required = manualRequirement(screen.read.text);
-        if (required) return { kind: 'manual-required', identity, reason: required, failure } satisfies NativeObservation;
-        if (failure.kind === 'provider-refusal') return { kind: 'blocked', identity, reason: 'Native provider refused the request', failure } satisfies NativeObservation;
-        if (current.agent.agent_status === 'blocked') return { kind: 'blocked', identity, reason: 'Native agent is blocked', failure } satisfies NativeObservation;
+        if (required) return { kind: 'manual-required', identity: observedIdentity, reason: required, failure } satisfies NativeObservation;
+        if (failure.kind === 'provider-refusal') return { kind: 'blocked', identity: observedIdentity, reason: 'Native provider refused the request', failure } satisfies NativeObservation;
+        if (current.agent.agent_status === 'blocked') return { kind: 'blocked', identity: observedIdentity, reason: 'Native agent is blocked', failure } satisfies NativeObservation;
         if (!current.agent.launch_pending && current.agent.interactive_ready === true)
-          return { kind: 'settled', identity, slotReady: true, failure } satisfies NativeObservation;
+          return { kind: 'settled', identity: observedIdentity, slotReady: true, failure } satisfies NativeObservation;
       }
-      if (current.agent.agent_status === 'working') return { kind: 'working', identity } as NativeObservation;
+      if (current.agent.agent_status === 'working') return { kind: 'working', identity: observedIdentity } as NativeObservation;
       return unconfirmedObservation('Native agent is not explicitly ready', { source: 'adapter', detail: `Herdr reported status=${current.agent.agent_status}, interactive_ready=${String(current.agent.interactive_ready)}, launch_pending=${String(current.agent.launch_pending)}` });
     });
     return yield* workflow.pipe(Effect.catch((cause) => Effect.succeed(unconfirmedObservation(boundaryReason(cause, 'Native observation failed'), { source: 'boundary', operation: cause instanceof NativeBoundaryError ? cause.operation : 'HerdrNativeAdapter.observe', cause }))));
@@ -601,17 +663,13 @@ export class HerdrNativeAdapter {
       const client = yield* self.clientEffect(binding);
       const current = yield* self.boundary('Herdr.agent.get', () => client.request('agent.get', { target: locator.paneId }));
       if (current.type !== 'agent_info' || !sameAgent(locator, current.agent)) return unconfirmedObservation('Native agent locator no longer matches');
-      if (locator.nativeSession) {
-        if (current.agent.agent_session?.value !== locator.nativeSession) return unconfirmedObservation('Native agent session changed');
-        const identity = agentIdentity(binding, current.agent, locator, locator.ownedTabId);
-        return identity ? yield* self.observeEffect(identity) : unconfirmedObservation('Native agent identity is unavailable');
-      }
-      if (!locator.foregroundProcess) return unconfirmedObservation('Native process identity is unavailable');
-      const foregroundProcess = yield* self.foregroundProcessEffect(client, locator.paneId, locator.agentKind);
-      if (foregroundProcess?.pid !== locator.foregroundProcess.pid || foregroundProcess.startToken !== locator.foregroundProcess.startToken)
-        return unconfirmedObservation('Native foreground process changed');
-      const identity = agentIdentity(binding, current.agent, locator, locator.ownedTabId, foregroundProcess);
-      return identity ? yield* self.observeEffect(identity) : unconfirmedObservation('Native agent identity is unavailable');
+      const persisted = decodeOptional(NativeIdentitySchema, {
+        ...locator,
+        identityRevision: locator.identityRevision ?? current.agent.revision,
+      });
+      if (!persisted) return unconfirmedObservation('Persisted native process identity is unavailable');
+      const refreshed = yield* self.refreshedIdentityEffect(client, persisted, current.agent);
+      return refreshed.kind === 'confirmed' ? yield* self.observeEffect(refreshed.identity) : refreshed;
     });
     return yield* workflow.pipe(Effect.catch((cause) => Effect.succeed(unconfirmedObservation(boundaryReason(cause, 'Native recovery failed'), { source: 'boundary', operation: cause instanceof NativeBoundaryError ? cause.operation : 'HerdrNativeAdapter.recover', cause }))));
   }.bind(this));

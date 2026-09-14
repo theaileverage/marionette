@@ -16,6 +16,7 @@ import {
   type NativeJournal,
   type NativeLaunchLocator,
 } from '../../src/v1/native.js';
+import { herdrSessionPointer } from '../../src/v1/native-session.js';
 
 type Request = { id: string; method: string; params: object };
 type HerdrReply = object;
@@ -27,7 +28,7 @@ function agent(
 ) {
   return {
     agent: 'agy',
-    agent_session: { agent: 'agy', kind: 'id', source: 'test', value: 'native-1' },
+    agent_session: { agent: 'agy', kind: 'id', source: 'herdr:antigravity_cli', value: 'native-1' },
     agent_status: status,
     interactive_ready: true,
     launch_pending: false,
@@ -87,6 +88,22 @@ const endpointInspector = {
     return 'server-start-1';
   },
 };
+
+test('Herdr references require the official source and harness pairing', () => {
+  assert.deepEqual(
+    herdrSessionPointer({
+      source: 'herdr:pi',
+      agent: 'pi',
+      kind: 'path',
+      value: '/private/tmp/pi-session.jsonl',
+    }),
+    { harness: 'pi', kind: 'path', value: '/private/tmp/pi-session.jsonl', source: 'herdr:pi' },
+  );
+  assert.equal(
+    herdrSessionPointer({ source: 'herdr:pi', agent: 'agy', kind: 'id', value: 'unrelated' }),
+    undefined,
+  );
+});
 
 test('local endpoint inspector ties a socket owner to its process start instance', async () => {
   const calls: { command: string; args: readonly string[] }[] = [];
@@ -491,6 +508,34 @@ test('native recovery reopens only an unchanged session locator', async () => {
         .kind,
       'unconfirmed',
     );
+    assert.deepEqual(
+      await adapter.observe({
+        ...locator,
+        nativeSession: undefined,
+        sessionReference: {
+          harness: 'agy',
+          kind: 'id',
+          value: 'prior-native-session',
+          source: 'herdr:antigravity_cli',
+        },
+        identityRevision: 4,
+      }),
+      {
+        kind: 'unconfirmed',
+        reason: 'Native conversation reference changed without stable process evidence',
+        failure: {
+          kind: 'unknown',
+          diagnostic: {
+            source: 'adapter',
+            detail: 'Native conversation reference changed without stable process evidence',
+          },
+        },
+        candidate: {
+          reference: { harness: 'agy', kind: 'id', value: 'native-1', source: 'herdr:antigravity_cli' },
+          identityRevision: 4,
+        },
+      },
+    );
     assert.equal(methods.includes('tab.create'), false);
     assert.equal(methods.includes('agent.start'), false);
     assert.equal(methods.includes('agent.prompt'), false);
@@ -619,7 +664,7 @@ test('native launch retains a known locator when the started agent is not explic
     assert.equal(launch.kind, 'unconfirmed');
     if (launch.kind !== 'unconfirmed') return;
     assert.equal(launch.operationId, 'op-2');
-    assert.equal(launch.locator?.nativeSession, 'native-1');
+    assert.equal(launch.locator?.sessionReference?.value, 'native-1');
     assert.equal(launch.locator?.paneId, 'pane-1');
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));

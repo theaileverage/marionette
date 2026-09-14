@@ -22,10 +22,14 @@ import {
   type NativeSubmission,
 } from '../native.js';
 import type { HerdrClient } from '../../herdr-sdk.js';
+import { NativeSessionPointerSchema } from '../native-session.js';
 
 const nonEmpty = Schema.String.check(Schema.isMinLength(1));
 const positiveInteger = Schema.Finite.check(
   Schema.makeFilter((value) => Number.isInteger(value) && value > 0, { expected: 'a positive integer' }),
+);
+const nonNegativeInteger = Schema.Finite.check(
+  Schema.makeFilter((value) => Number.isInteger(value) && value >= 0, { expected: 'a non-negative integer' }),
 );
 const reason = nonEmpty;
 const failure = Schema.optional(NativeFailureSchema);
@@ -35,7 +39,14 @@ export const herdrObservationSchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal('blocked'), identity: NativeIdentitySchema, reason, failure }),
   Schema.Struct({ kind: Schema.Literal('manual-required'), identity: NativeIdentitySchema, reason, failure }),
   Schema.Struct({ kind: Schema.Literal('settled'), identity: NativeIdentitySchema, slotReady: Schema.Literal(true), failure }),
-  Schema.Struct({ kind: Schema.Literal('unconfirmed'), reason, failure }),
+  Schema.Struct({
+    kind: Schema.Literal('unconfirmed'),
+    reason,
+    failure,
+    candidate: Schema.optional(
+      Schema.Struct({ reference: NativeSessionPointerSchema, identityRevision: nonNegativeInteger }),
+    ),
+  }),
 ]);
 export const herdrSubmissionSchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal('submitted'), operationId: nonEmpty }),

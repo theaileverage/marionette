@@ -54,7 +54,7 @@ function journal(database: DatabaseSync): readonly unknown[] {
     .all();
 }
 
-function databaseState(database: DatabaseSync): object {
+function databaseState(database: DatabaseSync) {
   return {
     version: database.prepare('PRAGMA user_version').get()?.user_version,
     journalMode: database.prepare('PRAGMA journal_mode').get()?.journal_mode,
@@ -62,6 +62,26 @@ function databaseState(database: DatabaseSync): object {
     foreignKeys: database.prepare('PRAGMA foreign_keys').get()?.foreign_keys,
     journal: journal(database),
   };
+}
+
+/**
+ * The port adds migration 007 (native-session references) beyond the legacy
+ * baseline's 006_board_inbox. Parity means the port's schema history retains
+ * the baseline prefix unchanged and only extends past it, not byte-identity.
+ */
+function assertAdditiveMigrationParity(port: DatabaseSync, baseline: DatabaseSync): void {
+  const portState = databaseState(port);
+  const baselineState = databaseState(baseline);
+  assert.deepEqual(
+    {
+      ...portState,
+      version: baselineState.version,
+      journal: portState.journal.slice(0, baselineState.journal.length),
+    },
+    baselineState,
+  );
+  assert.equal(portState.version, migrations.length);
+  assert.equal(portState.journal.length, migrations.length);
 }
 
 function errorResult(encode: (value: unknown) => string, value: unknown): object {
@@ -115,10 +135,10 @@ test('canonical JSON and payload digests match the baseline on edge cases', () =
   }
 });
 
-test('migration sources and checksums match the baseline', () => {
-  assert.deepEqual(migrations, baselineMigrations);
+test('migration sources and checksums preserve the baseline prefix', () => {
+  assert.deepEqual(migrations.slice(0, baselineMigrations.length), baselineMigrations);
   assert.deepEqual(
-    migrations.map(migrationChecksum),
+    migrations.slice(0, baselineMigrations.length).map(migrationChecksum),
     baselineMigrations.map(baselineMigrationChecksum),
   );
 });
@@ -131,7 +151,7 @@ test('real SQLite open, migration, pragmas, close, and reopen match the baseline
       projectId: baselineProjectId,
     });
     const port = openDatabase({ path: current.portPath, projectId });
-    assert.deepEqual(databaseState(port), databaseState(baseline));
+    assertAdditiveMigrationParity(port, baseline);
     assert.equal(port.prepare('SELECT marionette_project_id() AS id').get()?.id, projectId);
     baseline.close();
     port.close();
@@ -141,7 +161,7 @@ test('real SQLite open, migration, pragmas, close, and reopen match the baseline
       projectId: baselineProjectId,
     });
     const portReopened = openDatabase({ path: current.portPath, projectId });
-    assert.deepEqual(databaseState(portReopened), databaseState(baselineReopened));
+    assertAdditiveMigrationParity(portReopened, baselineReopened);
     baselineReopened.close();
     portReopened.close();
   } finally {
@@ -166,7 +186,7 @@ test('explicit undefined database options retain baseline omission semantics', (
       busyTimeoutMs: undefined,
       migrationSet: undefined,
     });
-    assert.deepEqual(databaseState(port), databaseState(baseline));
+    assertAdditiveMigrationParity(port, baseline);
     baseline.close();
     port.close();
   } finally {
@@ -191,7 +211,8 @@ test('read-only current-schema checks match and do not modify the database', () 
       readOnly: true,
     });
     const port = openDatabase({ path: current.portPath, projectId, readOnly: true });
-    assert.deepEqual(journal(port), journal(baseline));
+    assert.deepEqual(journal(port).slice(0, baselineMigrations.length), journal(baseline));
+    assert.equal(journal(port).length, migrations.length);
     assert.throws(() => baseline.exec('CREATE TABLE forbidden (id TEXT)'), /readonly/i);
     assert.throws(() => port.exec('CREATE TABLE forbidden (id TEXT)'), /readonly/i);
     baseline.close();
@@ -265,7 +286,7 @@ test('failed migrations roll back schema, version, and history, then reopen clea
       () => applyMigrations(port, brokenMigrations),
       (error) => error instanceof MigrationError && error.code === 'migration-failed',
     );
-    assert.deepEqual(databaseState(port), databaseState(baseline));
+    assertAdditiveMigrationParity(port, baseline);
     assert.equal(
       port
         .prepare("SELECT count(*) AS count FROM sqlite_schema WHERE name = 'should_rollback'")

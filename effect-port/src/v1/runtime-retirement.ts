@@ -11,6 +11,7 @@ import {
   HostIdSchema,
   SessionGenerationSchema,
   WorkspaceIdSchema,
+  type AttemptId,
   type WorkspaceId,
 } from './model.js';
 import {
@@ -18,9 +19,12 @@ import {
   NativeIdentitySchema,
   type NativeBinding,
   type NativeEffect,
+  type NativeIdentity,
   type NativeJournal,
+  type NativeObservation,
   type PreparedEffect,
 } from './native.js';
+import type { NativeSessionBindingEvidence } from './native-session.js';
 import {
   nativeLocatorForRetirement,
   previewWorkspaceRetirement,
@@ -69,7 +73,7 @@ const runtimeAttemptRowSchema = Schema.Struct({
 });
 type RuntimeAttemptRow = typeof runtimeAttemptRowSchema.Type;
 
-type RuntimeNativeTarget = NativeRetirementTarget & { attemptId: string };
+type RuntimeNativeTarget = NativeRetirementTarget & { attemptId: AttemptId };
 
 export type RuntimeRetirementInput = {
   store: Store;
@@ -343,6 +347,56 @@ function cleanupJournal(
   };
 }
 
+function persistRetirementObservation(
+  input: RuntimeRetirementInput,
+  target: RuntimeNativeTarget,
+  priorIdentity: NativeIdentity,
+  observation: NativeObservation,
+): void {
+  const identity = 'identity' in observation ? observation.identity : priorIdentity;
+  if ('identity' in observation) {
+    input.store.transaction((database) =>
+      database
+        .prepare(
+          'UPDATE native_attempts SET identity_json=?,last_observation_json=?,updated_at=? WHERE project_id=? AND attempt_id=?',
+        )
+        .run(
+          JSON.stringify(observation.identity),
+          JSON.stringify(observation),
+          new Date().toISOString(),
+          input.store.project.id,
+          target.attemptId,
+        ),
+    );
+  }
+  const attempt = input.store.getAttempt(target.attemptId);
+  if (!attempt.nativeKind || !attempt.nativeServerGeneration) return;
+  const candidate = observation.kind === 'unconfirmed' ? observation.candidate : undefined;
+  const reference = candidate?.reference ?? identity.sessionReference;
+  if (!reference) return;
+  const binding: NativeSessionBindingEvidence = {
+    workspaceId: identity.binding.workspaceId,
+    tabId: identity.tabId,
+    paneId: identity.paneId,
+    terminalId: identity.terminalId,
+    identityRevision: candidate?.identityRevision ?? identity.identityRevision,
+    ...(identity.foregroundProcess ? { foregroundProcess: identity.foregroundProcess } : {}),
+    ...(identity.binding.endpoint.endpointProtocolGeneration !== undefined
+      ? { endpointProtocolGeneration: identity.binding.endpoint.endpointProtocolGeneration }
+      : {}),
+  };
+  input.store.recordNativeSessionReference({
+    actor: input.actor,
+    attemptId: target.attemptId,
+    nativeKind: attempt.nativeKind,
+    nativeServerGeneration: attempt.nativeServerGeneration,
+    reference,
+    status: candidate ? 'unconfirmed' : 'confirmed',
+    binding,
+    ...(observation.kind === 'unconfirmed' && candidate ? { rejectionReason: observation.reason } : {}),
+  });
+}
+
 /**
  * Retires a workspace using only native identities persisted by Runtime.
  * A prior cleanup claim is intentionally left unconfirmed rather than retried.
@@ -368,7 +422,15 @@ export const retireRuntimeWorkspaceEffect = Effect.fn('RuntimeRetirement.retireW
       nativeTargets: targets,
       nativeAdapter: adapter
         ? {
-            observe: (identity) => adapter.invoke('observe', { identity }),
+            observe: async (identity) => {
+              const target = targets.find(
+                (candidate) =>
+                  nativeLocatorForRetirement(candidate.identity) === nativeLocatorForRetirement(identity),
+              );
+              const observation = await adapter.invoke('observe', { identity });
+              if (target) persistRetirementObservation(input, target, identity, observation);
+              return observation;
+            },
             cleanup: (identity, authorized) => adapter.invoke('cleanup', { identity, authorized }),
           }
         : undefined,

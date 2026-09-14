@@ -17,10 +17,13 @@ import {
   NativeBindingSchema,
   NativeIdentitySchema,
   type NativeEffect,
+  type NativeIdentity,
   type NativeJournal,
   type NativeObservation,
   type PreparedEffect,
 } from './native.js';
+import { readNativeHistory, type NativeHistoryOptions } from './native-history.js';
+import { type NativeSessionBindingEvidence } from './native-session.js';
 import { nativeLocatorForRetirement } from './retirement.js';
 import { Settings, profileSchema } from './settings.js';
 import { Store, StoreError, type SessionIdentity } from './store.js';
@@ -336,6 +339,55 @@ export class Runtime {
     );
   }
 
+  private persistReference(
+    id: AttemptId,
+    identity: NativeIdentity,
+    candidate?: Extract<NativeObservation, { kind: 'unconfirmed' }>['candidate'],
+    rejectionReason?: string,
+  ): void {
+    const attempt = this.store.getAttempt(id);
+    if (!attempt.nativeKind || !attempt.nativeServerGeneration) return;
+    const reference = candidate?.reference ?? identity.sessionReference;
+    const binding: NativeSessionBindingEvidence = {
+      workspaceId: identity.binding.workspaceId,
+      tabId: identity.tabId,
+      paneId: identity.paneId,
+      terminalId: identity.terminalId,
+      identityRevision: candidate?.identityRevision ?? identity.identityRevision,
+      ...(identity.foregroundProcess ? { foregroundProcess: identity.foregroundProcess } : {}),
+      ...(identity.binding.endpoint.endpointProtocolGeneration !== undefined
+        ? { endpointProtocolGeneration: identity.binding.endpoint.endpointProtocolGeneration }
+        : {}),
+    };
+    if (reference) {
+      this.store.recordNativeSessionReference({
+        actor: this.actor,
+        attemptId: id,
+        nativeKind: attempt.nativeKind,
+        nativeServerGeneration: attempt.nativeServerGeneration,
+        reference,
+        status: candidate ? 'unconfirmed' : 'confirmed',
+        binding,
+        ...(candidate && rejectionReason ? { rejectionReason } : {}),
+      });
+    } else if (identity.nativeSession) {
+      this.store.recordNativeSessionReference({
+        actor: this.actor,
+        attemptId: id,
+        nativeKind: attempt.nativeKind,
+        nativeServerGeneration: attempt.nativeServerGeneration,
+        reference: {
+          harness: 'unknown',
+          kind: 'legacy',
+          value: identity.nativeSession,
+          source: 'legacy-nativeSession',
+        },
+        status: 'legacy-untyped',
+        binding,
+      });
+    }
+  }
+
   readonly startEffect = Effect.fn('Runtime.start')(
     function* (this: Runtime, id: AttemptId) {
       yield* sync('Runtime.start.authority', () => this.assertController());
@@ -401,6 +453,7 @@ export class Runtime {
           this.update(id, 'launched', { identity: launched.identity, launch: launched });
         }),
       );
+      yield* sync('Runtime.start.reference', () => this.persistReference(id, launched.identity));
       return yield* this.submitEffect(id);
     }.bind(this),
   );
@@ -462,7 +515,7 @@ export class Runtime {
       const submitted = yield* this.adapterFor(this.journal(id))
         .invokeEffect('prompt', { identity, text: prompt })
         .pipe(Effect.mapError((cause) => runtimeError('Runtime.submit.native', cause)));
-      return yield* sync('Runtime.submit.persist', () => {
+      const persisted = yield* sync('Runtime.submit.persist', () => {
         this.update(id, submitted.kind === 'submitted' ? 'active' : 'unconfirmed');
         if (submitted.kind !== 'submitted')
           this.store.settleAttempt({
@@ -473,6 +526,25 @@ export class Runtime {
           });
         return { attempt: this.store.getAttempt(id), native: submitted };
       });
+      if (submitted.kind === 'submitted') {
+        const refreshed = yield* Effect.result(this.inspectEffect(id));
+        if (refreshed._tag === 'Failure') {
+          yield* sync('Runtime.submit.refresh-failed', () => {
+            const observation = {
+              kind: 'unconfirmed',
+              reason: `Post-prompt reference refresh failed: ${refreshed.failure.message}`,
+            };
+            this.store.transaction((db) =>
+              db
+                .prepare(
+                  'UPDATE native_attempts SET last_observation_json=?,updated_at=? WHERE project_id=? AND attempt_id=?',
+                )
+                .run(JSON.stringify(observation), new Date().toISOString(), this.store.project.id, id),
+            );
+          });
+        }
+      }
+      return persisted;
     }.bind(this),
   );
 
@@ -494,6 +566,12 @@ export class Runtime {
         .invokeEffect('observe', { identity })
         .pipe(Effect.mapError((cause) => runtimeError('Runtime.inspect.native', cause)));
       return yield* sync('Runtime.inspect.persist', () => {
+        if ('identity' in observation) {
+          this.update(id, row.phase, { identity: observation.identity });
+          this.persistReference(id, observation.identity);
+        } else if (observation.candidate) {
+          this.persistReference(id, identity, observation.candidate, observation.reason);
+        }
         this.store.transaction((db) =>
           db
             .prepare(
@@ -513,6 +591,35 @@ export class Runtime {
   );
   inspect(id: AttemptId) {
     return runCompatibility(this.inspectEffect(id));
+  }
+
+  readonly inspectRetainedWorkEffect = Effect.fn('Runtime.inspectRetainedWork')(
+    function* (
+      this: Runtime,
+      id: AttemptId,
+      options: NativeHistoryOptions & { refresh?: boolean } = {},
+    ) {
+      yield* sync('Runtime.retained-work.authority', () => this.assertController());
+      if (options.refresh !== false) yield* this.inspectEffect(id);
+      return yield* sync('Runtime.retained-work.read', () => {
+        const references = this.store.listNativeSessionReferences(id);
+        const reference = references.at(-1);
+        return {
+          attempt: this.store.getAttempt(id),
+          references,
+          history: reference
+            ? readNativeHistory(reference, this.store.project.hostId, options)
+            : {
+                kind: 'missing-reference' as const,
+                reason: 'This attempt has no native conversation reference',
+              },
+          retained: this.store.retainedWork(id),
+        };
+      });
+    }.bind(this),
+  );
+  inspectRetainedWork(id: AttemptId, options: NativeHistoryOptions & { refresh?: boolean } = {}) {
+    return runCompatibility(this.inspectRetainedWorkEffect(id, options));
   }
 
   private markUnconfirmed(id: AttemptId, reason: string) {
@@ -609,6 +716,7 @@ export interface RuntimeServiceShape {
   readonly runtime: Runtime;
   readonly start: Runtime['startEffect'];
   readonly inspect: Runtime['inspectEffect'];
+  readonly inspectRetainedWork: Runtime['inspectRetainedWorkEffect'];
   readonly reconcile: Runtime['reconcileEffect'];
 }
 export class RuntimeService extends Context.Service<RuntimeService, RuntimeServiceShape>()(
@@ -621,6 +729,7 @@ export const runtimeLayer = (runtime: Runtime) =>
       runtime,
       start: runtime.startEffect,
       inspect: runtime.inspectEffect,
+      inspectRetainedWork: runtime.inspectRetainedWorkEffect,
       reconcile: runtime.reconcileEffect,
     }),
   );

@@ -3,6 +3,7 @@ import { artifactSchema } from './artifacts.js';
 import { BoardPostKindSchema, BoardReferenceSchema } from './board.js';
 import {
   AgentSessionIdSchema,
+  ArtifactIdSchema,
   AttemptIdSchema,
   AttemptPhaseSchema,
   BriefContentSchema,
@@ -29,6 +30,7 @@ import {
   WorkspaceIdSchema,
 } from './model.js';
 import { NativeBindingSchema, NativeIdentitySchema } from './native.js';
+import { NativeSessionPointerSchema, NativeSessionReferenceSchema } from './native-session.js';
 import type { Operation } from './operations.js';
 import { profileSchema } from './settings.js';
 
@@ -221,13 +223,59 @@ const nativeObservationSchema = Schema.Union([
     identity: NativeIdentitySchema,
     slotReady: Schema.Literal(true),
   }),
-  publicObject({ kind: Schema.Literal('unconfirmed'), reason: key }),
+  publicObject({
+    kind: Schema.Literal('unconfirmed'),
+    reason: key,
+    candidate: Schema.optional(
+      publicObject({ reference: NativeSessionPointerSchema, identityRevision: natural }),
+    ),
+  }),
   publicObject({ kind: Schema.Literal('unsupported'), reason: key }),
   publicObject({ kind: Schema.Literal('submitted'), operationId: key }),
 ]);
 const attemptNativeSchema = publicObject({
   attempt: attemptSchema,
   native: nativeObservationSchema,
+});
+const nativeHistorySchema = Schema.Union([
+  publicObject({ kind: Schema.Literal('missing-reference'), reason: key }),
+  publicObject({ kind: Schema.Literal('identity-unconfirmed'), reason: key }),
+  publicObject({ kind: Schema.Literal('unsupported'), harness: key, referenceKind: key, reason: key }),
+  publicObject({ kind: Schema.Literal('session-missing'), reason: key }),
+  publicObject({ kind: Schema.Literal('unsafe-path'), reason: key }),
+  publicObject({ kind: Schema.Literal('malformed-history'), reason: key, offset: natural }),
+  publicObject({
+    kind: Schema.Literal('available'),
+    harness: key,
+    referenceId: key,
+    cursor: natural,
+    nextCursor: Schema.NullOr(natural),
+    truncated: Schema.Boolean,
+    bytesRead: natural,
+    entries: array(publicObject({ offset: natural, value: Schema.Unknown })),
+  }),
+]);
+const retainedWorkSchema = publicObject({
+  attempt: attemptSchema,
+  references: array(NativeSessionReferenceSchema),
+  history: nativeHistorySchema,
+  retained: publicObject({
+    jobId: JobIdSchema,
+    attempts: array(attemptSchema),
+    results: array(resultSchema),
+    artifacts: array(
+      publicObject({
+        id: ArtifactIdSchema,
+        resultId: ResultIdSchema,
+        attemptId: AttemptIdSchema,
+        digest: DigestSchema,
+        byteLength: natural,
+        mediaType: key,
+        path: key,
+        ordinal: natural,
+      }),
+    ),
+  }),
 });
 const retirementTargetSchema = publicObject({
   session: publicObject({ id: AgentSessionIdSchema, generation: SessionGenerationSchema }),
@@ -338,6 +386,7 @@ export const operationOutputSchemas = {
   'attempt.admit': AttemptIdSchema,
   'attempt.start': attemptNativeSchema,
   'attempt.inspect': attemptNativeSchema,
+  'attempt.retained-work': retainedWorkSchema,
   'attempt.reconcile': attemptNativeSchema,
   'brief.acknowledge': briefSchema,
   'result.get': resultSchema,
