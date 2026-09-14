@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#080d12" />
+    <title>Marionette · Project</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand"><span class="mark" aria-hidden="true">M</span><span>marionette</span><span class="muted">/ project</span></div>
+      <nav class="view-tabs" aria-label="Project views" role="tablist">
+        <button class="view-tab" type="button" role="tab" data-view="overview" aria-controls="overview-view" aria-selected="true">Overview</button>
+        <button class="view-tab" type="button" role="tab" data-view="board" aria-controls="board-view" aria-selected="false">Project board</button>
+        <button class="view-tab" type="button" role="tab" data-view="human" aria-controls="human-view" aria-selected="false">Human</button>
+      </nav>
+      <div class="topbar-meta"><span id="connection" class="signal signal-warn">● connecting</span><span id="captured">awaiting snapshot</span><span class="project-mode">LOCAL PROJECT</span></div>
+    </header>
+    <main>
+      <section id="overview-view" class="app-view" data-active="true" role="tabpanel">
+        <section class="health-strip" aria-labelledby="health-title">
+          <div class="section-heading health-heading"><div><span class="eyebrow">01 / PROJECT + SESSION</span><h1 id="health-title">Live health</h1></div><span id="overall-health" class="chip chip-warn">connecting</span></div>
+          <div class="health-grid"><dl id="project-health" class="kv-list health-primary"><div><dt>project</dt><dd>loading…</dd></div></dl><dl id="session-health" class="kv-list"><div><dt>session</dt><dd>loading…</dd></div></dl><div class="source-block"><span class="label">BOUND PROJECT</span><code id="project-path">loading…</code><span id="refresh-rate" class="subtle">server push starting…</span></div></div>
+        </section>
+        <section id="errors" class="notice hidden" aria-live="polite"></section>
+        <section class="priority-section" aria-labelledby="execution-title">
+          <div class="section-heading"><div><span class="eyebrow">02 / EXECUTION</span><h2 id="execution-title">Open jobs + active attempts</h2></div><span id="jobs-state" class="section-state">—</span></div>
+          <div class="metric-grid"><article class="metric"><span class="label">OPEN JOBS</span><strong id="jobs-count">—</strong><span id="jobs-detail" class="metric-detail">waiting for ledger</span></article><article class="metric"><span class="label">CURRENT ATTEMPT</span><strong id="attempts-count">—</strong><span id="attempts-detail" class="metric-detail">checking CLI visibility</span></article><article class="metric"><span class="label">ACTIVE WORKER SESSIONS</span><strong id="workers-count">—</strong><span class="metric-detail">observable sessions, not inferred attempts</span></article><article class="metric"><span class="label">UNSETTLED WORKFLOWS</span><strong id="workflows-count">—</strong><span class="metric-detail">running / pausing / cancelling</span></article></div>
+          <div class="panel execution-panel"><div class="job-toolbar"><label class="job-filter">Filter jobs<input id="job-filter" type="search" placeholder="Key, ID, workspace, state…" autocomplete="off" /></label><nav id="job-pagination" class="job-pagination hidden" aria-label="Jobs pagination"></nav></div><div id="jobs" class="table-wrap" role="region" tabindex="0" aria-label="Job ledger; scroll horizontally for all columns"><div class="empty">Waiting for project data…</div></div><div id="attempt-visibility" class="inline-note">Attempt inventory pending.</div></div>
+        </section>
+        <section class="priority-section" aria-labelledby="results-title"><div class="section-heading"><div><span class="eyebrow">03 / DURABLE OUTPUT</span><h2 id="results-title">Results + evidence</h2></div><span id="result-state" class="section-state">—</span></div><div id="results" class="result-list"><div class="empty panel">Waiting for durable result view…</div></div><nav id="result-pagination" class="result-pagination hidden" aria-label="Results pagination"></nav></section>
+        <section class="detail-section" aria-labelledby="details-title">
+          <div class="section-heading"><div><span class="eyebrow">04 / SUPPORTING DETAIL</span><h2 id="details-title">Board, workflows + profiles</h2></div></div>
+          <div class="detail-grid"><section class="panel message-board-panel"><div class="panel-head"><div><h3>Message board</h3><p>Every durable message across all project threads. Select a row to inspect its context.</p></div><span id="board-state" class="panel-state">—</span></div><div id="board" class="message-table-wrap" role="region" tabindex="0" aria-label="All message board messages"><div class="empty">Waiting…</div></div></section><section class="panel"><div class="panel-head"><h3>Workflows</h3><span id="workflow-state" class="panel-state">—</span></div><div id="workflows" class="stack-list"><div class="empty">Waiting…</div></div></section><section class="panel"><div class="panel-head"><h3>Execution profiles</h3><span id="profile-state" class="panel-state">—</span></div><div id="profiles" class="stack-list"><div class="empty">Waiting…</div></div></section></div>
+        </section>
+      </section>
+      <section id="board-view" class="app-view" data-active="false" role="tabpanel" aria-labelledby="project-board-title">
+        <div class="board-header"><div><span class="eyebrow">PROJECT / JOB TRACKING</span><h1 id="project-board-title">Project board</h1><p>Manual stages are durable overrides. Without one, recorded results move to Review and a finished ledger job moves to Done. This alpha cannot yet read result-acceptance decisions.</p></div><button id="add-job" class="button button-primary" type="button">+ Add new job</button></div>
+        <section id="board-errors" class="notice hidden" aria-live="polite"></section>
+        <div class="board-toolbar"><span id="board-summary">Waiting for jobs…</span><span>Drag cards or use Stage override to set durable manual metadata.</span></div>
+        <div id="kanban" class="kanban" aria-live="polite"><div class="empty">Waiting for project data…</div></div>
+      </section>
+      <section id="human-view" class="app-view" data-active="false" role="tabpanel" aria-labelledby="human-title">
+        <div class="human-header"><span class="eyebrow">HUMAN / ONE-BOX INTAKE</span><h1 id="human-title">Tell Marionette what you need</h1><p>Speak or type naturally. The intake layer uses current project context to clarify the work and produce structured <code>job.create</code> arguments.</p></div>
+        <div class="human-layout">
+          <section class="panel human-composer-panel" aria-labelledby="human-compose-title">
+            <div class="panel-head"><div><h2 id="human-compose-title">One prompt, not ten fields</h2><p id="human-context-summary">Waiting for project context…</p></div><span id="human-model-state" class="chip chip-warn">checking enrichment</span></div>
+            <form id="human-prompt-form" class="human-prompt-form">
+              <label for="human-message">What should happen?</label>
+              <div class="human-prompt-box"><textarea id="human-message" name="message" rows="8" maxlength="12000" required placeholder="Example: Review the current recovery work, verify the tests, and prepare a patch without touching unrelated changes."></textarea><div class="human-prompt-actions"><button id="human-mic" class="button mic-button" type="button" aria-pressed="false"><span aria-hidden="true">●</span> Mic</button><span id="human-mic-state" class="subtle" role="status">Voice input is idle.</span><button class="button button-primary" type="submit">Clarify + structure</button></div></div>
+              <p id="human-intake-error" class="form-error hidden" role="alert"></p>
+            </form>
+          </section>
+          <aside class="panel agent-contract" aria-labelledby="agent-contract-title">
+            <div class="panel-head"><div><h2 id="agent-contract-title">Agent contract</h2><p>Machines can use the same intake without scraping the form.</p></div><span class="chip chip-neutral">JSON</span></div>
+            <div class="agent-contract-body"><code>POST /api/intake/enrich</code><pre>{
+  "message": "your natural-language request"
+}</pre><p>The response contains clarification questions and validated <code>marionette.operation</code>, <code>endpoint</code>, and <code>arguments</code>.</p><a class="button contract-link" href="/api/intake/schema" target="_blank" rel="noreferrer">View schema</a></div>
+          </aside>
+        </div>
+        <section id="human-result" class="panel human-result hidden" aria-labelledby="human-result-title" aria-live="polite">
+          <div class="panel-head"><div><h2 id="human-result-title">Structured request</h2><p id="human-result-summary">Ready for review.</p></div><span id="human-result-source" class="chip chip-neutral">—</span></div>
+          <div class="human-result-grid"><div class="human-result-main"><label for="human-enriched-prompt">Enriched prompt</label><textarea id="human-enriched-prompt" rows="12"></textarea><section><h3>Clarifications</h3><div id="human-questions" class="human-list"></div></section><section><h3>Assumptions</h3><div id="human-assumptions" class="human-list"></div></section></div><aside class="human-payload"><h3>Marionette arguments</h3><pre id="human-payload" tabindex="0"></pre><div class="form-actions"><button id="copy-human-payload" class="button" type="button">Copy JSON</button><button id="send-human-job" class="button button-primary" type="button">Send to Marionette</button></div></aside></div>
+        </section>
+      </section>
+    </main>
+    <footer><span>Marionette v1 · CLI-backed state</span><span id="footer-status">Waiting for first snapshot</span></footer>
+    <dialog id="new-job-dialog" class="modal">
+      <form id="new-job-form">
+        <div class="modal-head"><div><span class="eyebrow">NEW LEDGER RECORD</span><h2>Create a job</h2></div><button class="icon-button" type="button" data-close-dialog aria-label="Close new job dialog">×</button></div>
+        <p class="form-note">Creates a real Marionette job in the bound project.</p>
+        <label>Job key<input name="stableKey" required placeholder="audit-session-recovery" autocomplete="off" /></label>
+        <label>Workspace<input name="workspaceId" required list="workspace-options" placeholder="Select a registered workspace" autocomplete="off" /></label><datalist id="workspace-options"></datalist>
+        <label>Delivery<select name="delivery"><option value="report">Report</option><option value="patch">Patch</option><option value="commit">Commit</option></select></label>
+        <label>Prompt<textarea name="prompt" required rows="6" placeholder="Describe the outcome, evidence, and acceptance criteria…"></textarea></label>
+        <details class="form-details"><summary>Brief structure</summary><div class="form-grid"><label>Scope <span>one item per line</span><textarea name="scope" rows="3"></textarea></label><label>Ownership <span>one item per line</span><textarea name="ownership" rows="3"></textarea></label><label>Constraints <span>one item per line</span><textarea name="constraints" rows="3"></textarea></label><label>Standing orders <span>one item per line</span><textarea name="standingOrders" rows="3"></textarea></label></div></details>
+        <p id="new-job-error" class="form-error hidden" role="alert"></p><div class="form-actions"><button class="button" type="button" data-close-dialog>Cancel</button><button class="button button-primary" type="submit">Create job</button></div>
+      </form>
+    </dialog>
+    <div id="detail-backdrop" class="detail-backdrop" data-open="false"></div>
+    <aside id="job-detail" class="job-detail t-panel-slide" data-open="false" aria-label="Job details" aria-hidden="true"><div class="detail-drawer-head"><span class="eyebrow">JOB DETAIL</span><button id="close-detail" class="icon-button" type="button" aria-label="Close job details">×</button></div><div id="job-detail-content" class="job-detail-content"><div class="empty">Select a job.</div></div></aside>
+    <div id="message-detail-backdrop" class="detail-backdrop" data-open="false"></div>
+    <aside id="message-detail" class="job-detail message-detail t-panel-slide" data-open="false" aria-label="Message details" aria-hidden="true"><div class="detail-drawer-head"><span class="eyebrow">MESSAGE DETAIL</span><button id="close-message-detail" class="icon-button" type="button" aria-label="Close message details">×</button></div><div id="message-detail-content" class="job-detail-content"><div class="empty">Select a message.</div></div></aside>
+    <div id="toast" class="toast" role="status" aria-live="polite" data-visible="false"></div>
+    <script type="module" src="./client.js"></script>
+  </body>
+</html>
