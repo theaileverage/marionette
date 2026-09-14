@@ -214,6 +214,48 @@ function retirementCount(databasePath: string): number {
   }
 }
 
+test('init installs the project skill and preserves local skill changes', () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'marionette-v1-cli-onboarding-')));
+  const repositoryRoot = join(root, 'repository');
+  const stateHome = join(root, 'state');
+  const skillPath = join(repositoryRoot, '.agents', 'skills', 'marionette', 'SKILL.md');
+  const onboardingSchema = z
+    .object({
+      onboarding: z
+        .object({
+          skill: z.object({ status: z.enum(['installed', 'existing']), path: z.string() }).strict(),
+          nextPrompt: z.string().min(1),
+        })
+        .strict(),
+    })
+    .passthrough();
+  mkdirSync(repositoryRoot);
+  git(repositoryRoot, ['init', '-q']);
+  try {
+    const first = runCli(
+      ['init', '--project', repositoryRoot, '--state-home', stateHome, '--output', 'json'],
+      { cwd: root, stateHome },
+    );
+    assert.equal(first.status, 0, first.stderr);
+    const firstOutput = onboardingSchema.parse(JSON.parse(first.stdout));
+    assert.deepEqual(firstOutput.onboarding.skill, { status: 'installed', path: skillPath });
+    assert.match(firstOutput.onboarding.nextPrompt, /Use Marionette to coordinate/);
+    assert.match(readFileSync(skillPath, 'utf8'), /^---\nname: marionette\n/);
+
+    writeFileSync(skillPath, 'local project instructions\n');
+    const second = runCli(
+      ['init', '--project', repositoryRoot, '--state-home', stateHome, '--output', 'json'],
+      { cwd: root, stateHome },
+    );
+    assert.equal(second.status, 0, second.stderr);
+    const secondOutput = onboardingSchema.parse(JSON.parse(second.stdout));
+    assert.deepEqual(secondOutput.onboarding.skill, { status: 'existing', path: skillPath });
+    assert.equal(readFileSync(skillPath, 'utf8'), 'local project instructions\n');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('flags, file input, stdin, inline JSON, and full exec JSON produce the same raw result', () => {
   const fixture = createProject();
   try {

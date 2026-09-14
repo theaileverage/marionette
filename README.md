@@ -1,27 +1,62 @@
 # Marionette
 
-Marionette is a local CLI and TypeScript SDK for delegating work to coding agents, sharing a durable message board, and tracking results in SQLite. Native workers run through Herdr. The CLI and SDK call the same implementation. No Marionette MCP server or HTTP service is required.
+Marionette lets one coding agent coordinate other coding agents without treating terminal output as proof that work finished. The lead creates scoped jobs, launches workers through Herdr, records their results in SQLite, and accepts work only after checking its evidence.
 
-This branch prepares **1.0.0-alpha.1**. It is a breaking rewrite. Existing Marionette databases and sessions are not imported into the new state directory.
+The v1 alpha is a breaking rewrite. It does not import databases or sessions from earlier Marionette releases.
 
 ## Requirements
 
 - Node.js 26.8.1 or newer.
-- Herdr for native worker execution.
-- The agent executable selected in your execution profile.
+- A running [Herdr](https://herdr.dev/agent-guide.md) server for native worker execution.
+- An installed and authenticated coding-agent executable.
 
-## Project setup
+Run `herdr integration status` to inspect installed Herdr status integrations. An integration marked current does not prove that its agent executable is installed or authenticated.
+
+## Run your first delegated task
+
+Install the alpha and initialize a repository:
 
 ```sh
-marionette init --project /absolute/path/to/repository
+npm install --global @theaileverage/marionette@alpha
+cd /absolute/path/to/repository
+marionette init
+```
+
+`init` creates the project binding and installs the Marionette skill at `.agents/skills/marionette`. Start a new agent session in the repository, then give the lead one request:
+
+> Use Marionette to coordinate a worker that inspects this repository and reports how to run its tests. Do not edit files.
+
+The lead agent uses the skill to inspect the installed CLI, register the repository and Herdr connection, choose an available worker profile, create the job, launch the worker, monitor it, and decide its result. You provide the objective and authority. The agent handles operation JSON, digests, revisions, and IDs.
+
+You should see a Herdr worker start and a durable Marionette job appear. Ask the lead to show the job, brief, attempt, board messages, and accepted result:
+
+> Show me the Marionette record for that job and explain why its result was accepted.
+
+### Add multiple worker harnesses
+
+Give the lead this prompt to configure more than one coding-agent harness:
+
+> Use Marionette to configure the coding-agent harnesses available on this machine as workers for this project. Inspect the installed Marionette and Herdr commands first. Check each harness executable and its authentication instead of relying only on Herdr integration status. Preserve existing profiles. Create a separate Marionette execution profile for each supported harness and model, register the correct Herdr workspace, then show me which workers are ready, which were skipped, and why. Do not launch a worker yet.
+
+After reviewing the configured workers, assign a task and let the lead choose a suitable profile:
+
+> Use Marionette to coordinate this task with the best available worker profile: YOUR_TASK. Explain which harness and model you selected, then supervise the worker through an accepted result or a concrete blocker.
+
+If your agent does not discover `.agents/skills`, point it to `.agents/skills/marionette/SKILL.md`. The full CLI remains available for scripts and SDK clients.
+
+## Project state and CLI access
+
+Initialization writes `.marionette-v1/project.json` inside the repository. SQLite and durable artifacts live under the configured state home. Set `MARIONETTE_STATE_HOME` or pass `--state-home` during initialization to choose it. Keep the same state home for later commands.
+
+Commands discover the binding from the current directory. Use `--project /absolute/path/to/.marionette-v1/project.json` when calling from elsewhere. Managed agents inherit `MARIONETTE_CONTEXT`, which binds their project and session even when their working directory changes. A managed session cannot switch projects or become a local user by supplying another binding.
+
+Agents and script authors can inspect the installed contract without opening the source:
+
+```sh
 marionette context
 marionette schema
 marionette schema board.post
 ```
-
-Initialization writes `.marionette-v1/project.json` inside the repository. SQLite and durable artifacts live under the configured state home. Set `MARIONETTE_STATE_HOME` or pass `--state-home` during initialization to choose it.
-
-Commands discover the binding from the current directory. Use `--project /absolute/path/to/.marionette-v1/project.json` when calling from elsewhere. Managed agents inherit `MARIONETTE_CONTEXT`, which binds their project and session even when their working directory changes. A managed session cannot switch projects or become a local user by supplying another binding.
 
 ## Harness adapters
 
