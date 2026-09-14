@@ -47,6 +47,7 @@ import {
   WakeError,
   WakeListener,
   pokeWatcherEffect,
+  pokeWatcherInBackground,
   type PendingWorkEffectPort,
 } from './wake.js';
 import {
@@ -86,37 +87,6 @@ const clientCall = <A>(operation: string, action: () => A) =>
   });
 
 export type ConnectOptions = Omit<NonNullable<Parameters<typeof resolveContext>[0]>, 'readOnly'>;
-
-/**
- * Reads durable delivery state directly.
- *
- * `Watcher.hasPendingWorkEffect()` is the agreed predicate and supersedes this:
- * once the watcher declares it, pass the watcher itself as
- * `watch({ pendingWork })` and this function goes away. Keeping the seam
- * explicit rather than sniffing for the method means the idle timer cannot
- * silently start expiring with work still queued on either side of that change.
- */
-function deliveryPendingWork(store: Store): PendingWorkEffectPort<WakeError> {
-  return {
-    hasPendingWorkEffect: () =>
-      Effect.try({
-        try: () =>
-          store.read((db) =>
-            db
-              .prepare(
-                "SELECT 1 FROM notification_deliveries WHERE project_id=? AND state IN ('pending','claimed') LIMIT 1",
-              )
-              .get(store.project.id),
-          ) !== undefined,
-        catch: (cause) =>
-          new WakeError({
-            operation: 'Watcher.hasPendingWork',
-            message: cause instanceof Error ? cause.message : String(cause),
-            cause,
-          }),
-      }),
-  };
-}
 
 export class Marionette {
   readonly #store: Store;
@@ -413,7 +383,12 @@ export class Marionette {
     return this.#board.createThread({ ...input, author: this.#author() });
   }
   post(input: Omit<Parameters<Board['post']>[0], 'author'>) {
-    return this.#board.post({ ...input, author: this.#author() });
+    const post = this.#board.post({ ...input, author: this.#author() });
+    pokeWatcherInBackground({
+      stateDirectory: this.#store.project.stateDirectory,
+      projectId: this.#store.project.id,
+    });
+    return post;
   }
   threads(input: Parameters<Board['listThreads']>[0] = {}) {
     this.#authenticate();
@@ -431,14 +406,63 @@ export class Marionette {
     return this.#board.inbox({ ...input, recipient: this.#recipient() });
   }
   subscribe(input: Omit<Parameters<Board['subscribe']>[0], 'subscriber'> = {}) {
-    return this.#board.subscribe({ ...input, subscriber: this.#recipient() });
+    const subscription = this.#board.subscribe({ ...input, subscriber: this.#recipient() });
+    pokeWatcherInBackground({
+      stateDirectory: this.#store.project.stateDirectory,
+      projectId: this.#store.project.id,
+    });
+    return subscription;
   }
   unsubscribe(input: { threadId?: string } = {}) {
     return this.#board.unsubscribe({ ...input, subscriber: this.#recipient() });
   }
   markRead(input: Omit<Parameters<Board['markRead']>[0], 'reader'>) {
-    return this.#board.markRead({ ...input, reader: this.#recipient() });
+    const result = this.#board.markRead({ ...input, reader: this.#recipient() });
+    pokeWatcherInBackground({
+      stateDirectory: this.#store.project.stateDirectory,
+      projectId: this.#store.project.id,
+    });
+    return result;
   }
+  postEffect = Effect.fn('Marionette.post')(function* (
+    this: Marionette,
+    input: Omit<Parameters<Board['post']>[0], 'author'>,
+  ) {
+    const post = yield* clientCall('post', () =>
+      this.#board.post({ ...input, author: this.#author() }),
+    );
+    yield* pokeWatcherEffect({
+      stateDirectory: this.#store.project.stateDirectory,
+      projectId: this.#store.project.id,
+    });
+    return post;
+  });
+  subscribeEffect = Effect.fn('Marionette.subscribe')(function* (
+    this: Marionette,
+    input: Omit<Parameters<Board['subscribe']>[0], 'subscriber'> = {},
+  ) {
+    const subscription = yield* clientCall('subscribe', () =>
+      this.#board.subscribe({ ...input, subscriber: this.#recipient() }),
+    );
+    yield* pokeWatcherEffect({
+      stateDirectory: this.#store.project.stateDirectory,
+      projectId: this.#store.project.id,
+    });
+    return subscription;
+  });
+  markReadEffect = Effect.fn('Marionette.markRead')(function* (
+    this: Marionette,
+    input: Omit<Parameters<Board['markRead']>[0], 'reader'>,
+  ) {
+    const result = yield* clientCall('markRead', () =>
+      this.#board.markRead({ ...input, reader: this.#recipient() }),
+    );
+    yield* pokeWatcherEffect({
+      stateDirectory: this.#store.project.stateDirectory,
+      projectId: this.#store.project.id,
+    });
+    return result;
+  });
   queryEffect = Effect.fn('Marionette.query')(function* (this: Marionette, input: SqlRead) {
     yield* clientCall('authenticate', () => this.#authenticate());
     return yield* this.#sql.readEffect(input);
@@ -636,7 +660,7 @@ export class Marionette {
           (listener) => Effect.sync(() => listener.close()),
         );
         const generation = watcher.generation;
-        const pendingWork = options.pendingWork ?? deliveryPendingWork(this.#store);
+        const pendingWork = options.pendingWork ?? watcher;
         const idleTimeoutMs = options.idleTimeoutMs ?? 30_000;
         const fallbackIntervalMs = options.fallbackIntervalMs ?? DEFAULT_FALLBACK_INTERVAL_MS;
         const reconcileIntervalMs = options.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_MS;
@@ -707,9 +731,7 @@ export class Marionette {
           return true;
         }).bind(this);
 
-        const reconcilePass = Effect.fn('Marionette.watch.reconcile')(function* (
-          this: Marionette,
-        ) {
+        const reconcilePass = Effect.fn('Marionette.watch.reconcile')(function* (this: Marionette) {
           const attempts = yield* clientCall('watch.activeAttempts', () =>
             this.#runtime.activeAttempts(),
           );

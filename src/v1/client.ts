@@ -42,6 +42,7 @@ import {
   MAX_BUSY_RETRY_MS,
   WakeListener,
   pokeWatcher,
+  pokeWatcherInBackground,
   type PendingWorkPort,
 } from './wake.js';
 import {
@@ -57,28 +58,6 @@ import {
 } from './store.js';
 
 export type ConnectOptions = Omit<NonNullable<Parameters<typeof resolveContext>[0]>, 'readOnly'>;
-
-/**
- * Reads durable delivery state directly.
- *
- * `Watcher.hasPendingWork()` is the agreed predicate and supersedes this: once
- * the watcher declares it, pass the watcher itself as `watch({ pendingWork })`
- * and this function goes away. Keeping the seam explicit rather than sniffing
- * for the method means the idle timer cannot silently start expiring with work
- * still queued on either side of that change.
- */
-function deliveryPendingWork(store: Store): PendingWorkPort {
-  return {
-    hasPendingWork: async () =>
-      store.read((db) =>
-        db
-          .prepare(
-            "SELECT 1 FROM notification_deliveries WHERE project_id=? AND state IN ('pending','claimed') LIMIT 1",
-          )
-          .get(store.project.id),
-      ) !== undefined,
-  };
-}
 
 /** Sleeps, but gives the time back the moment the watcher is asked to stop. */
 function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
@@ -381,7 +360,12 @@ export class Marionette {
     return this.#board.createThread({ ...input, author: this.#author() });
   }
   post(input: Omit<Parameters<Board['post']>[0], 'author'>) {
-    return this.#board.post({ ...input, author: this.#author() });
+    const post = this.#board.post({ ...input, author: this.#author() });
+    pokeWatcherInBackground({
+      stateDirectory: this.#store.project.stateDirectory,
+      projectId: this.#store.project.id,
+    });
+    return post;
   }
   threads(input: Parameters<Board['listThreads']>[0] = {}) {
     this.#authenticate();
@@ -399,13 +383,23 @@ export class Marionette {
     return this.#board.inbox({ ...input, recipient: this.#recipient() });
   }
   subscribe(input: Omit<Parameters<Board['subscribe']>[0], 'subscriber'> = {}) {
-    return this.#board.subscribe({ ...input, subscriber: this.#recipient() });
+    const subscription = this.#board.subscribe({ ...input, subscriber: this.#recipient() });
+    pokeWatcherInBackground({
+      stateDirectory: this.#store.project.stateDirectory,
+      projectId: this.#store.project.id,
+    });
+    return subscription;
   }
   unsubscribe(input: { threadId?: string } = {}) {
     return this.#board.unsubscribe({ ...input, subscriber: this.#recipient() });
   }
   markRead(input: Omit<Parameters<Board['markRead']>[0], 'reader'>) {
-    return this.#board.markRead({ ...input, reader: this.#recipient() });
+    const result = this.#board.markRead({ ...input, reader: this.#recipient() });
+    pokeWatcherInBackground({
+      stateDirectory: this.#store.project.stateDirectory,
+      projectId: this.#store.project.id,
+    });
+    return result;
   }
   query(input: SqlRead) {
     this.#authenticate();
@@ -489,7 +483,7 @@ export class Marionette {
       processIdentity: await currentProcessIdentity(),
     });
     const generation = watcher.generation;
-    const pendingWork = options.pendingWork ?? deliveryPendingWork(this.#store);
+    const pendingWork = options.pendingWork ?? watcher;
     const idleTimeoutMs = options.idleTimeoutMs ?? 30_000;
     const fallbackIntervalMs = options.fallbackIntervalMs ?? DEFAULT_FALLBACK_INTERVAL_MS;
     const reconcileIntervalMs = options.reconcileIntervalMs ?? DEFAULT_RECONCILE_INTERVAL_MS;

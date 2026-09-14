@@ -438,7 +438,7 @@ export function executeEffect(client: Marionette, raw: unknown) {
       case 'board.create':
         return yield* invoke(() => client.createThread(input));
       case 'board.post':
-        return yield* invoke(() => client.post(input));
+        return yield* client.postEffect(payload(input));
       case 'board.list':
         return yield* invoke(() => client.threads(input));
       case 'board.read':
@@ -448,11 +448,11 @@ export function executeEffect(client: Marionette, raw: unknown) {
       case 'board.inbox':
         return yield* invoke(() => client.inbox(input));
       case 'board.subscribe':
-        return yield* invoke(() => client.subscribe(input));
+        return yield* client.subscribeEffect(payload(input));
       case 'board.unsubscribe':
         return yield* invoke(() => client.unsubscribe(input));
       case 'board.mark-read':
-        return yield* invoke(() => client.markRead(input));
+        return yield* client.markReadEffect(payload(input));
       case 'sql.read':
         return yield* client.queryEffect(input);
       case 'profile.list':

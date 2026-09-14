@@ -65,7 +65,7 @@ function observer(t: TestContext, context: ReturnType<Marionette['context']>) {
 function deliveryState(store: Store, projectId: string): string | undefined {
   const row = store.read((db) =>
     db
-      .prepare('SELECT state FROM notification_deliveries WHERE project_id=? LIMIT 1')
+      .prepare('SELECT state FROM board_subscription_wakes WHERE project_id=? LIMIT 1')
       .get(projectId),
   );
   return row === undefined ? undefined : z.object({ state: z.string() }).parse(row).state;
@@ -180,8 +180,9 @@ test('a post whose poke is never sent still reaches the watcher on its fallback 
     5_000,
   );
   // Commit without ever calling ensureWatcher: this is the lost-poke path.
-  fixture.client.post({
+  watched.board.post({
     threadId: thread.id,
+    author: { kind: 'user', id: 'external-poster' },
     body: 'No poke follows this',
     kind: 'question',
     idempotencyKey: 'p1',

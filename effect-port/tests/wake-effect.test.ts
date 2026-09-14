@@ -119,7 +119,9 @@ test('a poke sent after a committed change wakes a waiting listener', async (t) 
   assert.equal(bound.unavailable, null);
   const waiting = Effect.runPromise(bound.waitEffect({ timeoutMs: 5_000 }));
   assert.equal(
-    await Effect.runPromise(pokeWatcherEffect({ stateDirectory: directory, projectId: 'project-a' })),
+    await Effect.runPromise(
+      pokeWatcherEffect({ stateDirectory: directory, projectId: 'project-a' }),
+    ),
     true,
   );
   assert.equal(await waiting, 'poked');
@@ -347,7 +349,7 @@ function passCounter() {
 function deliveryState(store: Store, projectId: string): string | undefined {
   const row = store.read((db) =>
     db
-      .prepare('SELECT state FROM notification_deliveries WHERE project_id=? LIMIT 1')
+      .prepare('SELECT state FROM board_subscription_wakes WHERE project_id=? LIMIT 1')
       .get(projectId),
   );
   return row === undefined ? undefined : decode(Schema.Struct({ state: Schema.String }), row).state;
@@ -377,7 +379,10 @@ test('a committed post wakes the watcher over its socket well inside the fallbac
     fallbackIntervalMs,
     pendingWork: counter.port,
   });
-  const endpoint = wakeSocketPath(fixture.context.project.stateDirectory, fixture.context.project.id);
+  const endpoint = wakeSocketPath(
+    fixture.context.project.stateDirectory,
+    fixture.context.project.id,
+  );
   // Let the watcher finish a pass and go to sleep before anything is committed.
   await until(() => counter.passes() >= 1, 5_000);
   fixture.client.post({
@@ -419,8 +424,9 @@ test('a post whose poke is never sent still reaches the watcher on its fallback'
   // fallback interval doing its job rather than a pass that was already running.
   await until(() => counter.passes() >= 1, 5_000);
   // Commit without ever calling ensureWatcher: this is the lost-poke path.
-  fixture.client.post({
+  watched.board.post({
     threadId: thread.id,
+    author: { kind: 'user', id: 'external-poster' },
     body: 'No poke follows this',
     kind: 'question',
     idempotencyKey: 'p1',
@@ -545,7 +551,10 @@ test('an aborted watch releases its endpoint and settles its ownership', async (
   const watched = observer(t, fixture.context);
   const abort = new AbortController();
   const running = fixture.client.watch({ signal: abort.signal, fallbackIntervalMs: 60_000 });
-  const endpoint = wakeSocketPath(fixture.context.project.stateDirectory, fixture.context.project.id);
+  const endpoint = wakeSocketPath(
+    fixture.context.project.stateDirectory,
+    fixture.context.project.id,
+  );
   await until(() => existsSync(endpoint), 5_000);
   abort.abort();
   const stopped = await running;
@@ -573,7 +582,10 @@ test('a watcher that loses ownership fails closed instead of continuing to deliv
     idleTimeoutMs: 60_000,
     fallbackIntervalMs: 50,
   });
-  const endpoint = wakeSocketPath(fixture.context.project.stateDirectory, fixture.context.project.id);
+  const endpoint = wakeSocketPath(
+    fixture.context.project.stateDirectory,
+    fixture.context.project.id,
+  );
   await until(() => existsSync(endpoint), 5_000);
   watched.store.transaction((db) =>
     db
@@ -619,7 +631,11 @@ test('a worker may poke an existing watcher but may never own or spawn one', asy
   });
   t.after(() => worker.close());
   assert.equal(worker.context().session.role, 'worker');
-  const bound = await listener(t, fixture.context.project.stateDirectory, fixture.context.project.id);
+  const bound = await listener(
+    t,
+    fixture.context.project.stateDirectory,
+    fixture.context.project.id,
+  );
   assert.equal(bound.unavailable, null);
   await worker.ensureWatcher();
   assert.equal(bound.accepted, 1, 'the worker woke the existing watcher');
@@ -795,7 +811,11 @@ function countingRuntime(t: TestContext) {
 test('a running attempt costs one native observation per pass instead of two', async (t) => {
   const fixture = countingRuntime(t);
   const id = fixture.runtime.admit(fixture.input);
-  assert.equal(fixture.runtime.needsStartProgress(id), true, 'an admitted attempt is owed a launch');
+  assert.equal(
+    fixture.runtime.needsStartProgress(id),
+    true,
+    'an admitted attempt is owed a launch',
+  );
   await Effect.runPromise(fixture.runtime.startEffect(id));
   assert.equal(
     fixture.runtime.needsStartProgress(id),
@@ -805,7 +825,11 @@ test('a running attempt costs one native observation per pass instead of two', a
   // A process lost between the launch and its prompt leaves the attempt here,
   // and it must still be offered start progress on the next pass.
   fixture.phase(id, 'launched');
-  assert.equal(fixture.runtime.needsStartProgress(id), true, 'a launched attempt is owed its prompt');
+  assert.equal(
+    fixture.runtime.needsStartProgress(id),
+    true,
+    'a launched attempt is owed its prompt',
+  );
   fixture.phase(id, 'active');
 
   // The pass the watcher used to run, unconditionally.
@@ -816,7 +840,8 @@ test('a running attempt costs one native observation per pass instead of two', a
 
   // The pass it runs now.
   fixture.reset();
-  if (fixture.runtime.needsStartProgress(id)) await Effect.runPromise(fixture.runtime.startEffect(id));
+  if (fixture.runtime.needsStartProgress(id))
+    await Effect.runPromise(fixture.runtime.startEffect(id));
   await Effect.runPromise(fixture.runtime.reconcileEffect(id));
   const after = fixture.observations();
 
