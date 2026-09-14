@@ -42,6 +42,7 @@ test('native JSONL history is bounded, paginated, and read-only', (t) => {
   writeFileSync(path, '{"n":1}\n{"n":2}\n{"n":3}\n', { mode: 0o600 });
   const first = readNativeHistory(reference(path), 'host-1', { limit: 2, maxBytes: 1024 });
   assert.equal(first.kind, 'available');
+
   if (first.kind !== 'available') return;
   assert.deepEqual(
     first.entries.map((entry) => entry.value),
@@ -49,12 +50,15 @@ test('native JSONL history is bounded, paginated, and read-only', (t) => {
   );
   assert.equal(first.truncated, true);
   assert.ok(first.nextCursor);
+
   const second = readNativeHistory(reference(path), 'host-1', {
     cursor: first.nextCursor ?? 0,
     limit: 2,
     maxBytes: 1024,
   });
+
   assert.equal(second.kind, 'available');
+
   if (second.kind === 'available') {
     assert.deepEqual(
       second.entries.map((entry) => entry.value),

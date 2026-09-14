@@ -20,13 +20,16 @@ test('reopen retains native references and result artifact provenance', (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'marionette-native-persistence-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const databasePath = join(directory, 'state.sqlite');
+
   const project = {
     id: Schema.decodeUnknownSync(ProjectIdSchema)('native_persistence'),
     hostId: Schema.decodeUnknownSync(HostIdSchema)('host_persistence'),
     repositoryRoot: join(directory, 'repo'),
     stateDirectory: join(directory, 'state'),
   };
+
   let store = Store.open({ databasePath, project });
+
   const controller = store.registerSession({
     id: Schema.decodeUnknownSync(AgentSessionIdSchema)('controller-persistence'),
     generation: 1,
@@ -40,6 +43,7 @@ test('reopen retains native references and result artifact provenance', (t) => {
     nativeServerGeneration: null,
     nativeLocator: null,
   });
+
   const workspaceId = Schema.decodeUnknownSync(WorkspaceIdSchema)('workspace-persistence');
   store.registerWorkspace({
     actor: controller,
@@ -52,6 +56,7 @@ test('reopen retains native references and result artifact provenance', (t) => {
     writes: [],
     idempotencyKey: 'workspace',
   });
+
   const worker = store.registerSession({
     id: Schema.decodeUnknownSync(AgentSessionIdSchema)('worker-persistence'),
     generation: 1,
@@ -65,6 +70,7 @@ test('reopen retains native references and result artifact provenance', (t) => {
     nativeServerGeneration: null,
     nativeLocator: null,
   });
+
   const job = store.createJob({
     actor: controller,
     stableKey: 'persistence-job',
@@ -87,6 +93,7 @@ test('reopen retains native references and result artifact provenance', (t) => {
     dependencies: [],
     idempotencyKey: 'job',
   });
+
   const attempt = store.admitAttempt({
     actor: controller,
     jobId: job.id,
@@ -97,6 +104,7 @@ test('reopen retains native references and result artifact provenance', (t) => {
     workflow: { kind: 'direct' },
     idempotencyKey: 'admit',
   }).attempt;
+
   store.claimAttemptLaunch({
     actor: controller,
     attemptId: attempt.id,
@@ -112,6 +120,7 @@ test('reopen retains native references and result artifact provenance', (t) => {
     nativeLocator: 'transport-only-locator',
     idempotencyKey: 'running',
   });
+
   const reference = store.recordNativeSessionReference({
     actor: controller,
     attemptId: attempt.id,
@@ -132,9 +141,11 @@ test('reopen retains native references and result artifact provenance', (t) => {
       identityRevision: 2,
     },
   });
+
   const files = new ArtifactFiles(project.stateDirectory);
   const artifact = files.put(Buffer.from('checkpoint bytes'), 'application/json');
   registerArtifact(store, files, artifact);
+
   const result = store.recordResult({
     actor: controller,
     attemptId: attempt.id,
@@ -151,9 +162,11 @@ test('reopen retains native references and result artifact provenance', (t) => {
     upstreamResultIds: [],
     idempotencyKey: 'result',
   });
+
   store.close();
 
   store = Store.open({ databasePath, project });
+
   try {
     assert.deepEqual(store.listNativeSessionReferences(attempt.id), [reference]);
     const retained = store.retainedWork(attempt.id);
