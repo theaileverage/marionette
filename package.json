@@ -39,7 +39,7 @@
     "esbuild": "0.28.2",
     "oxlint": "1.82.0",
     "typescript": "7.0.2",
-    "zod": "3.25.76"
+    "zod": "4.6.2"
   },
   "bin": {
     "marionette": "dist/v1/cli.js"
