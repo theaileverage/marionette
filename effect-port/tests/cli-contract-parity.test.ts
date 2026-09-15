@@ -25,7 +25,7 @@ function operation(name: string) {
   return description;
 }
 
-test('ports the complete baseline registry plus public result discovery', () => {
+test('ports the baseline registry plus result discovery and retained-work inspection', () => {
   const baselineNames = baselineOperationSchema.options.map<string>(
     (schema) => schema.shape.operation.value,
   );
@@ -34,13 +34,15 @@ test('ports the complete baseline registry plus public result discovery', () => 
 
   assert.notEqual(resultRecordIndex, -1);
 
-  const expectedNames = baselineNames.toSpliced(resultRecordIndex, 0, 'result.discover');
+  const withDiscovery = baselineNames.toSpliced(resultRecordIndex, 0, 'result.discover');
+  const inspectIndex = withDiscovery.indexOf('attempt.reconcile');
+  const expectedNames = withDiscovery.toSpliced(inspectIndex, 0, 'attempt.retained-work');
 
   assert.deepEqual(
     operationDescriptions().map((entry) => entry.operation),
     expectedNames,
   );
-  assert.equal(operationSchemas.length, baselineNames.length + 1);
+  assert.equal(operationSchemas.length, baselineNames.length + 2);
   assert.deepEqual(
     commands.map((command) => command.name),
     expectedNames,

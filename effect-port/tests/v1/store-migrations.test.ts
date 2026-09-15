@@ -18,6 +18,7 @@ import {
 } from '../../src/v1/database.js';
 import { ProjectIdSchema } from '../../src/v1/model.js';
 import { migrations } from '../../src/v1/migrations/index.js';
+import { nativeSessionReferencesSql } from '../../src/v1/migrations/007_native_session_references.js';
 
 const projectId = Schema.decodeUnknownSync(ProjectIdSchema)('project_migrations');
 
@@ -102,6 +103,7 @@ if (!isMainThread) {
           [4, '004_native_runtime'],
           [5, '005_artifact_media_type'],
           [6, '006_board_inbox'],
+          [7, '007_native_session_references'],
         ],
       );
       first.close();
@@ -311,6 +313,61 @@ if (!isMainThread) {
       }
     } finally {
       rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test('migration 007 preserves legacy nativeSession bytes without inventing provenance', () => {
+    const database = new DatabaseSync(':memory:', { enableForeignKeyConstraints: true });
+    try {
+      database.exec(`
+        CREATE TABLE projects(id TEXT PRIMARY KEY) STRICT;
+        CREATE TABLE hosts(id TEXT PRIMARY KEY) STRICT;
+        CREATE TABLE agent_sessions(id TEXT NOT NULL,generation INTEGER NOT NULL,PRIMARY KEY(id,generation)) STRICT;
+        CREATE TABLE attempts(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,session_id TEXT NOT NULL,session_generation INTEGER NOT NULL,host_id TEXT NOT NULL,native_kind TEXT,native_server_generation TEXT,FOREIGN KEY(project_id) REFERENCES projects(id),FOREIGN KEY(host_id) REFERENCES hosts(id),FOREIGN KEY(session_id,session_generation) REFERENCES agent_sessions(id,generation)) STRICT;
+        CREATE TABLE native_attempts(project_id TEXT NOT NULL,attempt_id TEXT NOT NULL,identity_json TEXT,updated_at TEXT NOT NULL) STRICT;
+      `);
+      database.prepare('INSERT INTO projects VALUES (?)').run('project');
+      database.prepare('INSERT INTO hosts VALUES (?)').run('host');
+      database.prepare('INSERT INTO agent_sessions VALUES (?,?)').run('session', 1);
+      database
+        .prepare('INSERT INTO attempts VALUES (?,?,?,?,?,?,?)')
+        .run('attempt', 'project', 'session', 1, 'host', 'agy', 'server');
+      database
+        .prepare('INSERT INTO native_attempts VALUES (?,?,?,?)')
+        .run(
+          'project',
+          'attempt',
+          JSON.stringify({
+            binding: { workspaceId: 'native-workspace' },
+            tabId: 'tab',
+            paneId: 'pane',
+            terminalId: 'terminal',
+            identityRevision: 3,
+            nativeSession: '/exact/legacy/bytes',
+          }),
+          '2026-09-13T00:00:00.000Z',
+        );
+      database.exec(nativeSessionReferencesSql);
+      assert.deepEqual(
+        Object.fromEntries(
+          Object.entries(
+            database
+              .prepare(
+                'SELECT harness,reference_kind,reference_value,source,status FROM native_session_reference_observations',
+              )
+              .get() ?? {},
+          ),
+        ),
+        {
+          harness: 'unknown',
+          reference_kind: 'legacy',
+          reference_value: '/exact/legacy/bytes',
+          source: 'legacy-nativeSession',
+          status: 'legacy-untyped',
+        },
+      );
+    } finally {
+      database.close();
     }
   });
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { build } from 'esbuild';
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { verifyBaseline } from './baseline.mjs';
 
@@ -20,8 +20,25 @@ for (const original of originalModules) {
   const path = relative(join(root, '..'), original);
   readFileSync(join(root, path));
 }
+const effectOwnedMigration = 'src/v1/migrations/007_native_session_references.ts';
+const migrationFiles = (directory, relativeTo) =>
+  files(directory)
+    .filter((file) => /^\d{3}_.+\.ts$/.test(basename(file)))
+    .map((file) => relative(relativeTo, file));
+const rootMigrations = migrationFiles(join(root, '..', 'src/v1/migrations'), join(root, '..'));
+const portMigrations = migrationFiles(join(root, 'src/v1/migrations'), root);
+assert.ok(portMigrations.includes(effectOwnedMigration), `Missing Effect-owned migration: ${effectOwnedMigration}`);
+assert.ok(
+  !rootMigrations.includes(effectOwnedMigration),
+  `Effect-owned migration must be reviewed before becoming a root mirror: ${effectOwnedMigration}`,
+);
+assert.deepEqual(
+  [...portMigrations].sort(),
+  [...rootMigrations, effectOwnedMigration].sort(),
+  'Port migrations must equal root migrations plus the documented Effect-owned migration.',
+);
 const preserved = [
-  ...files(join(root, 'src/v1/migrations')).map((file) => relative(root, file)),
+  ...rootMigrations,
   ...['herdr-sdk', 'herdr-protocol', 'herdr-streams', 'herdr-transport'].map(
     (file) => `src/${file}.ts`,
   ),
@@ -58,6 +75,7 @@ const report = {
   baseline,
   sourceModules: originalModules.length,
   byteIdentical: preserved,
+  effectOwnedMigration,
   bundledProductModules: Object.keys(built.metafile.inputs).length,
 };
 writeFileSync(join(root, 'evidence/boundaries.json'), JSON.stringify(report, null, 2) + '\n');

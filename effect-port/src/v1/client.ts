@@ -524,6 +524,21 @@ export class Marionette {
     return Effect.runPromise(this.inspectAttemptEffect(id));
   }
 
+  inspectRetainedWorkEffect = Effect.fn('Marionette.inspectRetainedWork')(function* (
+    this: Marionette,
+    id: AttemptId,
+    options: Omit<Parameters<Runtime['inspectRetainedWorkEffect']>[1], 'id'> = {},
+  ) {
+    yield* clientCall('authenticate', () => this.#authenticate());
+    return yield* this.#runtime.inspectRetainedWorkEffect(id, options);
+  });
+  inspectRetainedWork(
+    id: AttemptId,
+    options: Omit<Parameters<Runtime['inspectRetainedWork']>[1], 'id'> = {},
+  ) {
+    return Effect.runPromise(this.inspectRetainedWorkEffect(id, options));
+  }
+
   reconcileAttemptEffect = Effect.fn('Marionette.reconcileAttempt')(function* (
     this: Marionette,
     id: AttemptId,
