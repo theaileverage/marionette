@@ -82,6 +82,15 @@ function createJson<T>(path: string, value: T): void {
   }
 }
 
+function sameBinding(left: ProjectBinding, right: ProjectBinding): boolean {
+  return left.version === right.version &&
+    left.projectId === right.projectId &&
+    left.hostId === right.hostId &&
+    left.repositoryRoot === right.repositoryRoot &&
+    left.stateDirectory === right.stateDirectory &&
+    left.databasePath === right.databasePath;
+}
+
 export function stateRoot(env: NodeJS.ProcessEnv = process.env): string {
   return resolve(
     env.MARIONETTE_STATE_HOME ??
@@ -147,7 +156,7 @@ export function createBinding(options: {
 
     const binding = readJson(bindingPath, bindingSchema);
 
-    if (binding.projectId !== legacy.projectId || binding.hostId !== legacy.hostId)
+    if (!sameBinding(binding, legacy))
       throw new Error("Current and legacy project bindings disagree");
 
     return { binding, bindingPath, session: null };
@@ -249,11 +258,30 @@ export function writeSessionContext(options: {
 export function localSessionContext(resolved: ResolvedContext, readOnly = false): SessionContext {
   if (resolved.session) return resolved.session;
   const path = join(resolved.binding.stateDirectory, "local-user.json");
+  let existing: SessionContext | null = null;
 
   try {
-    return readJson(path, contextSchema);
+    existing = readJson(path, contextSchema);
   } catch (error) {
     if (!missing(error)) throw error;
+  }
+
+  if (existing) {
+    const currentPath = join(resolved.binding.repositoryRoot, ".marionette", "project.json");
+    const legacyPath = join(resolved.binding.repositoryRoot, ".marionette-v1", "project.json");
+
+    if (resolve(existing.bindingPath) === legacyPath && resolve(resolved.bindingPath) === currentPath) {
+      const legacy = readJson(legacyPath, bindingSchema);
+
+      if (!sameBinding(legacy, resolved.binding))
+        throw new Error("Current and legacy project bindings disagree");
+
+      // The local credential and session identity stay durable; only its verified
+      // legacy binding path is translated for the current unmanaged connection.
+      return { ...existing, bindingPath: resolved.bindingPath };
+    }
+
+    return existing;
   }
 
   if (readOnly) throw new Error("A local session must already exist before previewing retirement.");

@@ -7,11 +7,12 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { before, test } from 'node:test';
 import { DatabaseSync } from 'node:sqlite';
 import { build } from 'esbuild';
@@ -237,6 +238,36 @@ function retirementCount(databasePath: string): number {
     database.close();
   }
 }
+
+test('unmanaged CLI session survives legacy binding migration with its durable identity', () => {
+  const fixture = createProject();
+
+  try {
+    const legacyPath = join(fixture.repositoryRoot, '.marionette-v1', 'project.json');
+    mkdirSync(dirname(legacyPath));
+    renameSync(fixture.bindingPath, legacyPath);
+    const localPath = join(fixture.stateDirectory, 'local-user.json');
+    const original = JSON.parse(readFileSync(localPath, 'utf8'));
+    writeFileSync(localPath, JSON.stringify({ ...original, bindingPath: legacyPath }));
+
+    const migrated = parseCliJson(
+      runCli(['init', '--project', fixture.repositoryRoot, '--state-home', fixture.stateHome], fixture),
+      operationOutputSchemas.context,
+    );
+
+    assert.equal(migrated.bindingPath, fixture.bindingPath);
+    assert.equal(migrated.project.id, original.projectId);
+    assert.equal(migrated.session.id, original.sessionId);
+    assert.equal(migrated.session.generation, original.generation);
+
+    const connected = parseCliJson(runCli(['context'], fixture), operationOutputSchemas.context);
+    assert.equal(connected.bindingPath, fixture.bindingPath);
+    assert.equal(connected.session.id, original.sessionId);
+    assert.equal(JSON.parse(readFileSync(localPath, 'utf8')).token, original.token);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
 
 test('init installs the project skill and preserves local skill changes', () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'marionette-v1-cli-onboarding-')));

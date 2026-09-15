@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, s
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { createBinding, resolveContext, writeSessionContext } from '../../src/v1/context.js';
+import { createBinding, localSessionContext, resolveContext, writeSessionContext } from '../../src/v1/context.js';
 
 test('inherited context stays bound when cwd changes and rejects an explicit project switch', () => {
   const root = mkdtempSync(join(tmpdir(), 'marionette-v1-context-'));
@@ -99,6 +99,45 @@ test('init migrates a legacy binding without changing project identity or manage
     assert.equal(resolveContext({ cwd: repositoryRoot, env }).bindingPath, migrated.bindingPath);
     assert.equal(resolveContext({ cwd: repositoryRoot, env: { ...env, MARIONETTE_CONTEXT: context } }).bindingPath, legacyPath);
     assert.ok(existsSync(legacyPath));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('local binding migration rejects a different binding and an unrecognized credential path', () => {
+  const root = mkdtempSync(join(tmpdir(), 'marionette-v1-local-binding-'));
+
+  try {
+    const repositoryRoot = join(root, 'repo');
+    const stateRoot = join(root, 'state');
+    mkdirSync(repositoryRoot);
+    const current = createBinding({ repositoryRoot, stateRoot });
+    const legacyPath = join(dirname(dirname(current.bindingPath)), '.marionette-v1', 'project.json');
+    mkdirSync(dirname(legacyPath));
+    writeFileSync(legacyPath, readFileSync(current.bindingPath));
+    const localPath = join(current.binding.stateDirectory, 'local-user.json');
+
+    const credential = {
+      version: 1, bindingPath: legacyPath, projectId: current.binding.projectId,
+      hostId: current.binding.hostId, sessionId: 'user-local', generation: 1,
+      token: randomBytes(32).toString('hex'),
+    };
+
+    writeFileSync(localPath, JSON.stringify(credential));
+    assert.equal(localSessionContext(current).bindingPath, current.bindingPath);
+    assert.equal(localSessionContext(current).token, credential.token);
+
+    writeFileSync(legacyPath, JSON.stringify({ ...current.binding, databasePath: join(root, 'other.sqlite') }));
+    assert.throws(() => localSessionContext(current), /bindings disagree/);
+
+    rmSync(legacyPath);
+    assert.throws(() => localSessionContext(current), /ENOENT/);
+    assert.equal(JSON.parse(readFileSync(localPath, 'utf8')).token, credential.token);
+
+    const unexpectedPath = join(root, 'unexpected.json');
+    writeFileSync(unexpectedPath, readFileSync(current.bindingPath));
+    writeFileSync(localPath, JSON.stringify({ ...credential, bindingPath: unexpectedPath }));
+    assert.equal(localSessionContext(current).bindingPath, unexpectedPath);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
