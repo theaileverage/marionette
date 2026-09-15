@@ -1,8 +1,9 @@
-import { z } from 'zod';
+import { Schema } from 'effect';
 import { artifactSchema } from './artifacts.js';
 import { BoardPostKindSchema, BoardReferenceSchema } from './board.js';
 import {
   AgentSessionIdSchema,
+  ArtifactIdSchema,
   AttemptIdSchema,
   AttemptPhaseSchema,
   BriefContentSchema,
@@ -29,117 +30,140 @@ import {
   WorkspaceIdSchema,
 } from './model.js';
 import { NativeBindingSchema, NativeIdentitySchema } from './native.js';
-import { type Operation } from './operations.js';
+import { NativeSessionPointerSchema, NativeSessionReferenceSchema } from './native-session.js';
+import type { Operation } from './operations.js';
 import { profileSchema } from './settings.js';
 
-/** The stable public success-output contract for the v1 operation protocol. */
 export const outputContractVersion = 'v1' as const;
 
-/**
- * Output contracts intentionally allow additive fields. The operation protocol
- * commits the fields below, while a newer runtime may expose more detail.
- */
-const publicObject = <Fields extends Record<string, z.ZodTypeAny>>(fields: Fields) =>
-  z.object(fields).passthrough();
+const string = Schema.String;
+
+const key = string.check(Schema.isMinLength(1));
+
+const integer = Schema.Finite.check(
+  Schema.makeFilter(Number.isInteger, {
+    expected: 'an integer',
+    representation: { id: 'effect/schema/isInt', payload: null },
+  }),
+);
+
+const positiveInteger = integer.check(Schema.isGreaterThanOrEqualTo(1));
+
+const natural = integer.check(Schema.isGreaterThanOrEqualTo(0));
+
+const finite = Schema.Number.check(Schema.isFinite());
+
+const array = <S extends Schema.Constraint>(schema: S) => Schema.Array(schema);
+
+const publicObject = <Fields extends Schema.Struct.Fields>(fields: Fields) =>
+  Schema.Struct(fields).annotate({ parseOptions: { onExcessProperty: 'preserve' } });
 
 const boardAuthorSchema = publicObject({
-  kind: z.enum(['session', 'system', 'user']),
-  id: z.string().min(1),
-  generation: SessionGenerationSchema.optional(),
+  kind: Schema.Literals(['session', 'system', 'user']),
+  id: key,
+  generation: Schema.optional(SessionGenerationSchema),
 });
+
 const boardRecipientSchema = publicObject({
-  kind: z.enum(['desktop', 'session', 'user']),
-  id: z.string().min(1),
-  generation: SessionGenerationSchema.optional(),
+  kind: Schema.Literals(['desktop', 'session', 'user']),
+  id: key,
+  generation: Schema.optional(SessionGenerationSchema),
 });
+
 const boardThreadSchema = publicObject({
-  id: z.string().min(1),
-  title: z.string().min(1),
-  jobId: JobIdSchema.nullable(),
+  id: key,
+  title: key,
+  jobId: Schema.NullOr(JobIdSchema),
   author: boardAuthorSchema,
   createdAt: TimestampSchema,
 });
+
 const boardPostSchema = publicObject({
-  id: z.string().min(1),
-  threadId: z.string().min(1),
-  sequence: z.number().int().positive(),
-  body: z.string().min(1),
+  id: key,
+  threadId: key,
+  sequence: positiveInteger,
+  body: key,
   kind: BoardPostKindSchema,
   author: boardAuthorSchema,
-  replyToPostId: z.string().min(1).nullable(),
-  replacesPostId: z.string().min(1).nullable(),
-  references: z.array(BoardReferenceSchema),
+  replyToPostId: Schema.NullOr(key),
+  replacesPostId: Schema.NullOr(key),
+  references: array(BoardReferenceSchema),
   createdAt: TimestampSchema,
 });
-const page = <Item extends z.ZodTypeAny>(item: Item) =>
-  publicObject({ entries: z.array(item), nextCursor: z.string().min(1).nullable() });
+
+const page = <S extends Schema.Constraint>(item: S) =>
+  publicObject({ entries: array(item), nextCursor: Schema.NullOr(key) });
 
 const workspaceSchema = publicObject({
   id: WorkspaceIdSchema,
-  projectId: ProjectBindingSchema.shape.id,
+  projectId: ProjectBindingSchema.fields.id,
   hostId: HostIdSchema,
-  kind: z.enum(['isolated', 'existing']),
-  path: z.string().min(1),
-  repositoryRoot: z.string().min(1),
-  baseCommit: z.string().nullable(),
-  access: z.enum(['inspect', 'write']),
-  writes: z.array(z.string()),
+  kind: Schema.Literals(['isolated', 'existing']),
+  path: key,
+  repositoryRoot: key,
+  baseCommit: Schema.NullOr(string),
+  access: Schema.Literals(['inspect', 'write']),
+  writes: array(string),
   createdAt: TimestampSchema,
-  retiredAt: TimestampSchema.nullable(),
+  retiredAt: Schema.NullOr(TimestampSchema),
 });
+
 const sessionSchema = publicObject({
   id: AgentSessionIdSchema,
   generation: SessionGenerationSchema,
-  projectId: ProjectBindingSchema.shape.id,
+  projectId: ProjectBindingSchema.fields.id,
   hostId: HostIdSchema,
-  workspaceId: WorkspaceIdSchema.nullable(),
-  role: z.enum(['user', 'controller', 'worker']),
-  executionRole: z.string().min(1),
-  parentWorkflowId: WorkflowIdSchema.nullable(),
-  attemptId: AttemptIdSchema.nullable(),
-  state: z.enum(['active', 'settled', 'unconfirmed']),
-  nativeKind: z.string().nullable(),
-  nativeServerGeneration: z.string().nullable(),
-  nativeLocator: z.string().nullable(),
+  workspaceId: Schema.NullOr(WorkspaceIdSchema),
+  role: Schema.Literals(['user', 'controller', 'worker']),
+  executionRole: key,
+  parentWorkflowId: Schema.NullOr(WorkflowIdSchema),
+  attemptId: Schema.NullOr(AttemptIdSchema),
+  state: Schema.Literals(['active', 'settled', 'unconfirmed']),
+  nativeKind: Schema.NullOr(string),
+  nativeServerGeneration: Schema.NullOr(string),
+  nativeLocator: Schema.NullOr(string),
   createdAt: TimestampSchema,
-  settledAt: TimestampSchema.nullable(),
+  settledAt: Schema.NullOr(TimestampSchema),
 });
+
 const jobSchema = publicObject({
   id: JobIdSchema,
-  key: z.string().min(1),
+  key,
   requestId: JobRequestIdSchema,
   currentBriefId: BriefIdSchema,
   currentBriefRevision: RevisionSchema,
   workspaceId: WorkspaceIdSchema,
   delivery: DeliveryKindSchema,
-  origin: z.discriminatedUnion('kind', [
-    publicObject({ kind: z.literal('direct') }),
+  origin: Schema.Union([
+    publicObject({ kind: Schema.Literal('direct') }),
     publicObject({
-      kind: z.literal('workflow'),
+      kind: Schema.Literal('workflow'),
       workflowId: WorkflowIdSchema,
       stepRunId: StepRunIdSchema,
     }),
   ]),
-  state: z.enum(['open', 'finished', 'cancelled']),
+  state: Schema.Literals(['open', 'finished', 'cancelled']),
   createdAt: TimestampSchema,
 });
+
 const briefSchema = publicObject({
   id: BriefIdSchema,
   jobId: JobIdSchema,
   revision: RevisionSchema,
-  priorBriefId: BriefIdSchema.nullable(),
+  priorBriefId: Schema.NullOr(BriefIdSchema),
   content: BriefContentSchema,
-  changeReason: z.string().min(1),
+  changeReason: key,
   createdAt: TimestampSchema,
 });
+
 const workflowSchema = publicObject({
   id: WorkflowIdSchema,
   package: WorkflowPackageSnapshotSchema,
-  parentWorkflowId: WorkflowIdSchema.nullable(),
+  parentWorkflowId: Schema.NullOr(WorkflowIdSchema),
   rootJobId: JobIdSchema,
   currentStepRunId: StepRunIdSchema,
   phase: WorkflowPhaseSchema,
-  outcome: z.enum(['succeeded', 'failed']).nullable(),
+  outcome: Schema.NullOr(Schema.Literals(['succeeded', 'failed'])),
   boundary: ExecutionBoundarySchema,
   revision: RevisionSchema,
   briefRevision: RevisionSchema,
@@ -148,11 +172,12 @@ const workflowSchema = publicObject({
   deadlineAt: TimestampSchema,
   createdAt: TimestampSchema,
 });
+
 const attemptSchema = publicObject({
   id: AttemptIdSchema,
   jobId: JobIdSchema,
-  workflowId: WorkflowIdSchema.nullable(),
-  stepRunId: StepRunIdSchema.nullable(),
+  workflowId: Schema.NullOr(WorkflowIdSchema),
+  stepRunId: Schema.NullOr(StepRunIdSchema),
   briefId: BriefIdSchema,
   briefRevision: RevisionSchema,
   hostId: HostIdSchema,
@@ -160,12 +185,13 @@ const attemptSchema = publicObject({
   sessionId: AgentSessionIdSchema,
   sessionGeneration: SessionGenerationSchema,
   phase: AttemptPhaseSchema,
-  nativeKind: z.string().nullable(),
-  nativeServerGeneration: z.string().nullable(),
-  nativeLocator: z.string().nullable(),
+  nativeKind: Schema.NullOr(string),
+  nativeServerGeneration: Schema.NullOr(string),
+  nativeLocator: Schema.NullOr(string),
   createdAt: TimestampSchema,
-  settledAt: TimestampSchema.nullable(),
+  settledAt: Schema.NullOr(TimestampSchema),
 });
+
 const resultSchema = publicObject({
   id: ResultIdSchema,
   jobId: JobIdSchema,
@@ -177,17 +203,18 @@ const resultSchema = publicObject({
   inputDigest: DigestSchema,
   workspaceDigest: DigestSchema,
   content: ResultContentSchema,
-  evidenceClaims: z.array(z.string()),
-  evidence: z.array(EvidenceSchema),
+  evidenceClaims: Schema.mutable(Schema.Array(string)),
+  evidence: Schema.mutable(Schema.Array(EvidenceSchema)),
   verification: VerificationSchema,
   createdAt: TimestampSchema,
 });
+
 const handoffSchema = publicObject({
-  id: z.string().min(1),
+  id: key,
   result_id: ResultIdSchema,
   target_workspace_id: WorkspaceIdSchema,
-  expected_target_state_json: z.string(),
-  state: z.enum([
+  expected_target_state_json: string,
+  state: Schema.Literals([
     'pending',
     'integrating',
     'integrated',
@@ -196,80 +223,136 @@ const handoffSchema = publicObject({
     'retained',
     'abandoned',
   ]),
-  claim_revision: z.number().int().nonnegative(),
-  claimed_attempt_id: AttemptIdSchema.nullable(),
-  current_claim_id: z.string().nullable(),
-  actual_target_state_json: z.string().nullable(),
-  checks_json: z.string().nullable(),
-  reason: z.string().nullable(),
+  claim_revision: natural,
+  claimed_attempt_id: Schema.NullOr(AttemptIdSchema),
+  current_claim_id: Schema.NullOr(string),
+  actual_target_state_json: Schema.NullOr(string),
+  checks_json: Schema.NullOr(string),
+  reason: Schema.NullOr(string),
 });
-const nativeObservationSchema = z.discriminatedUnion('kind', [
-  publicObject({ kind: z.literal('working'), identity: NativeIdentitySchema }),
+
+const nativeObservationSchema = Schema.Union([
+  publicObject({ kind: Schema.Literal('working'), identity: NativeIdentitySchema }),
+  publicObject({ kind: Schema.Literal('blocked'), identity: NativeIdentitySchema, reason: key }),
   publicObject({
-    kind: z.literal('blocked'),
+    kind: Schema.Literal('manual-required'),
     identity: NativeIdentitySchema,
-    reason: z.string().min(1),
+    reason: key,
   }),
   publicObject({
-    kind: z.literal('manual-required'),
+    kind: Schema.Literal('settled'),
     identity: NativeIdentitySchema,
-    reason: z.string().min(1),
+    slotReady: Schema.Literal(true),
   }),
   publicObject({
-    kind: z.literal('settled'),
-    identity: NativeIdentitySchema,
-    slotReady: z.literal(true),
+    kind: Schema.Literal('unconfirmed'),
+    reason: key,
+    candidate: Schema.optional(
+      publicObject({ reference: NativeSessionPointerSchema, identityRevision: natural }),
+    ),
   }),
-  publicObject({ kind: z.literal('unconfirmed'), reason: z.string().min(1) }),
-  publicObject({ kind: z.literal('unsupported'), reason: z.string().min(1) }),
-  publicObject({ kind: z.literal('submitted'), operationId: z.string().min(1) }),
+  publicObject({ kind: Schema.Literal('unsupported'), reason: key }),
+  publicObject({ kind: Schema.Literal('submitted'), operationId: key }),
 ]);
+
 const attemptNativeSchema = publicObject({
   attempt: attemptSchema,
   native: nativeObservationSchema,
+});
+
+const nativeHistorySchema = Schema.Union([
+  publicObject({ kind: Schema.Literal('missing-reference'), reason: key }),
+  publicObject({ kind: Schema.Literal('identity-unconfirmed'), reason: key }),
+  publicObject({ kind: Schema.Literal('unsupported'), harness: key, referenceKind: key, reason: key }),
+  publicObject({ kind: Schema.Literal('session-missing'), reason: key }),
+  publicObject({ kind: Schema.Literal('unsafe-path'), reason: key }),
+  publicObject({ kind: Schema.Literal('malformed-history'), reason: key, offset: natural }),
+  publicObject({
+    kind: Schema.Literal('available'),
+    harness: key,
+    referenceId: key,
+    cursor: natural,
+    nextCursor: Schema.NullOr(natural),
+    truncated: Schema.Boolean,
+    bytesRead: natural,
+    entries: array(publicObject({ offset: natural, value: Schema.Unknown })),
+  }),
+]);
+
+const retainedWorkSchema = publicObject({
+  attempt: attemptSchema,
+  references: array(NativeSessionReferenceSchema),
+  history: nativeHistorySchema,
+  retained: publicObject({
+    jobId: JobIdSchema,
+    attempts: array(attemptSchema),
+    results: array(resultSchema),
+    artifacts: array(
+      publicObject({
+        id: ArtifactIdSchema,
+        resultId: ResultIdSchema,
+        attemptId: AttemptIdSchema,
+        digest: DigestSchema,
+        byteLength: natural,
+        mediaType: key,
+        path: key,
+        ordinal: natural,
+      }),
+    ),
+  }),
 });
 
 const retirementTargetSchema = publicObject({
   session: publicObject({ id: AgentSessionIdSchema, generation: SessionGenerationSchema }),
   identity: NativeIdentitySchema,
 });
+
 export const retirementPreviewOutputSchema = publicObject({
-  kind: z.enum(['ready', 'blocked', 'unconfirmed']),
+  kind: Schema.Literals(['ready', 'blocked', 'unconfirmed']),
   workspaceId: WorkspaceIdSchema,
-  reason: z.string().optional(),
-  nativeTargets: z.array(retirementTargetSchema),
-  effects: z
-    .discriminatedUnion('kind', [
-      publicObject({ kind: z.literal('cleanup-native-tab'), ...retirementTargetSchema.shape }),
-      publicObject({ kind: z.literal('remove-worktree'), path: z.string() }),
-      publicObject({ kind: z.literal('mark-workspace-retired'), workspaceId: WorkspaceIdSchema }),
-    ])
-    .array(),
-  skippedChecks: publicObject({
-    kind: z.enum([
-      'native-observation',
-      'native-cleanup',
-      'post-native-cleanup-state',
-      'post-worktree-removal',
+  reason: Schema.optional(string),
+  nativeTargets: array(retirementTargetSchema),
+  effects: array(
+    Schema.Union([
+      publicObject({
+        kind: Schema.Literal('cleanup-native-tab'),
+        session: retirementTargetSchema.fields.session,
+        identity: NativeIdentitySchema,
+      }),
+      publicObject({ kind: Schema.Literal('remove-worktree'), path: string }),
+      publicObject({
+        kind: Schema.Literal('mark-workspace-retired'),
+        workspaceId: WorkspaceIdSchema,
+      }),
     ]),
-    reason: z.string(),
-  }).array(),
+  ),
+  skippedChecks: array(
+    publicObject({
+      kind: Schema.Literals([
+        'native-observation',
+        'native-cleanup',
+        'post-native-cleanup-state',
+        'post-worktree-removal',
+      ]),
+      reason: string,
+    }),
+  ),
 });
 
 type OperationName = Operation['operation'];
-type OperationOutputSchemaMap = { [Name in OperationName]: z.ZodTypeAny };
 
-/** One schema per operation. All schemas cover a successful raw `execute` value. */
+type OperationOutputSchemaMap = { readonly [Name in OperationName]: Schema.Constraint };
+
 export const operationOutputSchemas = {
   context: publicObject({
     project: ProjectBindingSchema,
-    bindingPath: z.string().min(1),
+    bindingPath: key,
     session: sessionSchema,
     authentication: publicObject({
-      source: z.enum(['managed-context-file', 'local-session-file']),
-      projectId: ProjectBindingSchema.shape.id,
-      role: sessionSchema.shape.role,
-      workspaceId: WorkspaceIdSchema.nullable(),
+      source: Schema.Literals(['managed-context-file', 'local-session-file']),
+      projectId: ProjectBindingSchema.fields.id,
+      role: sessionSchema.fields.role,
+      workspaceId: Schema.NullOr(WorkspaceIdSchema),
     }),
   }),
   'handoff.get': handoffSchema,
@@ -280,72 +363,73 @@ export const operationOutputSchemas = {
   'handoff.resolve': handoffSchema,
   'handoff.replan': handoffSchema,
   'workspace.register': workspaceSchema,
-  'workspace.retire': z.discriminatedUnion('kind', [
+  'workspace.retire': Schema.Union([
     publicObject({
-      kind: z.literal('completed'),
-      retirementId: z.string().min(1),
+      kind: Schema.Literal('completed'),
+      retirementId: key,
       workspaceId: WorkspaceIdSchema,
       revision: RevisionSchema,
     }),
     publicObject({
-      kind: z.literal('blocked'),
-      retirementId: z.string().min(1),
+      kind: Schema.Literal('blocked'),
+      retirementId: key,
       workspaceId: WorkspaceIdSchema,
       revision: RevisionSchema,
-      reason: z.string().min(1),
+      reason: key,
     }),
     publicObject({
-      kind: z.literal('unconfirmed'),
-      retirementId: z.string().min(1),
+      kind: Schema.Literal('unconfirmed'),
+      retirementId: key,
       workspaceId: WorkspaceIdSchema,
       revision: RevisionSchema,
-      reason: z.string().min(1),
+      reason: key,
     }),
   ]),
   'workspace.get': workspaceSchema,
-  'input.snapshot': publicObject({
-    id: z.string().min(1),
-    name: z.string().min(1),
-    ...artifactSchema.shape,
-  }),
+  'input.snapshot': publicObject({ id: key, name: key, ...artifactSchema.fields }),
   'job.create': jobSchema,
-  'job.list': z.array(jobSchema),
+  'job.list': array(jobSchema),
   'job.get': jobSchema,
   'job.brief': briefSchema,
   'workflow.create': workflowSchema,
-  'workflow.list': z.array(workflowSchema),
+  'workflow.list': array(workflowSchema),
   'workflow.get': workflowSchema,
-  route: z.discriminatedUnion('kind', [
+  route: Schema.Union([
     publicObject({
-      kind: z.literal('direct'),
-      method: z.literal('direct'),
-      precedence: z.literal('pstack'),
-      packageName: z.string().min(1),
-      reason: z.string().min(1),
+      kind: Schema.Literal('direct'),
+      method: Schema.Literal('direct'),
+      precedence: Schema.Literal('pstack'),
+      packageName: key,
+      reason: key,
     }),
     publicObject({
-      kind: z.literal('workflow'),
-      method: z.literal('pstack'),
-      precedence: z.literal('pstack'),
-      packageName: z.string().min(1),
-      reason: z.string().min(1),
+      kind: Schema.Literal('workflow'),
+      method: Schema.Literal('pstack'),
+      precedence: Schema.Literal('pstack'),
+      packageName: key,
+      reason: key,
     }),
   ]),
   'attempt.get': attemptSchema,
   'attempt.admit': AttemptIdSchema,
   'attempt.start': attemptNativeSchema,
   'attempt.inspect': attemptNativeSchema,
+  'attempt.retained-work': retainedWorkSchema,
   'attempt.reconcile': attemptNativeSchema,
   'brief.acknowledge': briefSchema,
   'result.get': resultSchema,
-  'result.record': publicObject({ ...resultSchema.shape, replayed: z.boolean() }),
+  'result.discover': Schema.Union([
+    publicObject({ kind: Schema.Literal('found'), result: resultSchema }),
+    publicObject({ kind: Schema.Literal('pending') }),
+  ]),
+  'result.record': publicObject({ ...resultSchema.fields, replayed: Schema.Boolean }),
   'result.decide': publicObject({
-    id: z.string().min(1),
+    id: key,
     resultId: ResultIdSchema,
     briefId: BriefIdSchema,
-    decision: z.enum(['accepted', 'rejected']),
+    decision: Schema.Literals(['accepted', 'rejected']),
     createdAt: TimestampSchema,
-    replayed: z.boolean(),
+    replayed: Schema.Boolean,
   }),
   'board.create': boardThreadSchema,
   'board.post': boardPostSchema,
@@ -354,42 +438,33 @@ export const operationOutputSchemas = {
   'board.search': page(boardPostSchema),
   'board.inbox': page(boardPostSchema),
   'board.subscribe': publicObject({
-    id: z.string().min(1),
+    id: key,
     subscriber: boardRecipientSchema,
-    threadId: z.string().min(1).nullable(),
-    eventKinds: z.array(BoardPostKindSchema),
+    threadId: Schema.NullOr(key),
+    eventKinds: array(BoardPostKindSchema),
     createdAt: TimestampSchema,
   }),
-  'board.unsubscribe': z.boolean(),
-  'board.mark-read': z.boolean(),
+  'board.unsubscribe': Schema.Boolean,
+  'board.mark-read': Schema.Boolean,
   'sql.read': publicObject({
-    rows: z.array(z.record(z.union([z.string(), z.number().finite(), z.boolean(), z.null()]))),
-    truncated: z.boolean(),
-    bytes: z.number().int().nonnegative(),
+    rows: array(Schema.Record(string, Schema.Union([string, finite, Schema.Boolean, Schema.Null]))),
+    truncated: Schema.Boolean,
+    bytes: natural,
   }),
   'sql.contribute': boardPostSchema,
-  'profile.list': z.array(profileSchema),
-  'profile.configure': publicObject({
-    revision: z.number().int().positive(),
-    value: profileSchema,
-  }),
-  'native.register': publicObject({
-    revision: z.number().int().positive(),
-    value: NativeBindingSchema,
-  }),
+  'profile.list': array(profileSchema),
+  'profile.configure': publicObject({ revision: positiveInteger, value: profileSchema }),
+  'native.register': publicObject({ revision: positiveInteger, value: NativeBindingSchema }),
 } satisfies OperationOutputSchemaMap;
 
-export type OperationOutput<Name extends OperationName> = z.infer<
-  (typeof operationOutputSchemas)[Name]
->;
+export type OperationOutput<Name extends OperationName> =
+  (typeof operationOutputSchemas)[Name]['Type'];
 
-type JsonValue =
-  null | boolean | number | string | readonly JsonValue[] | { [key: string]: JsonValue };
-
-export function parseOperationOutput<Name extends OperationName>(
+export function parseOperationOutput<Name extends OperationName, Output>(
   operation: Name,
-  output: JsonValue,
+  output: Output,
 ): OperationOutput<Name> {
-  // SAFETY: `satisfies OperationOutputSchemaMap` ensures this index always selects a schema.
-  return operationOutputSchemas[operation].parse(output) as OperationOutput<Name>;
+  return Schema.decodeUnknownSync(operationOutputSchemas[operation], {
+    onExcessProperty: 'preserve',
+  })(output);
 }

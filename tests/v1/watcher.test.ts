@@ -8,25 +8,31 @@ import { Board } from '../../src/v1/board.js';
 import { ProjectBindingSchema } from '../../src/v1/model.js';
 import { Store } from '../../src/v1/store.js';
 import { Watcher, type DeliveryPort } from '../../src/v1/watcher.js';
+import { Schema } from 'effect';
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'marionette-v1-watcher-'));
+
   const store = Store.open({
     databasePath: join(root, 'project.sqlite'),
-    project: ProjectBindingSchema.parse({
+    project: Schema.decodeUnknownSync(ProjectBindingSchema)({
       id: 'project-a',
       hostId: 'host-a',
       repositoryRoot: root,
       stateDirectory: root,
     }),
   });
+
   const board = Board.create({ store });
+
   const thread = board.createThread({
     title: 'Notifications',
     author: { kind: 'system', id: 'controller' },
     idempotencyKey: 'notifications-thread',
   });
+
   board.subscribe({ subscriber: { kind: 'desktop', id: 'lead' }, threadId: thread.id });
+
   const post = board.post({
     threadId: thread.id,
     author: { kind: 'system', id: 'controller' },
@@ -34,17 +40,21 @@ function fixture() {
     kind: 'question',
     idempotencyKey: 'post',
   });
+
   const delivery = store.read((db) =>
     db
       .prepare('SELECT subscription_id AS id FROM board_subscription_wakes WHERE project_id=?')
       .get('project-a'),
   );
+
   const deliveryId = z.object({ id: z.string().uuid() }).parse(delivery).id;
+
   return { root, store, board, thread, post, deliveryId };
 }
 
 function port(): DeliveryPort & { readonly messages: string[] } {
   const messages: string[] = [];
+
   return {
     messages,
     async checkReady() {
@@ -52,6 +62,7 @@ function port(): DeliveryPort & { readonly messages: string[] } {
     },
     async deliver(input) {
       messages.push(input.message);
+
       return { kind: 'submitted' };
     },
   };
@@ -60,6 +71,7 @@ function port(): DeliveryPort & { readonly messages: string[] } {
 test('watcher checks readiness then records a submitted durable wake', async () => {
   const f = fixture();
   const deliveryPort = port();
+
   try {
     const watcher = await Watcher.start({
       store: f.store,
@@ -71,6 +83,7 @@ test('watcher checks readiness then records a submitted durable wake', async () 
       },
       processIdentity: 'watcher-one',
     });
+
     try {
       assert.equal(await watcher.pollOnce(), 1);
       assert.equal(deliveryPort.messages.length, 1);
@@ -94,6 +107,7 @@ test('watcher checks readiness then records a submitted durable wake', async () 
 
 test('watcher takeover needs proven former absence and never replays an uncertain claimed delivery', async () => {
   const f = fixture();
+
   try {
     f.store.transaction((db) => {
       db.prepare(
@@ -121,6 +135,7 @@ test('watcher takeover needs proven former absence and never replays an uncertai
       }),
       /confirmed former process absence/,
     );
+
     const watcher = await Watcher.start({
       store: f.store,
       deliveryPort: port(),
@@ -131,6 +146,7 @@ test('watcher takeover needs proven former absence and never replays an uncertai
       },
       processIdentity: 'replacement',
     });
+
     try {
       assert.equal(
         f.store.read(
@@ -153,6 +169,7 @@ test('watcher takeover needs proven former absence and never replays an uncertai
 
 test('watcher records an unconfirmed outcome when delivery throws after a durable claim', async () => {
   const f = fixture();
+
   try {
     const watcher = await Watcher.start({
       store: f.store,
@@ -171,6 +188,7 @@ test('watcher records an unconfirmed outcome when delivery throws after a durabl
       },
       processIdentity: 'failing-watcher',
     });
+
     try {
       assert.equal(await watcher.pollOnce(), 0);
       assert.equal(
@@ -195,6 +213,7 @@ test('watcher records an unconfirmed outcome when delivery throws after a durabl
 test('a post arriving during an uncertain delivery stays fenced and is not replayed', async () => {
   const f = fixture();
   let deliveries = 0;
+
   try {
     const watcher = await Watcher.start({
       store: f.store,
@@ -226,6 +245,7 @@ test('a post arriving during an uncertain delivery stays fenced and is not repla
       },
       processIdentity: 'racing-watcher',
     });
+
     try {
       assert.equal(await watcher.pollOnce(), 0);
       assert.equal(await watcher.pollOnce(), 0);
@@ -249,6 +269,7 @@ test('a post arriving during an uncertain delivery stays fenced and is not repla
 
 test('a readiness failure is isolated as unconfirmed and does not strand the watcher', async () => {
   const f = fixture();
+
   try {
     const watcher = await Watcher.start({
       store: f.store,
@@ -267,14 +288,17 @@ test('a readiness failure is isolated as unconfirmed and does not strand the wat
       },
       processIdentity: 'readiness-failure-watcher',
     });
+
     try {
       assert.equal(await watcher.pollOnce(), 0);
       assert.equal(await watcher.pollOnce(), 0);
+
       const wake = f.store.read((db) =>
         db
           .prepare('SELECT state,last_error FROM board_subscription_wakes WHERE subscription_id=?')
           .get(f.deliveryId),
       );
+
       assert.equal(wake?.state, 'unconfirmed');
       assert.match(String(wake?.last_error), /readiness check failed: identity probe failed/);
     } finally {
@@ -288,22 +312,26 @@ test('a readiness failure is isolated as unconfirmed and does not strand the wat
 
 test('a busy recipient backs off without starving an idle recipient', async () => {
   const root = mkdtempSync(join(tmpdir(), 'marionette-v1-watcher-fair-'));
+
   const store = Store.open({
     databasePath: join(root, 'project.sqlite'),
-    project: ProjectBindingSchema.parse({
+    project: Schema.decodeUnknownSync(ProjectBindingSchema)({
       id: 'project-a',
       hostId: 'host-a',
       repositoryRoot: root,
       stateDirectory: root,
     }),
   });
+
   try {
     const board = Board.create({ store });
+
     const thread = board.createThread({
       title: 'Fairness',
       author: { kind: 'system', id: 'controller' },
       idempotencyKey: 'fairness',
     });
+
     board.subscribe({
       subscriber: { kind: 'desktop', id: 'busy' },
       threadId: thread.id,
@@ -322,6 +350,7 @@ test('a busy recipient backs off without starving an idle recipient', async () =
       idempotencyKey: 'wake-both',
     });
     const delivered: string[] = [];
+
     const watcher = await Watcher.start({
       store,
       deliveryPort: {
@@ -330,6 +359,7 @@ test('a busy recipient backs off without starving an idle recipient', async () =
         },
         async deliver({ recipient }) {
           delivered.push(recipient.id);
+
           return { kind: 'submitted' };
         },
       },
@@ -341,6 +371,7 @@ test('a busy recipient backs off without starving an idle recipient', async () =
       processIdentity: 'fair-watcher',
       busyBackoffMs: 60_000,
     });
+
     try {
       assert.equal(await watcher.pollOnce(), 0);
       assert.equal(await watcher.pollOnce(), 1);
@@ -357,6 +388,7 @@ test('a busy recipient backs off without starving an idle recipient', async () =
 
 test('unsupported delivery is truthfully undeliverable', async () => {
   const f = fixture();
+
   try {
     const watcher = await Watcher.start({
       store: f.store,
@@ -375,13 +407,16 @@ test('unsupported delivery is truthfully undeliverable', async () => {
       },
       processIdentity: 'unsupported-watcher',
     });
+
     try {
       assert.equal(await watcher.pollOnce(), 0);
+
       const wake = f.store.read((db) =>
         db
           .prepare('SELECT state,last_error FROM board_subscription_wakes WHERE subscription_id=?')
           .get(f.deliveryId),
       );
+
       assert.equal(wake?.state, 'undeliverable');
       assert.equal(wake?.last_error, 'native path unavailable');
     } finally {

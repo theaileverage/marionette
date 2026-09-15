@@ -1,16 +1,6 @@
 # CLI operation reference
 
-Run `marionette schema OPERATION` for the installed contract. This file explains when each command is used and which caller mistakes to avoid. It does not replace the schema.
-
-## Grammar and input
-
-- Commands are grouped words (`result record`). Schemas and JSON payloads use dotted operations (`result.record`). Keep the command group and action separate from the `operation` field.
-- Use scalar flags when the schema exposes them. Use `--input FILE`, `--input -`, or `--json JSON_OR_FILE` for nested objects and arrays. Prefer raw JSON from a file for `job.create`, `handoff.create`, and `result.record`.
-- Raw JSON and request-building flags are mutually exclusive in one call.
-- Utilities (`init`, `schema`, `describe`, `watch`, `--version`) accept only their own flags. `marionette schema OPERATION --project PATH` fails with `invalid-options`; the schema is not project-scoped.
-- Keep idempotency keys stable only for identical requests. Reusing a key with different input is an error.
-- Machine-readable output goes to stdout; diagnostics and errors go to stderr. Exit codes: `0` success, `1` operation failed, `2` invalid input.
-- Every error carries `mutation: "not-started"` or `mutation: "unknown"`. Correct and retry only on `not-started`. On `unknown`, read state before any retry.
+Run `marionette schema OPERATION` for the installed contract. This file explains when each command is used. It does not replace the schema.
 
 ## Project and execution context
 
@@ -31,8 +21,6 @@ Run `marionette schema OPERATION` for the installed contract. This file explains
 | `workspace retire`   | Check and remove an eligible isolated worktree. Run `--dry-run` first.     |
 | `input snapshot`     | Store a local file as a content-addressed input artifact.                  |
 
-A host and path pair may be registered once. Before `workspace register`, read the existing registration for that path and reuse it, or register a distinct path. A second registration at a registered path fails on a unique constraint.
-
 ## Jobs and workflows
 
 | Command           | Use                                                                                        |
@@ -45,8 +33,6 @@ A host and path pair may be registered once. Before `workspace register`, read t
 | `workflow list`   | List pinned workflow records.                                                              |
 | `workflow get`    | Read one pinned workflow record.                                                           |
 | `route`           | Select the applicable pinned workflow or the direct route for a request.                   |
-
-`job.create.dependencies` is typed `string[]` but the runtime resolves it as job IDs; a result ID there fails with `Job result_... was not found`. Accepted result IDs belong in `attempt.admit.inputResultIds`.
 
 ## Profiles, native execution, and attempts
 
@@ -77,8 +63,6 @@ A host and path pair may be registered once. Before `workspace register`, read t
 | `handoff resolve`  | Retain or abandon a conflicted or uncertain delivery with a reason.            |
 | `handoff replan`   | Replace a settled claim with a new target plan.                                |
 
-`handoff.create.expectedTarget` rejects unknown keys, and its `repositoryRoot` must be the canonical path reported by the captured Git state, not the path text used at registration. On macOS a workspace registered under `/tmp/...` reports `/private/tmp/...`.
-
 ## Board and SQL
 
 | Command             | Use                                                                                |
@@ -94,12 +78,10 @@ A host and path pair may be registered once. Before `workspace register`, read t
 | `sql read`          | Run a bounded query against project-scoped read-only views.                        |
 | `sql contribute`    | Validate one board contribution through the isolated SQL contribution table.       |
 
-## Reading project state
+## Input and failure rules
 
-Prefer typed reads over SQL: `job list`, `job get`, `job brief`, `workspace get`, `attempt get`, `result get`, `handoff get`. If the installed schema exposes a typed result lookup (for example `result.discover`), prefer it; `1.0.0-alpha.1` does not, and `marionette schema result.discover` returns `unknown-command`.
-
-Fall back to `sql read` only for the documented public views, and discover a view's shape with `SELECT * FROM view LIMIT 1` before naming columns. Guessing column names fails with `no such column`; `public_results` exposes `resulting_commit`, `resulting_tree`, and `changed_paths_json`, not `commit_hash` or `summary`. Not every entity has a view — there is no `public_workspaces` — and catalog reads (`sqlite_master`, `sqlite_schema`) are prohibited. Command discovery belongs to `marionette --help` and the typed reads, not to the database.
-
-## Composing repository commands
-
-Before running a project's tests, lint, or build inside a job, list the actual files and read the package manifest and tsconfig. Do not guess test paths from convention, and do not assume a single dependency root: a repository may resolve modules from a nested `node_modules` plus the root one.
+- Use scalar flags when the schema exposes them.
+- Use `--input FILE`, `--input -`, or `--json JSON_OR_FILE` for nested objects and arrays.
+- Keep idempotency keys stable only for identical requests. Reusing a key with different input is an error.
+- Treat an error with `mutation: "unknown"` as uncertain. Inspect or reconcile before retrying.
+- Keep machine-readable output on stdout and diagnostics on stderr.

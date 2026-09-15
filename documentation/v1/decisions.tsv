@@ -1,4 +1,0 @@
-ts	phase	decision	why	evidence	result
-2026-09-11T02:15:27Z	frame	Isolate the v1 rewrite	Preserve concurrent uncommitted work	/private/tmp/marionette-v1-audit-20260911/status-before.txt	Clean codex/v1-rewrite worktree from 4e36971
-2026-09-11T02:27:07Z	foundation	Use Node SQLite authorizer	Bun sqlite lacks preparation-time authorization required by the accepted SQL contract	Node26.8.1 local probe; https://nodejs.org/api/sqlite.html#databasesetauthorizercallback	Node >=24.10 runtime selected; Bun remains tooling
-2026-09-11T02:27:07Z	foundation	Snapshot inputs and verify target Git state	Queued work must consume immutable bytes and integration must reject drift	node scripts/test-v1.mjs	Four real filesystem and Git checks pass

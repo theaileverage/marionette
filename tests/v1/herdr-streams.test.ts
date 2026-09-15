@@ -8,22 +8,28 @@ import { z } from 'zod';
 import { HerdrClient, HerdrError } from '../../src/herdr-sdk.js';
 
 const RequestSchema = z.object({ id: z.string().uuid(), method: z.string() });
+
 type Request = z.infer<typeof RequestSchema>;
+
 type JsonValue =
   string | number | boolean | null | readonly JsonValue[] | { readonly [key: string]: JsonValue };
+
 const GraphicsHeaderSchema = z.object({
   file: z.object({ path: z.string() }).optional(),
   data_length: z.number().int().positive().optional(),
   sequence: z.number().int().optional(),
   revision: z.number().int().optional(),
 });
+
 type GraphicsHeader = z.infer<typeof GraphicsHeaderSchema>;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
+
   const promise = new Promise<T>((next) => {
     resolve = next;
   });
+
   return { promise, resolve };
 }
 
@@ -31,14 +37,17 @@ async function fixture(handle: (socket: net.Socket, request: Request, remaining:
   const root = mkdtempSync(join(tmpdir(), 'herdr-v1-stream-'));
   const path = join(root, 'h.sock');
   const sockets = new Set<net.Socket>();
+
   const server = net.createServer((socket) => {
     sockets.add(socket);
     socket.on('close', () => sockets.delete(socket));
     socket.on('error', () => {});
     let buffer = Buffer.alloc(0);
+
     const receiveInitial = (data: Buffer) => {
       buffer = Buffer.concat([buffer, data]);
       const newline = buffer.indexOf(10);
+
       if (newline < 0) return;
       socket.off('data', receiveInitial);
       handle(
@@ -47,12 +56,15 @@ async function fixture(handle: (socket: net.Socket, request: Request, remaining:
         buffer.subarray(newline + 1),
       );
     };
+
     socket.on('data', receiveInitial);
   });
+
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(path, resolve);
   });
+
   return {
     client: new HerdrClient(path),
     async close() {
@@ -73,6 +85,7 @@ function event(name: string, data: JsonValue) {
 
 test('subscriptions preserve coalesced and fragmented UTF-8 events', async () => {
   const peer = deferred<net.Socket>();
+
   const f = await fixture((socket, request) => {
     peer.resolve(socket);
     socket.write(
@@ -81,6 +94,7 @@ test('subscriptions preserve coalesced and fragmented UTF-8 events', async () =>
         event('pane.created', { pane: { pane_id: 'w1:p1' } }),
     );
   });
+
   try {
     const stream = await f.client.subscribe([{ type: 'pane.created' }]);
     assert.equal((await stream.next()).value?.event, 'pane.created');
@@ -104,29 +118,37 @@ test('subscriptions fail on overflow, EOF, and abort without reconnecting', asyn
   for (const mode of ['overflow', 'bytes', 'eof', 'abort'] as const) {
     let connections = 0;
     const peer = deferred<net.Socket>();
+
     const f = await fixture((socket, request) => {
       connections += 1;
       peer.resolve(socket);
       reply(socket, request.id, { type: 'subscription_started' });
     });
+
     try {
       const abort = new AbortController();
+
       const stream = await f.client.subscribe([{ type: 'pane.created' }], {
         signal: abort.signal,
         maxQueuedEvents: 1,
         maxQueuedBytes: mode === 'bytes' ? 150 : 4_096,
       });
+
       const socket = await peer.promise;
+
       if (mode === 'overflow') socket.write(event('pane.created', {}) + event('pane.created', {}));
+
       if (mode === 'bytes') socket.write(event('pane.created', { text: 'x'.repeat(200) }));
+
       if (mode === 'eof') socket.end();
+
       if (mode === 'abort') abort.abort();
-      const code =
-        mode === 'abort'
-          ? 'herdr_aborted'
-          : mode === 'eof'
-            ? 'herdr_disconnected'
-            : 'herdr_stream_overflow';
+
+      let code = 'herdr_stream_overflow';
+
+      if (mode === 'abort') code = 'herdr_aborted';
+      else if (mode === 'eof') code = 'herdr_disconnected';
+
       await assert.rejects(
         stream.closed,
         (error) => error instanceof HerdrError && error.code === code,
@@ -145,20 +167,25 @@ test('subscriptions fail on overflow, EOF, and abort without reconnecting', asyn
 test('graphics streams preserve bytes and correlate immutable file-frame acknowledgements', async () => {
   const inline = deferred<{ header: GraphicsHeader; bytes: Buffer }>();
   const file = deferred<GraphicsHeader>();
+
   const f = await fixture((socket, request, remaining) => {
     assert.equal(request.method, 'pane.graphics.stream');
     reply(socket, request.id, { type: 'ok' });
     let input = remaining;
     let header: GraphicsHeader | undefined;
+
     const consume = (data: Buffer) => {
       input = Buffer.concat([input, data]);
+
       while (true) {
         if (header === undefined) {
           const newline = input.indexOf(10);
+
           if (newline < 0) return;
           header = GraphicsHeaderSchema.parse(JSON.parse(input.subarray(0, newline).toString()));
           input = input.subarray(newline + 1);
         }
+
         if (header.file !== undefined) {
           file.resolve(header);
           reply(socket, `${request.id}:file:${header.sequence}`, {
@@ -174,12 +201,15 @@ test('graphics streams preserve bytes and correlate immutable file-frame acknowl
           });
           input = input.subarray(header.data_length);
         }
+
         header = undefined;
       }
     };
+
     socket.on('data', consume);
     consume(Buffer.alloc(0));
   });
+
   try {
     const stream = await f.client.graphicsStream({ pane_id: 'w1:p1', layer_id: 'test' });
     const bytes = Buffer.from([0, 10, 255, 127]);
@@ -191,6 +221,7 @@ test('graphics streams preserve bytes and correlate immutable file-frame acknowl
     );
     await sent;
     assert.deepEqual((await inline.promise).bytes, Buffer.from([0, 10, 255, 127]));
+
     const frame = {
       format: 'rgba' as const,
       image_width: 1,
@@ -199,6 +230,7 @@ test('graphics streams preserve bytes and correlate immutable file-frame acknowl
       sequence: 12,
       revision: 3,
     };
+
     const pendingAck = stream.fileFrame(frame);
     frame.sequence = 13;
     frame.revision = 4;

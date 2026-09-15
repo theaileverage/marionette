@@ -1,12 +1,26 @@
-import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
-import type { Board, BoardAuthor, BoardPost } from './board.js';
-import { z } from 'zod';
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
-const SqlValueSchema = z.union([z.string(), z.number().finite(), z.null()]);
-export type SqlValue = z.infer<typeof SqlValueSchema>;
-const SqlRowSchema = z.record(z.union([z.string(), z.number().finite(), z.boolean(), z.null()]));
-export type SqlRow = z.infer<typeof SqlRowSchema>;
+import { Effect, Schema } from "effect";
+
+import type { Board, BoardAuthor, BoardPost, BoardPostKind } from "./board.js";
+
+const finiteNumber = Schema.Number.check(Schema.isFinite());
+
+const integer = Schema.Finite.check(
+  Schema.makeFilter(Number.isInteger, { expected: "an integer" }),
+);
+
+const SqlValueSchema = Schema.Union([Schema.String, finiteNumber, Schema.Null]);
+
+export type SqlValue = typeof SqlValueSchema.Type;
+
+const SqlRowSchema = Schema.Record(
+  Schema.String,
+  Schema.Union([Schema.String, finiteNumber, Schema.Boolean, Schema.Null]),
+);
+
+export type SqlRow = typeof SqlRowSchema.Type;
 
 export interface SqlRead {
   readonly sql: string;
@@ -25,7 +39,7 @@ export interface SqlReadResult {
 export interface SqlBoardContribution {
   readonly threadId: string;
   readonly author: BoardAuthor;
-  readonly kind: import('./board.js').BoardPostKind;
+  readonly kind: BoardPostKind;
   readonly idempotencyKey: string;
   readonly sql: string;
   readonly parameters?: Readonly<Record<string, SqlValue>>;
@@ -38,71 +52,213 @@ export interface SqlQueryServiceOptions {
 }
 
 const DEFAULT_TIMEOUT_MS = 2_000;
+
 const DEFAULT_MAX_ROWS = 100;
+
 const DEFAULT_MAX_BYTES = 256 * 1024;
+
 const MAX_TIMEOUT_MS = 10_000;
+
 const MAX_ROWS = 1_000;
+
 const MAX_BYTES = 1_000_000;
+
 const MAX_PROTOCOL_BYTES = 2_000_000;
 
 function bounded(name: string, value: number | undefined, fallback: number, maximum: number) {
   const result = value ?? fallback;
-  if (!Number.isInteger(result) || result < 1 || result > maximum)
+
+  if (!Number.isInteger(result) || result < 1 || result > maximum) {
     throw new Error(`${name} must be an integer from 1 through ${maximum}`);
+  }
+
   return result;
 }
 
-function workerPath() {
+function defaultWorkerPath() {
   return fileURLToPath(
-    new URL(
-      import.meta.url.endsWith('.ts') ? './sql-worker.ts' : './sql-worker.js',
-      import.meta.url,
-    ),
+    new URL(import.meta.url.endsWith(".ts") ? "./sql-worker.ts" : "./sql-worker.js", import.meta.url),
   );
 }
 
 function nodeRuntime() {
-  if (process.versions.bun !== undefined)
-    throw new Error('SQL queries require the Node runtime with node:sqlite');
-  const [major, minor, patch] = process.versions.node.split('.').map(Number);
-  if (!(major > 26 || (major === 26 && (minor > 8 || (minor === 8 && patch >= 1)))))
-    throw new Error('SQL queries require Node 26.8.1 or newer');
+  if (process.versions.bun !== undefined) {
+    throw new Error("SQL queries require the Node runtime with node:sqlite");
+  }
+
+  const [major = 0, minor = 0, patch = 0] = process.versions.node.split(".").map(Number);
+
+  if (!(major > 26 || (major === 26 && (minor > 8 || (minor === 8 && patch >= 1))))) {
+    throw new Error("SQL queries require Node 26.8.1 or newer");
+  }
+
   return process.execPath;
 }
 
-const ContributionResultSchema = z.object({
-  body: z.string().min(1).max(65_536),
-  kind: z.enum(['question', 'blocker', 'result', 'finding', 'decision', 'progress']),
-  references: z
-    .array(z.object({ kind: z.string().min(1).max(255), value: z.string().min(1).max(4_096) }))
-    .max(50),
-  replyToPostId: z.string().uuid().nullable(),
-  replacesPostId: z.string().uuid().nullable(),
+const BoardReferenceSchema = Schema.Struct({
+  kind: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(255)),
+  value: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(4_096)),
 });
-const WorkerResponseSchema = z.discriminatedUnion('ok', [
-  z.object({
-    ok: z.literal(true),
-    response: z.discriminatedUnion('kind', [
-      z.object({
-        kind: z.literal('read'),
-        result: z.object({
-          rows: z.array(SqlRowSchema),
-          truncated: z.boolean(),
-          bytes: z.number().int().nonnegative(),
+
+const BoardPostKindSchema = Schema.Literals([
+  "question", "blocker", "result", "finding", "decision", "progress",
+]);
+
+const nullableUuid = Schema.Union([Schema.String.check(Schema.isUUID()), Schema.Null]);
+
+const ContributionResultSchema = Schema.Struct({
+  body: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(65_536)),
+  kind: BoardPostKindSchema,
+  references: Schema.mutable(
+    Schema.Array(BoardReferenceSchema).check(Schema.isMaxLength(50)),
+  ),
+  replyToPostId: nullableUuid,
+  replacesPostId: nullableUuid,
+});
+
+const WorkerResponseSchema = Schema.Union([
+  Schema.Struct({
+    ok: Schema.Literal(true),
+    response: Schema.Union([
+      Schema.Struct({
+        kind: Schema.Literal("read"),
+        result: Schema.Struct({
+          rows: Schema.mutable(Schema.Array(SqlRowSchema)),
+          truncated: Schema.Boolean,
+          bytes: integer.check(Schema.isGreaterThanOrEqualTo(0)),
         }),
       }),
-      z.object({ kind: z.literal('contribution'), result: ContributionResultSchema }),
+      Schema.Struct({ kind: Schema.Literal("contribution"), result: ContributionResultSchema }),
     ]),
   }),
-  z.object({ ok: z.literal(false), error: z.string().min(1) }),
+  Schema.Struct({ ok: Schema.Literal(false), error: Schema.String.check(Schema.isMinLength(1)) }),
 ]);
-type WorkerResponse = Extract<z.infer<typeof WorkerResponseSchema>, { ok: true }>['response'];
+
+type WorkerEnvelope = typeof WorkerResponseSchema.Type;
+
+type WorkerResponse = Extract<WorkerEnvelope, { readonly ok: true }>["response"];
+
+export class SqlQueryError extends Schema.TaggedError<SqlQueryError>()("SqlQueryError", {
+  message: Schema.String,
+  cause: Schema.optional(Schema.Defect()),
+}) {}
+
+const sqlError = (message: string): SqlQueryError => new SqlQueryError({ message });
 
 function parseResponse(raw: string): WorkerResponse {
-  const value = WorkerResponseSchema.parse(JSON.parse(raw));
-  if (!value.ok) throw new Error(value.error);
+  const value = Schema.decodeUnknownSync(WorkerResponseSchema)(JSON.parse(raw));
+
+  if (!value.ok) throw sqlError(value.error);
+
   return value.response;
 }
+
+function errorFromUnknown(cause: unknown): SqlQueryError {
+  if (cause instanceof SqlQueryError) return cause;
+
+  return cause instanceof Error
+    ? new SqlQueryError({ message: cause.message, cause })
+    : new SqlQueryError({ message: String(cause), cause });
+}
+
+function stopChild(child: ChildProcessWithoutNullStreams): void {
+  if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+}
+
+const awaitWorker = Effect.fn("SqlQueryService.awaitWorker")(
+  function*(child: ChildProcessWithoutNullStreams, timeoutMs: number) {
+    return yield* Effect.callback<WorkerResponse, SqlQueryError>((resume) => {
+      let stdout = "";
+      let stderr = "";
+      let settled = false;
+
+      const cleanup = () => {
+        clearTimeout(deadline);
+        child.stdout.off("data", onStdout);
+        child.stderr.off("data", onStderr);
+        child.off("error", onError);
+        child.off("close", onClose);
+      };
+
+      const finish = (effect: Effect.Effect<WorkerResponse, SqlQueryError>) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resume(effect);
+      };
+
+      const onStdout = (chunk: Buffer) => {
+        stdout += chunk.toString("utf8");
+
+        if (Buffer.byteLength(stdout, "utf8") > MAX_PROTOCOL_BYTES) {
+          stopChild(child);
+          finish(Effect.fail(sqlError("SQL worker exceeded the protocol output limit")));
+        }
+      };
+
+      const onStderr = (chunk: Buffer) => {
+        stderr += chunk.toString("utf8");
+      };
+
+      const onError = (error: Error) => finish(Effect.fail(errorFromUnknown(error)));
+
+      const onClose = (code: number | null) => {
+        if (code !== 0) {
+          try {
+            parseResponse(stdout);
+            finish(Effect.fail(sqlError(stderr || `SQL worker exited with ${code}`)));
+          } catch (error) {
+            finish(Effect.fail(errorFromUnknown(error)));
+          }
+
+          return;
+        }
+
+        try {
+          finish(Effect.succeed(parseResponse(stdout)));
+        } catch (error) {
+          finish(Effect.fail(errorFromUnknown(error)));
+        }
+      };
+
+      const deadline = setTimeout(() => {
+        stopChild(child);
+        finish(Effect.fail(sqlError(`SQL query exceeded ${timeoutMs}ms`)));
+      }, timeoutMs);
+
+      child.stdout.on("data", onStdout);
+      child.stderr.on("data", onStderr);
+      child.on("error", onError);
+      child.on("close", onClose);
+
+      return Effect.sync(() => {
+        settled = true;
+        cleanup();
+      });
+    });
+  },
+);
+
+const runWorkerEffect = Effect.fn("SqlQueryService.runWorker")(
+  function*(workerPath: string, request: string, timeoutMs: number) {
+    const child = yield* Effect.acquireRelease(
+      Effect.try({
+        try: () =>
+          spawn(
+            nodeRuntime(),
+            ["--experimental-strip-types", workerPath, "--marionette-sql-worker"],
+            { stdio: ["pipe", "pipe", "pipe"] },
+          ),
+        catch: errorFromUnknown,
+      }),
+      (processHandle) => Effect.sync(() => stopChild(processHandle)),
+    );
+
+    yield* Effect.sync(() => child.stdin.end(request));
+
+    return yield* awaitWorker(child, timeoutMs);
+  },
+);
 
 export class SqlQueryService {
   readonly #board: Board;
@@ -110,118 +266,85 @@ export class SqlQueryService {
 
   constructor(options: SqlQueryServiceOptions) {
     this.#board = options.board;
-    this.#workerPath = options.workerPath ?? workerPath();
+    this.#workerPath = options.workerPath ?? defaultWorkerPath();
+  }
+
+  readEffect(input: SqlRead): Effect.Effect<SqlReadResult, SqlQueryError> {
+    const timeoutMs = bounded("timeoutMs", input.timeoutMs, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
+    const maxRows = bounded("maxRows", input.maxRows, DEFAULT_MAX_ROWS, MAX_ROWS);
+    const maxBytes = bounded("maxBytes", input.maxBytes, DEFAULT_MAX_BYTES, MAX_BYTES);
+
+    if (input.sql.trim().length === 0) throw new Error("sql must not be empty");
+
+    const request = JSON.stringify({
+      mode: "read",
+      databasePath: this.#board.databasePath,
+      projectId: this.#board.project.id,
+      sql: input.sql,
+      parameters: input.parameters ?? {},
+      maxRows,
+      maxBytes,
+    });
+
+    return Effect.scoped(runWorkerEffect(this.#workerPath, request, timeoutMs)).pipe(
+      Effect.flatMap((response) =>
+        response.kind === "read"
+          ? Effect.succeed(response.result)
+          : Effect.fail(sqlError("SQL worker returned a contribution for a read request")),
+      ),
+    );
   }
 
   read(input: SqlRead): Promise<SqlReadResult> {
-    const timeoutMs = bounded('timeoutMs', input.timeoutMs, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
-    const maxRows = bounded('maxRows', input.maxRows, DEFAULT_MAX_ROWS, MAX_ROWS);
-    const maxBytes = bounded('maxBytes', input.maxBytes, DEFAULT_MAX_BYTES, MAX_BYTES);
-    if (input.sql.trim().length === 0) throw new Error('sql must not be empty');
-    return this.#runWorker(
-      JSON.stringify({
-        mode: 'read',
-        databasePath: this.#board.databasePath,
-        projectId: this.#board.project.id,
-        sql: input.sql,
-        parameters: input.parameters ?? {},
-        maxRows,
-        maxBytes,
-      }),
-      timeoutMs,
-    ).then((response) => {
-      if (response.kind !== 'read')
-        throw new Error('SQL worker returned a contribution for a read request');
-      return response.result;
+    return Effect.runPromise(this.readEffect(input));
+  }
+
+  contributeEffect(input: SqlBoardContribution): Effect.Effect<BoardPost, SqlQueryError> {
+    const timeoutMs = bounded("timeoutMs", input.timeoutMs, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
+
+    if (input.sql.trim().length === 0) throw new Error("contribution SQL must not be empty");
+
+    if (Buffer.byteLength(input.sql, "utf8") > 16_384) {
+      throw new Error("contribution SQL exceeds 16384 bytes");
+    }
+
+    const request = JSON.stringify({
+      mode: "contribute",
+      sql: input.sql,
+      parameters: input.parameters ?? {},
     });
+
+    return Effect.scoped(runWorkerEffect(this.#workerPath, request, timeoutMs)).pipe(
+      Effect.flatMap((response) => {
+        if (response.kind !== "contribution") {
+          return Effect.fail(sqlError("SQL worker returned a read for a contribution request"));
+        }
+
+        const contribution = response.result;
+
+        if (contribution.kind !== input.kind) {
+          return Effect.fail(sqlError("contribution kind does not match the parent request"));
+        }
+
+        return Effect.try({
+          try: () =>
+            this.#board.post({
+              threadId: input.threadId,
+              author: input.author,
+              body: contribution.body,
+              kind: contribution.kind,
+              idempotencyKey: input.idempotencyKey,
+              references: contribution.references,
+              replyToPostId: contribution.replyToPostId ?? undefined,
+              replacesPostId: contribution.replacesPostId ?? undefined,
+            }),
+          catch: errorFromUnknown,
+        });
+      }),
+    );
   }
 
   contribute(input: SqlBoardContribution): Promise<BoardPost> {
-    const timeoutMs = bounded('timeoutMs', input.timeoutMs, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
-    if (input.sql.trim().length === 0) throw new Error('contribution SQL must not be empty');
-    if (Buffer.byteLength(input.sql, 'utf8') > 16_384)
-      throw new Error('contribution SQL exceeds 16384 bytes');
-    return this.#runWorker(
-      JSON.stringify({
-        mode: 'contribute',
-        sql: input.sql,
-        parameters: input.parameters ?? {},
-      }),
-      timeoutMs,
-    ).then((response) => {
-      if (response.kind !== 'contribution')
-        throw new Error('SQL worker returned a read for a contribution request');
-      const contribution = response.result;
-      if (contribution.kind !== input.kind)
-        throw new Error('contribution kind does not match the parent request');
-      return this.#board.post({
-        threadId: input.threadId,
-        author: input.author,
-        body: contribution.body,
-        kind: contribution.kind,
-        idempotencyKey: input.idempotencyKey,
-        references: contribution.references,
-        replyToPostId: contribution.replyToPostId ?? undefined,
-        replacesPostId: contribution.replacesPostId ?? undefined,
-      });
-    });
-  }
-
-  #runWorker(request: string, timeoutMs: number): Promise<WorkerResponse> {
-    return new Promise<WorkerResponse>((resolve, reject) => {
-      const child = spawn(
-        nodeRuntime(),
-        ['--experimental-strip-types', this.#workerPath, '--marionette-sql-worker'],
-        { stdio: ['pipe', 'pipe', 'pipe'] },
-      );
-      let stdout = '';
-      let stderr = '';
-      let settled = false;
-      const finish = (result: () => void) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(deadline);
-        result();
-      };
-      const deadline = setTimeout(() => {
-        child.kill('SIGKILL');
-        finish(() => reject(new Error(`SQL query exceeded ${timeoutMs}ms`)));
-      }, timeoutMs);
-      child.stdout.on('data', (chunk: Buffer) => {
-        stdout += chunk.toString('utf8');
-        if (Buffer.byteLength(stdout, 'utf8') > MAX_PROTOCOL_BYTES) {
-          child.kill('SIGKILL');
-          finish(() => reject(new Error('SQL worker exceeded the protocol output limit')));
-        }
-      });
-      child.stderr.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString('utf8');
-      });
-      child.on('error', (error) => finish(() => reject(error)));
-      child.on('close', (code) => {
-        finish(() => {
-          if (code !== 0) {
-            try {
-              reject(parseResponse(stdout));
-            } catch (error) {
-              reject(
-                error instanceof Error
-                  ? error
-                  : new Error(stderr || `SQL worker exited with ${code}`),
-              );
-            }
-            return;
-          }
-          try {
-            resolve(parseResponse(stdout));
-          } catch (error) {
-            reject(
-              error instanceof Error ? error : new Error('SQL worker returned an invalid response'),
-            );
-          }
-        });
-      });
-      child.stdin.end(request);
-    });
+    return Effect.runPromise(this.contributeEffect(input));
   }
 }

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { Effect, Schema } from 'effect';
 import { operationSchema } from '../../src/v1/operations.js';
 import {
   describeSchema,
@@ -7,7 +8,6 @@ import {
   type OperationDescription,
   type SchemaDescription,
 } from '../../src/v1/schema.js';
-import { z } from 'zod';
 
 function operation(
   descriptions: readonly OperationDescription[],
@@ -15,6 +15,7 @@ function operation(
 ): OperationDescription {
   const description = descriptions.find((entry) => entry.operation === name);
   assert.ok(description, `missing ${name}`);
+
   return description;
 }
 
@@ -22,21 +23,26 @@ function field(description: SchemaDescription, name: string): SchemaDescription 
   assert.equal(description.type, 'object');
   const value = description.fields[name];
   assert.ok(value, `missing ${name}`);
+
   return value;
 }
 
 function option(description: SchemaDescription, value: string): SchemaDescription {
   assert.equal(description.type, 'union');
+
   const match = description.options.find(
     (entry) => entry.type === 'object' && literalValue(field(entry, 'kind')) === value,
   );
+
   assert.ok(match, `missing ${value} variant`);
+
   return match;
 }
 
 function literalValue(description: SchemaDescription) {
   assert.equal(description.type, 'literal');
   assert.ok(description.enum);
+
   return description.enum[0];
 }
 
@@ -44,7 +50,7 @@ test('describes every operation with JSON-compatible output', () => {
   const descriptions = operationDescriptions();
   assert.deepEqual(
     descriptions.map((description) => description.operation),
-    operationSchema.options.map((option) => option.shape.operation.value),
+    operationSchema.members.map((member) => member.fields.operation.literal),
   );
   assert.deepEqual(JSON.parse(JSON.stringify(descriptions)), descriptions);
 });
@@ -132,14 +138,14 @@ test('keeps nullable, record, and refinement input structures discoverable', () 
 });
 
 test('describes static Zod constraints without executing user functions', () => {
-  assert.deepEqual(describeSchema(z.string().min(1).max(5).regex(/a+b/gi)), {
+  assert.deepEqual(describeSchema(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(5), Schema.isPattern(/a+b/gi))), {
     type: 'string',
     required: true,
     minLength: 1,
     maxLength: 5,
     pattern: { source: 'a+b', flags: 'gi' },
   });
-  assert.deepEqual(describeSchema(z.number().int().gt(0).lte(12).finite()), {
+  assert.deepEqual(describeSchema(Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(12), Schema.isFinite())), {
     type: 'number',
     required: true,
     integer: true,
@@ -147,7 +153,7 @@ test('describes static Zod constraints without executing user functions', () => 
     maximum: { value: 12, inclusive: true },
     finite: true,
   });
-  assert.deepEqual(describeSchema(z.array(z.string()).min(1).max(3).length(2)), {
+  assert.deepEqual(describeSchema(Schema.Array(Schema.String).check(Schema.isMinLength(1), Schema.isMaxLength(3), Schema.isLengthBetween(2, 2))), {
     type: 'array',
     required: true,
     minItems: 1,
@@ -155,16 +161,20 @@ test('describes static Zod constraints without executing user functions', () => 
     exactItems: 2,
     items: { type: 'string', required: true },
   });
-  assert.deepEqual(describeSchema(z.object({ value: z.string() }).strict()), {
+  assert.deepEqual(describeSchema(Schema.Struct({ value: Schema.String }).annotate({ parseOptions: { onExcessProperty: 'error' } })), {
     type: 'object',
     required: true,
     unknownKeys: 'strict',
     fields: { value: { type: 'string', required: true } },
   });
   let refinementCalls = 0;
-  const refined = z.string().superRefine(() => {
+
+  const refined = Schema.String.check(Schema.makeFilter(() => {
     refinementCalls++;
-  });
+
+    return true;
+  }));
+
   assert.deepEqual(describeSchema(refined), {
     type: 'string',
     required: true,
@@ -173,10 +183,13 @@ test('describes static Zod constraints without executing user functions', () => 
   assert.equal(refinementCalls, 0);
 
   let defaultCalls = 0;
-  const dynamicDefault = z.string().default(() => {
+
+  const dynamicDefault = Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.sync(() => {
     defaultCalls++;
+
     return 'computed';
-  });
+  })));
+
   assert.deepEqual(describeSchema(dynamicDefault), {
     type: 'string',
     required: false,

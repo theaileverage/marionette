@@ -1,6 +1,7 @@
-import { z } from 'zod';
+import { Predicate, Schema, SchemaAST } from 'effect';
 
 export type JsonPrimitive = string | number | boolean | null;
+
 export type JsonValue =
   JsonPrimitive | readonly JsonValue[] | { readonly [key: string]: JsonValue };
 
@@ -16,46 +17,21 @@ type DescriptionBase = {
   readonly effects?: readonly EffectDescription[];
 };
 
-type StringDescription = {
-  readonly type: 'string';
-  readonly enum?: readonly JsonPrimitive[];
-  readonly minLength?: number;
-  readonly maxLength?: number;
-  readonly pattern?: { readonly source: string; readonly flags: string };
-};
-
-type NumberDescription = {
-  readonly type: 'number';
-  readonly integer?: true;
-  readonly finite?: true;
-  readonly minimum?: { readonly value: number; readonly inclusive: boolean };
-  readonly maximum?: { readonly value: number; readonly inclusive: boolean };
-};
-
-type StringMetadata = {
-  type: 'string';
-  minLength?: number;
-  maxLength?: number;
-  pattern?: { source: string; flags: string };
-};
-type NumberMetadata = {
-  type: 'number';
-  integer?: true;
-  finite?: true;
-  minimum?: { value: number; inclusive: boolean };
-  maximum?: { value: number; inclusive: boolean };
-};
-type ArrayMetadata = {
-  type: 'array';
-  items: SchemaDescription;
-  minItems?: number;
-  maxItems?: number;
-  exactItems?: number;
-};
-
 type SchemaDescriptionNode =
-  | StringDescription
-  | NumberDescription
+  | {
+      readonly type: 'string';
+      readonly enum?: readonly JsonPrimitive[];
+      readonly minLength?: number;
+      readonly maxLength?: number;
+      readonly pattern?: { readonly source: string; readonly flags: string };
+    }
+  | {
+      readonly type: 'number';
+      readonly integer?: true;
+      readonly finite?: true;
+      readonly minimum?: { readonly value: number; readonly inclusive: boolean };
+      readonly maximum?: { readonly value: number; readonly inclusive: boolean };
+    }
   | {
       readonly type: 'boolean' | 'null' | 'unknown' | 'literal';
       readonly enum?: readonly JsonPrimitive[];
@@ -90,173 +66,315 @@ type SchemaDescriptionNode =
 
 export type SchemaDescription = DescriptionBase & SchemaDescriptionNode;
 
-type Modifiers = {
-  readonly required: boolean;
-  readonly defaultValue?: JsonValue;
-  readonly defaultStatus?: 'not-evaluated';
+type Modifiers = { required: boolean; defaultValue?: JsonValue; defaultStatus?: 'not-evaluated' };
+
+type Representation = { readonly id?: unknown; readonly payload?: unknown };
+
+type CheckApplication = { node: SchemaDescriptionNode; custom: boolean };
+
+type UnionDescriptionDraft = {
+  type: 'union';
+  options: readonly SchemaDescription[];
+  discriminator?: string;
 };
 
-const knownStaticDefaults = new WeakMap<z.ZodTypeAny, JsonValue>();
+type TupleDescriptionDraft = {
+  type: 'tuple';
+  items: readonly SchemaDescription[];
+  rest?: SchemaDescription;
+};
 
-export function registerStaticDefault(schema: z.ZodTypeAny, value: JsonValue): void {
-  knownStaticDefaults.set(schema, value);
+function jsonValue(value: unknown): value is JsonValue {
+  if (value === null || Predicate.isString(value) || Predicate.isNumber(value) || Predicate.isBoolean(value)) return true;
+
+  if (Array.isArray(value)) return value.every(jsonValue);
+
+  return (Predicate.isObjectOrArray(value) || value === null) && value !== null && Object.values(value).every(jsonValue);
 }
 
-function applyModifiers(
-  description: SchemaDescriptionNode,
-  modifiers: Modifiers,
+function modifiers(ast: SchemaAST.AST, required: boolean): Modifiers {
+  const defaultValue = ast.annotations?.default;
+
+  if (jsonValue(defaultValue)) return { required: false, defaultValue };
+  const encodedOptional = ast.encoding?.some((link) => link.to.context?.isOptional) ?? false;
+
+  if (encodedOptional) return { required: false, defaultStatus: 'not-evaluated' };
+
+  return { required: required && !ast.context?.isOptional };
+}
+
+function apply(
+  node: SchemaDescriptionNode,
+  ast: SchemaAST.AST,
+  required: boolean,
+  refinements = false,
 ): SchemaDescription {
-  if (modifiers.defaultValue !== undefined)
-    return { ...description, required: modifiers.required, default: modifiers.defaultValue };
-  if (modifiers.defaultStatus !== undefined)
-    return { ...description, required: modifiers.required, defaultStatus: modifiers.defaultStatus };
-  return { ...description, required: modifiers.required };
+  const metadata = modifiers(ast, required);
+
+  const base =
+    metadata.defaultValue !== undefined
+      ? { ...node, required: metadata.required, default: metadata.defaultValue }
+      : metadata.defaultStatus
+        ? { ...node, required: metadata.required, defaultStatus: metadata.defaultStatus }
+        : { ...node, required: metadata.required };
+
+  return refinements ? { ...base, effects: [{ kind: 'refinement', executable: false }] } : base;
 }
 
-function stringDescription(schema: z.ZodString): StringDescription {
-  const description: StringMetadata = { type: 'string' };
-  for (const check of schema._def.checks) {
-    if (check.kind === 'min') description.minLength = check.value;
-    if (check.kind === 'max') description.maxLength = check.value;
-    if (check.kind === 'regex')
-      description.pattern = { source: check.regex.source, flags: check.regex.flags };
-  }
-  return description;
+function representation(check: SchemaAST.Check<unknown>): Representation | undefined {
+  const value = check.annotations?.representation;
+
+  return (Predicate.isObjectOrArray(value) || value === null) && value !== null ? value : undefined;
 }
 
-function numberDescription(schema: z.ZodNumber): NumberDescription {
-  const description: NumberMetadata = { type: 'number' };
-  for (const check of schema._def.checks) {
-    if (check.kind === 'int') description.integer = true;
-    if (check.kind === 'finite') description.finite = true;
-    if (check.kind === 'min')
-      description.minimum = { value: check.value, inclusive: check.inclusive };
-    if (check.kind === 'max')
-      description.maximum = { value: check.value, inclusive: check.inclusive };
+function checked(ast: SchemaAST.AST, node: SchemaDescriptionNode): CheckApplication {
+  let result: SchemaDescriptionNode = { ...node };
+  let custom = false;
+  const checks = ast.checks ?? [];
+  const ids = checks.map((check) => representation(check)?.id);
+  const finiteIndex = ids.indexOf('effect/schema/isFinite');
+  const integerIndex = ids.indexOf('effect/schema/isInt');
+  const finiteIsIntegerBase = finiteIndex >= 0 && integerIndex >= 0 && finiteIndex < integerIndex;
+
+  for (const check of checks) {
+    const meta = representation(check);
+    const payload = meta?.payload;
+
+    if (
+      meta === undefined &&
+      check.annotations?.expected === 'an integer' &&
+      result.type === 'number'
+    ) {
+      Object.assign(result, { integer: true });
+    } else if (
+      meta?.id === 'effect/schema/isMinLength' &&
+      (Predicate.isObjectOrArray(payload) || payload === null) &&
+      payload !== null &&
+      'minLength' in payload &&
+      Predicate.isNumber(payload.minLength)
+    ) {
+      if (result.type === 'array') Object.assign(result, { minItems: payload.minLength });
+      else if (result.type === 'string') Object.assign(result, { minLength: payload.minLength });
+    } else if (
+      meta?.id === 'effect/schema/isMaxLength' &&
+      (Predicate.isObjectOrArray(payload) || payload === null) &&
+      payload !== null &&
+      'maxLength' in payload &&
+      Predicate.isNumber(payload.maxLength)
+    ) {
+      if (result.type === 'array') Object.assign(result, { maxItems: payload.maxLength });
+      else if (result.type === 'string') Object.assign(result, { maxLength: payload.maxLength });
+    } else if (
+      meta?.id === 'effect/schema/isLengthBetween' &&
+      (Predicate.isObjectOrArray(payload) || payload === null) &&
+      payload !== null &&
+      'minimum' in payload &&
+      'maximum' in payload &&
+      Predicate.isNumber(payload.minimum) &&
+      Predicate.isNumber(payload.maximum)
+    ) {
+      if (result.type === 'array') {
+        if (payload.minimum === payload.maximum)
+          Object.assign(result, { exactItems: payload.minimum });
+        else Object.assign(result, { minItems: payload.minimum, maxItems: payload.maximum });
+      }
+    } else if (
+      meta?.id === 'effect/schema/isPattern' &&
+      result.type === 'string' &&
+      (Predicate.isObjectOrArray(payload) || payload === null) &&
+      payload !== null &&
+      'source' in payload &&
+      'flags' in payload &&
+      Predicate.isString(payload.source) &&
+      Predicate.isString(payload.flags)
+    ) {
+      Object.assign(result, { pattern: { source: payload.source, flags: payload.flags } });
+    } else if (meta?.id === 'effect/schema/isInt' && result.type === 'number')
+      Object.assign(result, { integer: true });
+    else if (meta?.id === 'effect/schema/isFinite' && result.type === 'number')
+      Object.assign(result, { finite: true });
+    else if (
+      (meta?.id === 'effect/schema/isGreaterThan' ||
+        meta?.id === 'effect/schema/isGreaterThanOrEqualTo') &&
+      result.type === 'number' &&
+      (Predicate.isObjectOrArray(payload) || payload === null) &&
+      payload !== null
+    ) {
+      const value =
+        'exclusiveMinimum' in payload
+          ? payload.exclusiveMinimum
+          : 'minimum' in payload
+            ? payload.minimum
+            : undefined;
+
+      if (Predicate.isNumber(value))
+        Object.assign(result, { minimum: { value, inclusive: meta.id.endsWith('OrEqualTo') } });
+    } else if (
+      (meta?.id === 'effect/schema/isLessThan' ||
+        meta?.id === 'effect/schema/isLessThanOrEqualTo') &&
+      result.type === 'number' &&
+      (Predicate.isObjectOrArray(payload) || payload === null) &&
+      payload !== null
+    ) {
+      const value =
+        'exclusiveMaximum' in payload
+          ? payload.exclusiveMaximum
+          : 'maximum' in payload
+            ? payload.maximum
+            : undefined;
+
+      if (Predicate.isNumber(value))
+        Object.assign(result, { maximum: { value, inclusive: meta.id.endsWith('OrEqualTo') } });
+    } else custom = true;
   }
-  return description;
+
+  if (result.type === 'number' && result.integer && result.finite && finiteIsIntegerBase) {
+    const { finite: _finite, ...integerResult } = result;
+    result = integerResult;
+  }
+
+  return { node: result, custom };
 }
 
-function withEffect(description: SchemaDescription, effect: EffectDescription): SchemaDescription {
-  return { ...description, effects: [...(description.effects ?? []), effect] };
+function unknownKeys(ast: SchemaAST.AST): 'strip' | 'strict' | 'passthrough' {
+  const value = ast.annotations?.parseOptions;
+
+  if ((Predicate.isObjectOrArray(value) || value === null) && value !== null && 'onExcessProperty' in value) {
+    if (value.onExcessProperty === 'error') return 'strict';
+
+    if (value.onExcessProperty === 'preserve') return 'passthrough';
+  }
+
+  return 'strip';
 }
 
-function describeEffects(
-  schema: z.ZodEffects<z.ZodTypeAny>,
-  modifiers: Modifiers,
-): SchemaDescription {
-  const description = describeSchemaInner(schema.innerType(), modifiers);
-  switch (schema._def.effect.type) {
-    case 'refinement':
-      return withEffect(description, { kind: 'refinement', executable: false });
-    case 'transform':
-      return withEffect(description, { kind: 'transform', executable: false });
-    case 'preprocess':
-      return withEffect(description, { kind: 'preprocess', executable: false });
-  }
+function literalProperty(ast: SchemaAST.AST, name: string): JsonPrimitive | undefined {
+  if (!Predicate.isTagged('Objects')(ast)) return undefined;
+  const property = ast.propertySignatures.find((entry) => entry.name === name);
+
+  if (!property || !Predicate.isTagged('Literal')(property.type) || Predicate.isBigInt(property.type.literal))
+    return undefined;
+
+  return property.type.literal;
 }
 
-function describeSchemaInner(schema: z.ZodTypeAny, modifiers: Modifiers): SchemaDescription {
-  if (schema instanceof z.ZodOptional)
-    return describeSchemaInner(schema.unwrap(), { ...modifiers, required: false });
-  if (schema instanceof z.ZodDefault) {
-    const defaultValue = knownStaticDefaults.get(schema);
-    return describeSchemaInner(schema.removeDefault(), {
-      ...modifiers,
-      required: false,
-      ...(defaultValue === undefined ? { defaultStatus: 'not-evaluated' } : { defaultValue }),
-    });
-  }
-  if (schema instanceof z.ZodNullable)
-    return applyModifiers(
-      {
-        type: 'union',
-        options: [describeSchemaInner(schema.unwrap(), { required: true }), nullDescription()],
-      },
-      modifiers,
-    );
-  if (schema instanceof z.ZodBranded) return describeSchemaInner(schema.unwrap(), modifiers);
-  if (schema instanceof z.ZodEffects) return describeEffects(schema, modifiers);
+function discriminator(types: ReadonlyArray<SchemaAST.AST>): string | undefined {
+  for (const name of ['operation', 'kind']) {
+    const values = types.map((type) => literalProperty(type, name));
 
-  if (schema instanceof z.ZodString) return applyModifiers(stringDescription(schema), modifiers);
-  if (schema instanceof z.ZodNumber) return applyModifiers(numberDescription(schema), modifiers);
-  if (schema instanceof z.ZodBoolean) return applyModifiers({ type: 'boolean' }, modifiers);
-  if (schema instanceof z.ZodNull) return applyModifiers(nullDescription(), modifiers);
-  if (schema instanceof z.ZodUnknown) return applyModifiers({ type: 'unknown' }, modifiers);
-  if (schema instanceof z.ZodLiteral) {
-    const value: JsonPrimitive = schema.value;
-    return applyModifiers({ type: 'literal', enum: [value] }, modifiers);
+    if (values.every((value) => value !== undefined) && new Set(values).size === values.length)
+      return name;
   }
-  if (schema instanceof z.ZodEnum)
-    return applyModifiers({ type: 'string', enum: schema.options }, modifiers);
-  if (schema instanceof z.ZodArray) {
-    const description: ArrayMetadata = {
-      type: 'array',
-      items: describeSchemaInner(schema.element, { required: true }),
-    };
-    if (schema._def.minLength) description.minItems = schema._def.minLength.value;
-    if (schema._def.maxLength) description.maxItems = schema._def.maxLength.value;
-    if (schema._def.exactLength) description.exactItems = schema._def.exactLength.value;
-    return applyModifiers(description, modifiers);
-  }
-  if (schema instanceof z.ZodObject) {
-    const fields: Record<string, SchemaDescription> = {};
-    for (const name of Object.keys(schema.shape))
-      fields[name] = describeSchemaInner(schema.shape[name], { required: true });
-    return applyModifiers(
-      { type: 'object', unknownKeys: schema._def.unknownKeys, fields },
-      modifiers,
-    );
-  }
-  if (schema instanceof z.ZodDiscriminatedUnion)
-    return applyModifiers(
-      {
-        type: 'union',
-        discriminator: schema.discriminator,
-        options: schema.options.map((option: z.ZodTypeAny) =>
-          describeSchemaInner(option, { required: true }),
-        ),
-      },
-      modifiers,
-    );
-  if (schema instanceof z.ZodUnion)
-    return applyModifiers(
-      {
-        type: 'union',
-        options: schema.options.map((option: z.ZodTypeAny) =>
-          describeSchemaInner(option, { required: true }),
-        ),
-      },
-      modifiers,
-    );
-  if (schema instanceof z.ZodTuple) {
-    const items = schema.items.map((item: z.ZodTypeAny) =>
-      describeSchemaInner(item, { required: true }),
-    );
-    if (schema._def.rest)
-      return applyModifiers(
-        { type: 'tuple', items, rest: describeSchemaInner(schema._def.rest, { required: true }) },
-        modifiers,
+
+  return undefined;
+}
+
+export function describeSchemaAst(ast: SchemaAST.AST, required = true): SchemaDescription {
+  let node: SchemaDescriptionNode;
+
+  switch (true) {
+    case Predicate.isTagged('String')(ast):
+      node = { type: 'string' };
+      break;
+    case Predicate.isTagged('Number')(ast):
+      node = { type: 'number' };
+      break;
+    case Predicate.isTagged('Boolean')(ast):
+      node = { type: 'boolean' };
+      break;
+    case Predicate.isTagged('Null')(ast):
+      node = { type: 'null', enum: [null] };
+      break;
+    case Predicate.isTagged('Literal')(ast): {
+      if (Predicate.isBigInt(ast.literal)) throw new Error('BigInt literals are not JSON values');
+      node = { type: Predicate.isString(ast.literal) ? 'literal' : 'literal', enum: [ast.literal] };
+      break;
+    }
+
+    case Predicate.isTagged('Union')(ast): {
+      const types = ast.types.filter((type) => !Predicate.isTagged('Undefined')(type));
+
+      if (types.length === 1) {
+        const inner = describeSchemaAst(types[0], true);
+
+        return { ...inner, required: modifiers(ast, required).required };
+      }
+
+      const literals = types.every(
+        (type) => Predicate.isTagged('Literal')(type) && Predicate.isString(type.literal),
       );
-    return applyModifiers({ type: 'tuple', items }, modifiers);
+
+      if (literals) {
+        node = {
+          type: 'string',
+          enum: types.map((type) => (Predicate.isTagged('Literal')(type) ? String(type.literal) : '')),
+        };
+      } else {
+        const union: UnionDescriptionDraft = {
+          type: 'union',
+          options: types.map((type) => describeSchemaAst(type, true)),
+        };
+
+        const tag = discriminator(types);
+
+        if (tag) union.discriminator = tag;
+
+        node = union;
+      }
+
+      break;
+    }
+
+    case Predicate.isTagged('Arrays')(ast): {
+      if (ast.elements.length === 0 && ast.rest.length === 1)
+        node = { type: 'array', items: describeSchemaAst(ast.rest[0], true) };
+      else {
+        const tuple: TupleDescriptionDraft = {
+          type: 'tuple',
+          items: ast.elements.map((item) => describeSchemaAst(item, true)),
+        };
+
+        if (ast.rest[0]) tuple.rest = describeSchemaAst(ast.rest[0], true);
+
+        node = tuple;
+      }
+
+      break;
+    }
+
+    case Predicate.isTagged('Objects')(ast): {
+      if (ast.propertySignatures.length === 0 && ast.indexSignatures.length === 1) {
+        const index = ast.indexSignatures[0];
+        node = {
+          type: 'record',
+          keys: describeSchemaAst(index.parameter, true),
+          values: describeSchemaAst(index.type, true),
+        };
+      } else {
+        const fields: Record<string, SchemaDescription> = {};
+
+        for (const property of ast.propertySignatures)
+          fields[String(property.name)] = describeSchemaAst(property.type, true);
+        node = { type: 'object', unknownKeys: unknownKeys(ast), fields };
+      }
+
+      break;
+    }
+
+    case Predicate.isTagged('Unknown')(ast):
+      node = { type: 'unknown' };
+      break;
+    case Predicate.isTagged('Suspend')(ast):
+      return describeSchemaAst(ast.thunk(), required);
+    default:
+      throw new Error(`Unsupported Effect Schema AST node: ${ast._tag}`);
   }
-  if (schema instanceof z.ZodRecord)
-    return applyModifiers(
-      {
-        type: 'record',
-        keys: describeSchemaInner(schema.keySchema, { required: true }),
-        values: describeSchemaInner(schema.valueSchema, { required: true }),
-      },
-      modifiers,
-    );
 
-  throw new Error(`Unsupported Zod schema type: ${schema._def.typeName}`);
+  const result = checked(ast, node);
+
+  return apply(result.node, ast, required, result.custom);
 }
 
-function nullDescription(): SchemaDescription {
-  return applyModifiers({ type: 'null', enum: [null] }, { required: true });
-}
-
-export function describeSchema(schema: z.ZodTypeAny): SchemaDescription {
-  return describeSchemaInner(schema, { required: true });
+export function describeSchema(schema: Schema.Constraint): SchemaDescription {
+  return describeSchemaAst(schema.ast, true);
 }

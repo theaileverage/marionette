@@ -1,69 +1,41 @@
 {
   "name": "@theaileverage/marionette",
   "version": "1.0.0-alpha.1",
+  "private": true,
   "type": "module",
   "engines": {
     "node": ">=26.8.1"
   },
+  "packageManager": "bun@1.3.14",
   "scripts": {
-    "build": "node scripts/bundle.mjs",
-    "check": "tsc --noEmit -p tsconfig.v1.json && tsc --noEmit -p tsconfig.tests.json && npm run lint",
-    "test": "node scripts/test-v1.mjs",
-    "format": "prettier --write src/v1 src/herdr-sdk.ts src/herdr-protocol.ts src/herdr-streams.ts src/herdr-transport.ts tests/v1 workflows scripts package.json tsconfig.json tsconfig.v1.json tsconfig.tests.json .github/workflows",
-    "format:check": "prettier --check src/v1 src/herdr-sdk.ts src/herdr-protocol.ts src/herdr-streams.ts src/herdr-transport.ts tests/v1 workflows scripts package.json tsconfig.json tsconfig.v1.json tsconfig.tests.json .github/workflows",
-    "lint": "oxlint src/v1 src/herdr-sdk.ts src/herdr-streams.ts src/herdr-transport.ts tests/v1 scripts/bundle.mjs scripts/package-smoke-v1.mjs scripts/release.mjs",
-    "prepack": "npm run check && npm run test && npm run build",
-    "release:prepare": "node scripts/release.mjs prepare",
-    "release:check": "node scripts/release.mjs check",
-    "sdk:generate": "node scripts/generate-herdr-sdk.mjs"
+    "check": "tsc --noEmit -p tsconfig.json && npm run lint",
+    "test": "node scripts/test.mjs",
+    "effect:diagnostics": "effect-tsgo diagnostics --project tsconfig.json --format text",
+    "effect:diagnostics:json": "effect-tsgo diagnostics --project tsconfig.json --format json --list-files",
+    "toolchain:check": "node scripts/diagnostics-smoke.mjs",
+    "lint": "oxlint src tests scripts",
+    "lint:anti-slop-smoke": "node scripts/anti-slop-smoke.mjs",
+    "prepare": "effect-tsgo patch --typescript --no-oxlint",
+    "build": "node scripts/build.mjs",
+    "package:smoke": "node scripts/package-smoke.mjs",
+    "boundaries:check": "node scripts/verify-boundaries.mjs"
   },
   "dependencies": {
-    "zod": "^3.25.0"
+    "effect": "4.0.0-rc.112"
   },
   "devDependencies": {
+    "@effect/tsgo": "0.43.0",
     "@oxlint/plugins": "1.82.0",
-    "@types/node": "^24.10.0",
-    "esbuild": "^0.28.2",
+    "@types/node": "24.13.4",
+    "esbuild": "0.28.2",
     "oxlint": "1.82.0",
-    "oxlint-tsgolint": "7.0.2001",
-    "prettier": "^3.9.6",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "zod": "3.25.76"
   },
-  "description": "A local, evidence-backed workflow runtime for coding agents.",
   "bin": {
     "marionette": "dist/v1/cli.js"
   },
   "types": "./dist/v1/index.d.ts",
-  "files": [
-    "dist/v1/**",
-    "dist/herdr-sdk.js",
-    "dist/herdr-sdk.d.ts",
-    "dist/herdr-protocol.js",
-    "dist/herdr-protocol.d.ts",
-    "dist/herdr-streams.js",
-    "dist/herdr-streams.d.ts",
-    "dist/herdr-transport.js",
-    "dist/herdr-transport.d.ts",
-    "workflows/**",
-    "skills/**",
-    "vendor/herdr-0.9.0/LICENSE",
-    "LICENSE",
-    "THIRD_PARTY_NOTICES.md",
-    "README.md",
-    "documentation/v1/adapters.md"
-  ],
-  "publishConfig": {
-    "access": "public"
-  },
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/theaileverage/marionette.git"
-  },
-  "homepage": "https://github.com/theaileverage/marionette#readme",
-  "bugs": {
-    "url": "https://github.com/theaileverage/marionette/issues"
-  },
   "exports": {
     ".": {
       "types": "./dist/v1/index.d.ts",
@@ -72,6 +44,18 @@
     "./herdr-sdk": {
       "types": "./dist/herdr-sdk.d.ts",
       "import": "./dist/herdr-sdk.js"
+    },
+    "./herdr-protocol": {
+      "types": "./dist/herdr-protocol.d.ts",
+      "import": "./dist/herdr-protocol.js"
+    },
+    "./herdr-streams": {
+      "types": "./dist/herdr-streams.d.ts",
+      "import": "./dist/herdr-streams.js"
+    },
+    "./herdr-transport": {
+      "types": "./dist/herdr-transport.d.ts",
+      "import": "./dist/herdr-transport.js"
     },
     "./adapters": {
       "types": "./dist/v1/adapters.d.ts",
@@ -86,5 +70,15 @@
       "import": "./dist/v1/adapters/codex-app-server.js"
     }
   },
-  "packageManager": "bun@1.3.14"
+  "files": [
+    "dist/**",
+    "workflows/**",
+    "skills/**",
+    "vendor/herdr-0.9.0/LICENSE",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "README.md",
+    "docs/diagnostics.md",
+    "docs/extensions.md"
+  ]
 }

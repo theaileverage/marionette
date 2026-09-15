@@ -9,6 +9,7 @@ import { ProjectBindingSchema } from '../../src/v1/model.js';
 import { SqlQueryService } from '../../src/v1/sql.js';
 import { executeContributionRequest, executeSqlRequest } from '../../src/v1/sql-worker.js';
 import { Store } from '../../src/v1/store.js';
+import { Schema } from 'effect';
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'marionette-v1-sql-'));
@@ -23,11 +24,13 @@ function fixture() {
       SELECT id,body FROM board_posts WHERE project_id=marionette_project_id();
   `);
   db.close();
+
   return { root, databasePath };
 }
 
 test('SQL reads are constrained to public project-scoped views', () => {
   const f = fixture();
+
   try {
     assert.deepEqual(
       executeSqlRequest({
@@ -71,6 +74,7 @@ test('SQL reads are constrained to public project-scoped views', () => {
 
 test('SQL authorizer rejects mutations, pragma, attach and extension loading', () => {
   const f = fixture();
+
   try {
     for (const sql of [
       "INSERT INTO board_posts VALUES ('project-a','a2','attack')",
@@ -91,7 +95,9 @@ test('SQL authorizer rejects mutations, pragma, attach and extension loading', (
         /not authorized|prohibited/,
       );
     }
+
     const reopened = new DatabaseSync(f.databasePath, { readOnly: true });
+
     try {
       assert.deepEqual(
         reopened
@@ -125,6 +131,7 @@ test('board contribution SQL can insert one validated in-memory contribution onl
       replacesPostId: null,
     },
   );
+
   for (const sql of [
     "INSERT INTO board_contributions(body,kind) VALUES ('one','finding'); INSERT INTO board_contributions(body,kind) VALUES ('two','finding')",
     "INSERT INTO board_contributions(body,kind) VALUES ('one','finding'),('two','finding')",
@@ -142,6 +149,7 @@ test('board contribution SQL can insert one validated in-memory contribution onl
 
 test('SQL row and byte bounds stop iteration with truncation', () => {
   const f = fixture();
+
   try {
     const byRows = executeSqlRequest({
       databasePath: f.databasePath,
@@ -151,8 +159,10 @@ test('SQL row and byte bounds stop iteration with truncation', () => {
       maxRows: 1,
       maxBytes: 1000,
     });
+
     assert.equal(byRows.rows.length, 1);
     assert.equal(byRows.truncated, false);
+
     const byBytes = executeSqlRequest({
       databasePath: f.databasePath,
       projectId: 'project-a',
@@ -161,6 +171,7 @@ test('SQL row and byte bounds stop iteration with truncation', () => {
       maxRows: 10,
       maxBytes: 5,
     });
+
     assert.equal(byBytes.rows.length, 0);
     assert.equal(byBytes.truncated, true);
   } finally {
@@ -170,22 +181,26 @@ test('SQL row and byte bounds stop iteration with truncation', () => {
 
 test('SQL query timeout kills the isolated Node worker', async () => {
   const f = fixture();
+
   const store = Store.open({
     databasePath: join(f.root, 'board.sqlite'),
-    project: ProjectBindingSchema.parse({
+    project: Schema.decodeUnknownSync(ProjectBindingSchema)({
       id: 'project-a',
       hostId: 'host-a',
       repositoryRoot: f.root,
       stateDirectory: f.root,
     }),
   });
+
   try {
     const board = Board.create({ store });
+
     const thread = board.createThread({
       title: 'SQL visible post',
       author: { kind: 'system', id: 'controller' },
       idempotencyKey: 'sql-thread',
     });
+
     board.post({
       threadId: thread.id,
       author: { kind: 'system', id: 'controller' },
@@ -193,17 +208,21 @@ test('SQL query timeout kills the isolated Node worker', async () => {
       kind: 'finding',
       idempotencyKey: 'sql-post',
     });
+
     const service = new SqlQueryService({
       board,
       workerPath: join(process.cwd(), 'src/v1/sql-worker.ts'),
     });
+
     const complete = await service.read({
       sql: 'SELECT body FROM public_board_posts',
       timeoutMs: 2_000,
       maxRows: 10,
       maxBytes: 1000,
     });
+
     assert.deepEqual(complete.rows, [{ body: 'visible' }]);
+
     const contribution = await service.contribute({
       threadId: thread.id,
       author: { kind: 'system', id: 'controller' },
@@ -211,6 +230,7 @@ test('SQL query timeout kills the isolated Node worker', async () => {
       idempotencyKey: 'contribution-1',
       sql: "INSERT INTO board_contributions(body,kind,references_json) VALUES ('from contribution','finding','[]')",
     });
+
     assert.equal(contribution.body, 'from contribution');
     assert.equal(
       (

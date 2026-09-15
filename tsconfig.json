@@ -1,3 +1,25 @@
 {
-  "extends": "./tsconfig.v1.json"
+  "$schema": "./node_modules/@effect/tsgo/schema.json",
+  "compilerOptions": {
+    "target": "ES2024",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "noEmit": true,
+    "plugins": [
+      {
+        "name": "@effect/language-service"
+      }
+    ]
+  },
+  "include": ["src/**/*.ts", "tests/v1/**/*.ts", "tests/**/*.test.ts"],
+  "exclude": [
+    "tests/cli-contract-parity.test.ts",
+    "tests/database-parity.test.ts",
+    "tests/model-parity.test.ts",
+    "tests/packages-context-parity.test.ts"
+  ]
 }

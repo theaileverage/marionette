@@ -18,24 +18,34 @@ import {
   type RequestOptions,
   type StreamOptions,
 } from './herdr-transport.js';
+
 export * from './herdr-protocol.js';
+
 export { HerdrEventStream, HerdrGraphicsStream } from './herdr-streams.js';
+
 export type {
   GraphicsFileFrame,
   GraphicsFrame,
   GraphicsFrameAck,
   GraphicsStreamParams,
 } from './herdr-streams.js';
+
 export { HerdrError } from './herdr-transport.js';
+
 export type { RequestOptions, StreamOptions } from './herdr-transport.js';
 
 export type Pane = ResponseTypes.PaneInfo;
+
 export type Agent = ResponseTypes.AgentInfo;
+
 export type PaneLayout = ResponseTypes.PaneLayoutSnapshot;
+
 export type RequestMethod = Exclude<HerdrMethod, 'events.subscribe'>;
+
 export type RequestArgs<M extends RequestMethod> = {} extends HerdrParams[M]
   ? [params?: HerdrParams[M], options?: RequestOptions]
   : [params: HerdrParams[M], options?: RequestOptions];
+
 export type HerdrApi = {
   readonly [M in RequestMethod]: (...args: RequestArgs<M>) => Promise<HerdrResult>;
 } & {
@@ -52,20 +62,25 @@ export type HerdrApi = {
 /** Respect server waits; the transport must not time out an otherwise valid long wait. */
 function deadline(method: string, params: any): number | null {
   if (method === 'agent.start') return (params.timeout_ms ?? 30000) + 5000;
+
   const wait =
     method === 'agent.prompt'
       ? params.wait
       : ['agent.wait', 'events.wait', 'pane.wait_for_output'].includes(method)
         ? params
         : undefined;
+
   if (wait) return wait.timeout_ms == null ? null : wait.timeout_ms + 5000;
+
   return 10000;
 }
+
 export interface LaunchOptions {
   cwd: string;
   env?: Record<string, string>;
   focus?: boolean;
 }
+
 export type WaitOptions = {
   timeout_ms: number;
   until?: ('idle' | 'working' | 'blocked' | 'done' | 'unknown')[];
@@ -79,6 +94,7 @@ export class HerdrClient {
   static fromEnv(env: NodeJS.ProcessEnv = process.env) {
     if (env.HERDR_ENV !== '1' || !env.HERDR_SOCKET_PATH)
       throw new Error('Run inside Herdr or supply an explicitly selected socket path');
+
     return new HerdrClient(env.HERDR_SOCKET_PATH);
   }
   /** Escape hatch for future one-shot methods. Streams require their dedicated transports. */
@@ -92,17 +108,20 @@ export class HerdrClient {
       return Promise.reject(
         new TypeError('Use subscribe(), graphicsStream(), or api for a streaming method'),
       );
+
     return socketRequest<T>(this.socketPath, method, params, { timeoutMs, signal });
   }
   /** All schema-defined one-shot methods with exact typed parameter objects. */
   request<M extends RequestMethod>(method: M, ...args: RequestArgs<M>): Promise<HerdrResult> {
     const [params = {}, options = {}] = args;
+
     if (!HERDR_METHODS.some((known) => known === method) || String(method) === 'events.subscribe')
       return Promise.reject(
         new TypeError(
           'Unknown one-shot method; use call() for extensions or subscribe() for events',
         ),
       );
+
     return socketRequest<HerdrResult>(this.socketPath, method, params, {
       ...options,
       timeoutMs: options.timeoutMs === undefined ? deadline(method, params) : options.timeoutMs,
@@ -188,7 +207,9 @@ export class HerdrClient {
     get: (target: string) => this.call<{ agent: Agent }>('agent.get', { target }),
     prompt: (target: string, text: string, wait?: WaitOptions) => {
       const params: HerdrParams['agent.prompt'] = { target, text };
+
       if (wait) params.wait = wait;
+
       return this.call('agent.prompt', params, wait ? wait.timeout_ms + 5000 : 10000);
     },
     wait: (target: string, options: WaitOptions) =>

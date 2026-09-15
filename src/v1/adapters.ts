@@ -1,299 +1,286 @@
-import { z } from 'zod';
-import { describeSchema, type SchemaDescription, type JsonValue } from './schema-description.js';
+import { Predicate, Context, Effect, Layer, Schema } from 'effect';
 
 export const adapterApiVersion = 1 as const;
-export const adapterReferenceSchema = z
-  .object({
-    id: z.string().regex(/^[a-z][a-z0-9.-]{0,127}$/),
-    version: z.number().int().positive(),
-  })
-  .strict();
-export type AdapterReference = z.infer<typeof adapterReferenceSchema>;
-export type AdapterValue = JsonValue;
-const objectInputSchema = z.object({}).passthrough();
-const plainObjectSchema = z.custom<object>((value) => {
-  if (!objectInputSchema.safeParse(value).success) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-});
-const plainArraySchema = z.custom<object>(
-  (value) => Array.isArray(value) && Object.getPrototypeOf(value) === Array.prototype,
+
+const nonEmpty = Schema.String.check(Schema.isMinLength(1));
+
+const positiveInteger = Schema.Finite.check(
+  Schema.makeFilter((value) => Number.isInteger(value) && value > 0, { expected: 'a positive integer' }),
 );
-export const adapterValueSchema: z.ZodType<AdapterValue, z.ZodTypeDef, unknown> = z.lazy(() =>
-  z.union([
-    z.string(),
-    z.number().finite(),
-    z.boolean(),
-    z.null(),
-    plainArraySchema.pipe(z.array(adapterValueSchema)),
-    plainObjectSchema
-      .pipe(z.record(adapterValueSchema.optional()))
-      .transform((value) =>
-        Object.fromEntries(
-          Object.entries(value).flatMap(([key, entry]): [string, AdapterValue][] =>
-            entry === undefined ? [] : [[key, entry]],
-          ),
-        ),
-      ),
-  ]),
+
+export const adapterReferenceSchema = Schema.Struct({
+  id: Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9.-]{0,127}$/)),
+  version: positiveInteger,
+});
+
+export type AdapterReference = typeof adapterReferenceSchema.Type;
+
+export type AdapterValue = string | number | boolean | null | ReadonlyArray<AdapterValue> | { readonly [key: string]: AdapterValue };
+
+function isAdapterValue(value: unknown, seen = new Set<object>()): value is AdapterValue {
+  if (value === null || Predicate.isString(value) || Predicate.isBoolean(value)) return true;
+
+  if (Predicate.isNumber(value)) return Number.isFinite(value);
+
+  if (!(Predicate.isObjectOrArray(value) || value === null) || seen.has(value)) return false;
+  seen.add(value);
+
+  if (Array.isArray(value))
+    return Object.getPrototypeOf(value) === Array.prototype && value.every((entry) => isAdapterValue(entry, seen));
+  const prototype = Object.getPrototypeOf(value);
+
+  return (prototype === Object.prototype || prototype === null) &&
+    Object.values(value).every((entry) => entry !== undefined && isAdapterValue(entry, seen));
+}
+
+function normalizeAdapterValue<Value>(value: Value, seen = new Set<object>()): AdapterValue {
+  if (value === null) return null;
+
+  if (Predicate.isString(value) || Predicate.isBoolean(value)) return value;
+
+  if (Predicate.isNumber(value) && Number.isFinite(value)) return value;
+
+  if (!(Predicate.isObjectOrArray(value) || value === null) || seen.has(value)) throw new Error('not a finite JSON value');
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    if (Object.getPrototypeOf(value) !== Array.prototype) throw new Error('not a plain array');
+    const normalized = value.map((entry) => normalizeAdapterValue(entry, seen));
+    seen.delete(value);
+
+    return normalized;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+
+  if (prototype !== Object.prototype && prototype !== null) throw new Error('not a plain object');
+  const normalized: Record<string, AdapterValue> = {};
+
+  for (const [key, entry] of Object.entries(value)) if (entry !== undefined) normalized[key] = normalizeAdapterValue(entry, seen);
+  seen.delete(value);
+
+  return normalized;
+}
+
+export const adapterValueSchema = Schema.Unknown.check(
+  Schema.makeFilter((value) => isAdapterValue(value), { expected: 'a finite JSON value' }),
 );
 
 export type AdapterCallOptions = { readonly signal?: AbortSignal };
-export type AdapterEffect = 'read' | 'mutation';
-export type AdapterFailureCode =
-  | 'invalid-reference'
-  | 'duplicate-capability'
-  | 'duplicate-adapter'
-  | 'adapter-not-found'
-  | 'unsupported-capability'
-  | 'invalid-input'
-  | 'invalid-output'
-  | 'aborted'
-  | 'execution-failed';
 
-export class AdapterError extends Error {
-  constructor(
-    readonly code: AdapterFailureCode,
-    message: string,
-    readonly phase: 'before-invocation' | 'after-invocation',
-    readonly fields: readonly string[] = [],
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = 'AdapterError';
-  }
+export type AdapterEffect = 'read' | 'mutation';
+
+export type AdapterFailureCode = 'invalid-reference' | 'duplicate-capability' | 'duplicate-adapter' | 'adapter-not-found' | 'unsupported-capability' | 'invalid-input' | 'invalid-output' | 'aborted' | 'execution-failed';
+
+export class AdapterError extends Schema.TaggedError<AdapterError>()('AdapterError', {
+  code: Schema.Literals(['invalid-reference', 'duplicate-capability', 'duplicate-adapter', 'adapter-not-found', 'unsupported-capability', 'invalid-input', 'invalid-output', 'aborted', 'execution-failed']),
+  message: nonEmpty,
+  phase: Schema.Literals(['before-invocation', 'after-invocation']),
+  fields: Schema.Array(Schema.String),
+  cause: Schema.optional(Schema.Defect()),
+}) {}
+
+type AdapterFailureInput = {
+  code: AdapterFailureCode;
+  message: string;
+  phase: 'before-invocation' | 'after-invocation';
+  fields: ReadonlyArray<string>;
+  cause?: unknown;
+};
+
+const failure = (code: AdapterFailureCode, message: string, phase: 'before-invocation' | 'after-invocation', fields: ReadonlyArray<string> = [], cause?: unknown) => {
+  const input: AdapterFailureInput = { code, message, phase, fields };
+
+  if (cause !== undefined) input.cause = cause;
+
+  return new AdapterError(input);
+};
+
+function issueFields(cause: unknown): ReadonlyArray<string> {
+  const fields = new Set<string>();
+
+  const visit = <Value>(value: Value): void => {
+    if (!Predicate.isObject(value)) return;
+    const issue = value;
+
+    if (Array.isArray(issue.path)) {
+      for (const part of issue.path) if (Predicate.isString(part)) fields.add(part);
+    }
+
+    visit(issue.issue);
+
+    if (Array.isArray(issue.issues)) for (const child of issue.issues) visit(child);
+  };
+
+  visit(Predicate.isObject(cause) ? cause.issue : undefined);
+
+  return [...fields];
 }
 
-function parseReference(reference: AdapterReference): AdapterReference {
-  const parsed = adapterReferenceSchema.safeParse(reference);
-  if (!parsed.success)
-    throw new AdapterError(
-      'invalid-reference',
-      'An adapter needs a valid id and positive contract version.',
-      'before-invocation',
-    );
-  return parsed.data;
+function parseReference<Reference>(reference: Reference): AdapterReference {
+  try {
+    return Schema.decodeUnknownSync(adapterReferenceSchema, { onExcessProperty: 'error' })(reference);
+  } catch (cause) {
+    throw failure('invalid-reference', 'An adapter needs a valid id and positive contract version.', 'before-invocation', [], cause);
+  }
 }
 
 function adapterPayload<Value>(value: Value, direction: 'input' | 'output'): AdapterValue {
   try {
-    return adapterValueSchema.parse(value);
-  } catch {
-    throw new AdapterError(
-      direction === 'input' ? 'invalid-input' : 'invalid-output',
-      `Adapter ${direction} must be JSON serializable.`,
-      direction === 'input' ? 'before-invocation' : 'after-invocation',
-    );
+    return normalizeAdapterValue(value);
+  } catch (cause) {
+    throw failure(direction === 'input' ? 'invalid-input' : 'invalid-output', `Adapter ${direction} must be JSON serializable.`, direction === 'input' ? 'before-invocation' : 'after-invocation', [], cause);
   }
 }
 
-async function validateCapability<Schema extends z.ZodTypeAny, Value>(
-  schema: Schema,
-  value: Value,
-  direction: 'input' | 'output',
-): Promise<z.output<Schema>> {
-  const phase = direction === 'input' ? 'before-invocation' : 'after-invocation';
-  const code = direction === 'input' ? 'invalid-input' : 'invalid-output';
+async function validateCapability<S extends Schema.ConstraintDecoder<unknown, never>, Value>(schema: S, value: Value, direction: 'input' | 'output'): Promise<S['Type']> {
   try {
-    const result = await schema.safeParseAsync(value);
-    if (result.success) return result.data;
-    throw new AdapterError(
-      code,
-      `Adapter ${direction} does not match its capability contract.`,
-      phase,
-      result.error.issues.map((issue) => issue.path.join('.')),
-    );
-  } catch (error) {
-    if (error instanceof AdapterError) throw error;
-    throw new AdapterError(code, `Adapter ${direction} validation failed.`, phase);
+    return await Schema.decodeUnknownPromise(schema, { onExcessProperty: 'error', errors: 'all' })(value);
+  } catch (cause) {
+    throw failure(direction === 'input' ? 'invalid-input' : 'invalid-output', `Adapter ${direction} does not match its capability contract.`, direction === 'input' ? 'before-invocation' : 'after-invocation', issueFields(cause), cause);
   }
 }
 
-export type AdapterCapability<
-  Input extends z.ZodTypeAny = z.ZodTypeAny,
-  Output extends z.ZodTypeAny = z.ZodTypeAny,
-> = {
+export type AdapterCapability<Input extends Schema.ConstraintDecoder<unknown, never> = Schema.ConstraintDecoder<unknown, never>, Output extends Schema.ConstraintDecoder<unknown, never> = Schema.ConstraintDecoder<unknown, never>> = {
   readonly input: Input;
   readonly output: Output;
   readonly effect: AdapterEffect;
   readonly summary: string;
   readonly execute: (input: AdapterValue, options: AdapterCallOptions) => Promise<AdapterValue>;
+  readonly executeEffect: (input: AdapterValue, options: AdapterCallOptions) => Effect.Effect<AdapterValue, AdapterError>;
 };
+
 export type AdapterCapabilities = Readonly<Record<string, AdapterCapability>>;
 
-export function defineCapability<
-  Input extends z.ZodTypeAny,
-  Output extends z.ZodTypeAny,
->(definition: {
-  input: Input;
-  output: Output;
-  effect: AdapterEffect;
-  summary: string;
-  execute: (
-    input: z.output<Input>,
-    options: AdapterCallOptions,
-  ) => z.input<Output> | Promise<z.input<Output>>;
+export function defineCapability<Input extends Schema.ConstraintDecoder<unknown, never>, Output extends Schema.ConstraintDecoder<unknown, never>>(definition: {
+  readonly input: Input;
+  readonly output: Output;
+  readonly effect: AdapterEffect;
+  readonly summary: string;
+  readonly execute: (input: Input['Type'], options: AdapterCallOptions) => Output['Type'] | Promise<Output['Type']>;
+  readonly executeEffect?: (input: Input['Type'], options: AdapterCallOptions) => Effect.Effect<Output['Type'], unknown, never>;
 }): AdapterCapability<Input, Output> {
-  return Object.freeze({
-    input: definition.input,
-    output: definition.output,
-    effect: definition.effect,
-    summary: definition.summary,
-    async execute(input, options) {
-      if (options.signal?.aborted)
-        throw new AdapterError(
-          'aborted',
-          'Adapter invocation was cancelled before execution.',
-          'before-invocation',
-        );
-      const parsed = await validateCapability(definition.input, input, 'input');
-      if (options.signal?.aborted)
-        throw new AdapterError(
-          'aborted',
-          'Adapter invocation was cancelled before execution.',
-          'before-invocation',
-        );
-      const result = await definition.execute(parsed, options);
-      const output = await validateCapability(definition.output, result, 'output');
-      return adapterPayload(output, 'output');
-    },
+  const executeEffect = Effect.fn('AdapterCapability.execute')(function* (input: AdapterValue, options: AdapterCallOptions) {
+    if (options.signal?.aborted) return yield* failure('aborted', 'Adapter invocation was cancelled before execution.', 'before-invocation');
+
+    const parsed = yield* Effect.tryPromise({
+      try: () => validateCapability(definition.input, input, 'input'),
+      catch: (cause) => cause instanceof AdapterError ? cause : failure('invalid-input', 'Adapter input does not match its capability contract.', 'before-invocation', [], cause),
+    });
+
+    if (options.signal?.aborted) return yield* failure('aborted', 'Adapter invocation was cancelled before execution.', 'before-invocation');
+
+    const result = definition.executeEffect
+      ? yield* definition.executeEffect(parsed, options).pipe(Effect.mapError((cause) => cause instanceof AdapterError ? cause : failure('execution-failed', 'Adapter execution failed. Inspect the outcome before retrying a mutation.', 'after-invocation', [], cause)))
+      : yield* Effect.tryPromise({
+        try: () => Promise.resolve(definition.execute(parsed, options)),
+        catch: (cause) => cause instanceof AdapterError ? cause : failure('execution-failed', 'Adapter execution failed. Inspect the outcome before retrying a mutation.', 'after-invocation', [], cause),
+      });
+
+    const validated = yield* Effect.tryPromise({
+      try: () => validateCapability(definition.output, result, 'output'),
+      catch: (cause) => cause instanceof AdapterError ? cause : failure('invalid-output', 'Adapter output does not match its capability contract.', 'after-invocation', [], cause),
+    });
+
+    return yield* Effect.try({
+      try: () => adapterPayload(validated, 'output'),
+      catch: (cause) => cause instanceof AdapterError ? cause : failure('invalid-output', 'Adapter output must be JSON serializable.', 'after-invocation', [], cause),
+    });
   });
+
+  const executePromise = (input: AdapterValue, options: AdapterCallOptions) => Effect.runPromise(executeEffect(input, options));
+
+  return Object.freeze({ ...definition, execute: executePromise, executeEffect });
 }
 
-export type AdapterDescription = {
-  readonly apiVersion: 1;
-  readonly adapter: AdapterReference;
-  readonly capabilities: readonly {
-    readonly name: string;
-    readonly summary: string;
-    readonly effect: AdapterEffect;
-    readonly input: SchemaDescription;
-    readonly output: SchemaDescription;
-  }[];
-};
+export type AdapterDescription = { readonly apiVersion: 1; readonly adapter: AdapterReference; readonly capabilities: ReadonlyArray<{ readonly name: string; readonly summary: string; readonly effect: AdapterEffect; readonly input: unknown; readonly output: unknown }> };
 
-export type AdapterInput<Capability extends AdapterCapability> = z.input<Capability['input']>;
-export type AdapterOutput<Capability extends AdapterCapability> = z.output<Capability['output']>;
+export type AdapterInput<C extends AdapterCapability> = C['input']['Type'];
 
-export interface AdapterHandle {
-  readonly reference: AdapterReference;
-  describe(): AdapterDescription;
-  dispatch(name: string, input: AdapterValue, options?: AdapterCallOptions): Promise<AdapterValue>;
-}
+export type AdapterOutput<C extends AdapterCapability> = C['output']['Type'];
 
-export interface Adapter<Capabilities extends AdapterCapabilities> extends AdapterHandle {
-  invoke<Name extends keyof Capabilities & string>(
-    name: Name,
-    input: AdapterInput<Capabilities[Name]>,
-    options?: AdapterCallOptions,
-  ): Promise<AdapterOutput<Capabilities[Name]>>;
-}
+export interface AdapterHandle { readonly reference: AdapterReference; describe(): AdapterDescription; dispatch(name: string, input: AdapterValue, options?: AdapterCallOptions): Promise<AdapterValue>; dispatchEffect(name: string, input: AdapterValue, options?: AdapterCallOptions): Effect.Effect<AdapterValue, AdapterError> }
 
-type CapabilityNames<Module> = Module extends AdapterCapabilities ? keyof Module : never;
-type CapabilityFor<Module, Name extends PropertyKey> =
-  Module extends Record<Name, infer Capability> ? Capability : never;
-export type ComposedCapabilities<Modules extends readonly AdapterCapabilities[]> = {
-  readonly [Name in CapabilityNames<Modules[number]> & string]: Extract<
-    CapabilityFor<Modules[number], Name>,
-    AdapterCapability
-  >;
-};
+export interface Adapter<C extends AdapterCapabilities> extends AdapterHandle { invoke<Name extends keyof C & string>(name: Name, input: AdapterInput<C[Name]>, options?: AdapterCallOptions): Promise<AdapterOutput<C[Name]>>; invokeEffect<Name extends keyof C & string>(name: Name, input: AdapterInput<C[Name]>, options?: AdapterCallOptions): Effect.Effect<AdapterOutput<C[Name]>, AdapterError> }
 
-export function composeAdapter<const Modules extends readonly AdapterCapabilities[]>(
-  reference: AdapterReference,
-  ...modules: Modules
-): Adapter<ComposedCapabilities<Modules>> {
+type CapabilityNames<M> = M extends AdapterCapabilities ? keyof M : never;
+
+type CapabilityFor<M, N extends PropertyKey> = M extends Record<N, infer C> ? C : never;
+
+export type ComposedCapabilities<M extends ReadonlyArray<AdapterCapabilities>> = { readonly [N in CapabilityNames<M[number]> & string]: Extract<CapabilityFor<M[number], N>, AdapterCapability> };
+
+export function composeAdapter<const M extends ReadonlyArray<AdapterCapabilities>>(reference: AdapterReference, ...modules: M): Adapter<ComposedCapabilities<M>> {
   const validated = parseReference(reference);
   const entries = modules.flatMap((module) => Object.entries(module));
   const names = new Set<string>();
+
   for (const [name] of entries) {
-    if (!/^[a-z][a-z0-9.-]{0,127}$/.test(name))
-      throw new AdapterError(
-        'unsupported-capability',
-        'Capability names must use lowercase letters, numbers, dots, or hyphens.',
-        'before-invocation',
-      );
-    if (names.has(name))
-      throw new AdapterError(
-        'duplicate-capability',
-        'Adapter modules cannot override the same capability.',
-        'before-invocation',
-        [name],
-      );
+    if (!/^[a-z][a-z0-9.-]{0,127}$/.test(name)) throw failure('unsupported-capability', 'Capability names must use lowercase letters, numbers, dots, or hyphens.', 'before-invocation');
+
+    if (names.has(name)) throw failure('duplicate-capability', 'Adapter modules cannot override the same capability.', 'before-invocation', [name]);
     names.add(name);
   }
+
   const capabilities = new Map(entries);
   const frozenReference = Object.freeze(validated);
-  async function dispatch(name: string, input: AdapterValue, options: AdapterCallOptions = {}) {
-    const capability = capabilities.get(name);
-    if (!capability)
-      throw new AdapterError(
-        'unsupported-capability',
-        'This adapter does not implement the requested capability.',
-        'before-invocation',
-      );
-    const value = adapterPayload(input, 'input');
-    try {
-      return await capability.execute(value, options);
-    } catch (error) {
-      if (error instanceof AdapterError) throw error;
-      throw new AdapterError(
-        'execution-failed',
-        'Adapter execution failed. Inspect the outcome before retrying a mutation.',
-        'after-invocation',
-        [],
-        { cause: error },
-      );
-    }
+
+  function dispatch<Input>(name: string, input: Input, options: AdapterCallOptions = {}) {
+    return Effect.runPromise(dispatchEffect(name, input, options));
   }
-  const adapter: Adapter<ComposedCapabilities<Modules>> = {
+
+  const dispatchEffect = Effect.fn('Adapter.dispatch')(function* <Input>(name: string, input: Input, options: AdapterCallOptions = {}) {
+    const capability = capabilities.get(name);
+
+    if (!capability) return yield* failure('unsupported-capability', 'This adapter does not implement the requested capability.', 'before-invocation');
+
+    const payload = yield* Effect.try({
+      try: () => adapterPayload(input, 'input'),
+      catch: (cause) => cause instanceof AdapterError ? cause : failure('invalid-input', 'Adapter input must be JSON serializable.', 'before-invocation', [], cause),
+    });
+
+    return yield* capability.executeEffect(payload, options);
+  });
+
+  const adapter: Adapter<ComposedCapabilities<M>> = {
     reference: frozenReference,
-    describe: () => ({
-      apiVersion: adapterApiVersion,
-      adapter: frozenReference,
-      capabilities: entries.map(([name, capability]) => ({
-        name,
-        summary: capability.summary,
-        effect: capability.effect,
-        input: describeSchema(capability.input),
-        output: describeSchema(capability.output),
-      })),
-    }),
-    async invoke(name, input, options = {}) {
-      return dispatch(name, input, options);
-    },
+    describe: () => ({ apiVersion: adapterApiVersion, adapter: frozenReference, capabilities: entries.map(([name, capability]) => ({ name, summary: capability.summary, effect: capability.effect, input: Schema.toJsonSchemaDocument(capability.input).schema, output: Schema.toJsonSchemaDocument(capability.output).schema })) }),
+    // SAFETY: The selected capability validates its output schema before dispatch returns the mapped output type.
+    invoke: async (name, input, options = {}) => dispatch(name, input, options) as Promise<AdapterOutput<ComposedCapabilities<M>[typeof name]>>,
+    // SAFETY: Effect dispatch uses the same validated capability and preserves its declared output type.
+    invokeEffect: (name, input, options = {}) => dispatchEffect(name, input, options) as Effect.Effect<AdapterOutput<ComposedCapabilities<M>[typeof name]>, AdapterError>,
     dispatch,
+    dispatchEffect,
   };
+
   return Object.freeze(adapter);
 }
 
 export class AdapterRegistry {
   readonly #adapters = new Map<string, AdapterHandle>();
-  constructor(adapters: readonly AdapterHandle[]) {
+  constructor(adapters: ReadonlyArray<AdapterHandle>) {
     for (const adapter of adapters) {
       const reference = parseReference(adapter.reference);
       const key = JSON.stringify(reference);
-      if (this.#adapters.has(key))
-        throw new AdapterError(
-          'duplicate-adapter',
-          'An adapter id and version can be registered only once.',
-          'before-invocation',
-        );
+
+      if (this.#adapters.has(key)) throw failure('duplicate-adapter', 'An adapter id and version can be registered only once.', 'before-invocation');
       this.#adapters.set(key, adapter);
     }
   }
   get(reference: AdapterReference): AdapterHandle {
     const parsed = parseReference(reference);
     const adapter = this.#adapters.get(JSON.stringify(parsed));
-    if (!adapter)
-      throw new AdapterError(
-        'adapter-not-found',
-        'The exact adapter id and version is not registered.',
-        'before-invocation',
-      );
+
+    if (!adapter) throw failure('adapter-not-found', 'The exact adapter id and version is not registered.', 'before-invocation');
+
     return adapter;
   }
-  describe(): readonly AdapterDescription[] {
-    return [...this.#adapters.values()].map((adapter) => adapter.describe());
-  }
+  describe(): ReadonlyArray<AdapterDescription> { return [...this.#adapters.values()].map((adapter) => adapter.describe()); }
 }
+
+export interface AdapterInvocationService { readonly invoke: (adapter: AdapterHandle, capability: string, input: AdapterValue, options?: AdapterCallOptions) => Effect.Effect<AdapterValue, AdapterError> }
+
+export class AdapterInvocation extends Context.Service<AdapterInvocation, AdapterInvocationService>()('@marionette/v1/AdapterInvocation') {}
+
+export const adapterInvocationLayer = Layer.succeed(AdapterInvocation, AdapterInvocation.of({
+  invoke: Effect.fn('AdapterInvocation.invoke')((adapter, capability, input, options) => adapter.dispatchEffect(capability, input, options)),
+}));

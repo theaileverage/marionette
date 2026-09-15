@@ -1,25 +1,53 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
-import { z } from 'zod';
+import { Schema } from 'effect';
 import type { Store } from './store.js';
+import { TimestampSchema } from './model.js';
 
-const BoardAuthorSchema = z.object({
-  kind: z.enum(['session', 'system', 'user']),
-  id: z.string().min(1),
-  generation: z.number().int().positive().optional(),
+const integer = Schema.Finite.check(
+  Schema.makeFilter(Number.isInteger, { expected: 'an integer' }),
+);
+
+const positiveInteger = integer.check(Schema.isGreaterThan(0));
+
+const nonEmptyString = Schema.String.check(Schema.isMinLength(1));
+
+const uuid = Schema.String.check(Schema.isUUID());
+
+const nullable = <S extends Schema.ConstraintDecoder<unknown, never>>(schema: S) =>
+  Schema.NullOr(schema);
+
+const optional = <S extends Schema.ConstraintDecoder<unknown, never>>(schema: S) =>
+  Schema.optional(schema);
+
+function decode<S extends Schema.ConstraintDecoder<unknown, never>, Value>(
+  schema: S,
+  value: Value,
+): S['Type'] {
+  return Schema.decodeUnknownSync(schema)(value);
+}
+
+const BoardAuthorSchema = Schema.Struct({
+  kind: Schema.Literals(['session', 'system', 'user']),
+  id: nonEmptyString,
+  generation: optional(positiveInteger),
 });
-export type BoardAuthor = z.infer<typeof BoardAuthorSchema>;
 
-const BoardRecipientSchema = z.object({
-  kind: z.enum(['desktop', 'session', 'user']),
-  id: z.string().min(1),
-  generation: z.number().int().positive().optional(),
+export type BoardAuthor = typeof BoardAuthorSchema.Type;
+
+const BoardRecipientSchema = Schema.Struct({
+  kind: Schema.Literals(['desktop', 'session', 'user']),
+  id: nonEmptyString,
+  generation: optional(positiveInteger),
 });
-export type BoardRecipient = z.infer<typeof BoardRecipientSchema>;
 
-export const BoardReferenceSchema = z.object({ kind: z.string().min(1), value: z.string().min(1) });
-export type BoardReference = z.infer<typeof BoardReferenceSchema>;
-export const BoardPostKindSchema = z.enum([
+export type BoardRecipient = typeof BoardRecipientSchema.Type;
+
+export const BoardReferenceSchema = Schema.Struct({ kind: nonEmptyString, value: nonEmptyString });
+
+export type BoardReference = typeof BoardReferenceSchema.Type;
+
+export const BoardPostKindSchema = Schema.Literals([
   'question',
   'blocker',
   'result',
@@ -27,13 +55,20 @@ export const BoardPostKindSchema = z.enum([
   'decision',
   'progress',
 ]);
-export type BoardPostKind = z.infer<typeof BoardPostKindSchema>;
-export const BoardSubscriptionStartPolicySchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('latest') }).strict(),
-  z.object({ kind: z.literal('beginning') }).strict(),
-  z.object({ kind: z.literal('sequence'), sequence: z.number().int().nonnegative() }).strict(),
+
+export type BoardPostKind = typeof BoardPostKindSchema.Type;
+
+export const BoardSubscriptionStartPolicySchema = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal('latest') }),
+  Schema.Struct({ kind: Schema.Literal('beginning') }),
+  Schema.Struct({
+    kind: Schema.Literal('sequence'),
+    sequence: integer.check(Schema.isGreaterThanOrEqualTo(0)),
+  }),
 ]);
-export type BoardSubscriptionStartPolicy = z.infer<typeof BoardSubscriptionStartPolicySchema>;
+
+export type BoardSubscriptionStartPolicy = typeof BoardSubscriptionStartPolicySchema.Type;
+
 const DefaultSubscriptionEventKinds = [
   'question',
   'blocker',
@@ -78,102 +113,121 @@ export interface BoardOptions {
   readonly store: Store;
 }
 
-const ThreadCursorSchema = z.object({
-  kind: z.literal('threads'),
-  projectId: z.string().min(1),
-  createdAt: z.string().datetime(),
-  id: z.string().uuid(),
+const ThreadCursorSchema = Schema.Struct({
+  kind: Schema.Literal('threads'),
+  projectId: nonEmptyString,
+  createdAt: TimestampSchema,
+  id: uuid,
 });
-const PostCursorSchema = z.object({
-  kind: z.literal('posts'),
-  projectId: z.string().min(1),
-  threadId: z.string().uuid(),
-  sequence: z.number().int().positive(),
+
+const PostCursorSchema = Schema.Struct({
+  kind: Schema.Literal('posts'),
+  projectId: nonEmptyString,
+  threadId: uuid,
+  sequence: positiveInteger,
 });
-const SearchCursorSchema = z.object({
-  kind: z.literal('search'),
-  projectId: z.string().min(1),
-  query: z.string().min(1),
-  createdAt: z.string().datetime(),
-  id: z.string().uuid(),
+
+const SearchCursorSchema = Schema.Struct({
+  kind: Schema.Literal('search'),
+  projectId: nonEmptyString,
+  query: nonEmptyString,
+  createdAt: TimestampSchema,
+  id: uuid,
 });
-const InboxCursorSchema = z.object({
-  kind: z.literal('inbox'),
-  projectId: z.string().min(1),
-  recipientKind: z.enum(['desktop', 'session', 'user']),
-  recipientId: z.string().min(1),
-  recipientGeneration: z.number().int().nonnegative(),
-  createdAt: z.string().datetime(),
-  id: z.string().uuid(),
+
+const InboxCursorSchema = Schema.Struct({
+  kind: Schema.Literal('inbox'),
+  projectId: nonEmptyString,
+  recipientKind: Schema.Literals(['desktop', 'session', 'user']),
+  recipientId: nonEmptyString,
+  recipientGeneration: integer.check(Schema.isGreaterThanOrEqualTo(0)),
+  createdAt: TimestampSchema,
+  id: uuid,
 });
-const CursorSchema = z.discriminatedUnion('kind', [
+
+const CursorSchema = Schema.Union([
   ThreadCursorSchema,
   PostCursorSchema,
   SearchCursorSchema,
   InboxCursorSchema,
 ]);
-type Cursor = z.infer<typeof CursorSchema>;
 
-const AuthorRowSchema = z.object({
-  source_author_kind: z.enum(['session', 'system', 'user']),
-  source_author_id: z.string().min(1),
-  source_author_generation: z.number().int().positive().nullable(),
+type Cursor = typeof CursorSchema.Type;
+
+const authorRowFields = {
+  source_author_kind: Schema.Literals(['session', 'system', 'user']),
+  source_author_id: nonEmptyString,
+  source_author_generation: nullable(positiveInteger),
+};
+
+const AuthorRowSchema = Schema.Struct(authorRowFields);
+
+const ThreadRowSchema = Schema.Struct({
+  ...authorRowFields,
+  id: uuid,
+  title: nonEmptyString,
+  job_id: nullable(nonEmptyString),
+  created_at: TimestampSchema,
+  idempotency_key: nonEmptyString,
 });
-const ThreadRowSchema = AuthorRowSchema.extend({
-  id: z.string().uuid(),
-  title: z.string().min(1),
-  job_id: z.string().min(1).nullable(),
-  created_at: z.string().datetime(),
-  idempotency_key: z.string().min(1),
-});
-const PostRowSchema = AuthorRowSchema.extend({
-  id: z.string().uuid(),
-  thread_id: z.string().uuid(),
-  sequence: z.number().int().positive(),
-  body: z.string().min(1),
+
+const PostRowSchema = Schema.Struct({
+  ...authorRowFields,
+  id: uuid,
+  thread_id: uuid,
+  sequence: positiveInteger,
+  body: nonEmptyString,
   kind: BoardPostKindSchema,
-  reply_to_post_id: z.string().uuid().nullable(),
-  replaces_post_id: z.string().uuid().nullable(),
-  created_at: z.string().datetime(),
+  reply_to_post_id: nullable(uuid),
+  replaces_post_id: nullable(uuid),
+  created_at: TimestampSchema,
 });
-const ReferenceRowSchema = z.object({ ref_kind: z.string().min(1), ref_value: z.string().min(1) });
-const NextSequenceRowSchema = z.object({ sequence: z.number().int().positive() });
-const ThreadHeadRowSchema = z.object({
-  id: z.string().uuid(),
-  head: z.number().int().nonnegative(),
+
+const ReferenceRowSchema = Schema.Struct({ ref_kind: nonEmptyString, ref_value: nonEmptyString });
+
+const NextSequenceRowSchema = Schema.Struct({ sequence: positiveInteger });
+
+const ThreadHeadRowSchema = Schema.Struct({
+  id: uuid,
+  head: integer.check(Schema.isGreaterThanOrEqualTo(0)),
 });
-const IdRowSchema = z.object({ id: z.string().uuid() });
-const SubscriptionRowSchema = z.object({
-  id: z.string().uuid(),
-  subscriber_kind: z.enum(['desktop', 'session', 'user']),
-  subscriber_id: z.string().min(1),
-  subscriber_generation: z.number().int().positive().nullable(),
-  thread_id: z.string().uuid().nullable(),
-  event_kinds_json: z.string(),
-  created_at: z.string().datetime(),
-  deactivated_at: z.string().datetime().nullable(),
+
+const IdRowSchema = Schema.Struct({ id: uuid });
+
+const SubscriptionRowSchema = Schema.Struct({
+  id: uuid,
+  subscriber_kind: Schema.Literals(['desktop', 'session', 'user']),
+  subscriber_id: nonEmptyString,
+  subscriber_generation: nullable(positiveInteger),
+  thread_id: nullable(uuid),
+  event_kinds_json: Schema.String,
+  created_at: TimestampSchema,
+  deactivated_at: nullable(TimestampSchema),
 });
-const EventKindsSchema = z
-  .array(BoardPostKindSchema)
-  .min(1)
-  .refine(
-    (kinds) => new Set(kinds).size === kinds.length,
-    'subscription event kinds must be unique',
-  );
+
+const EventKindsSchema = Schema.mutable(Schema.NonEmptyArray(BoardPostKindSchema)).check(
+  Schema.makeFilter((kinds) => new Set(kinds).size === kinds.length, {
+    expected: 'subscription event kinds must be unique',
+  }),
+);
 
 const MAX_PAGE_SIZE = 100;
+
 const DEFAULT_PAGE_SIZE = 30;
 
 function requireText(name: string, value: string) {
   if (value.trim().length === 0) throw new Error(`${name} must not be empty`);
+
   return value;
 }
 
 function boundedLimit(limit: number | undefined) {
   if (limit === undefined) return DEFAULT_PAGE_SIZE;
+
   if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE_SIZE) {
     throw new Error(`limit must be an integer from 1 through ${MAX_PAGE_SIZE}`);
   }
+
   return limit;
 }
 
@@ -187,7 +241,7 @@ function encodeCursor(cursor: Cursor) {
 
 function decodeCursor(cursor: string): Cursor {
   try {
-    return CursorSchema.parse(JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')));
+    return decode(CursorSchema, JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')));
   } catch {
     throw new Error('invalid board cursor');
   }
@@ -200,12 +254,14 @@ function assertCursor(
 ): Cursor | undefined {
   if (cursor === undefined) return undefined;
   const decoded = decodeCursor(cursor);
+
   if (decoded.kind !== expected || decoded.projectId !== projectId)
     throw new Error('board cursor does not match this request');
+
   return decoded;
 }
 
-function authorFromRow(row: z.infer<typeof AuthorRowSchema>): BoardAuthor {
+function authorFromRow(row: typeof AuthorRowSchema.Type): BoardAuthor {
   return row.source_author_generation === null
     ? { kind: row.source_author_kind, id: row.source_author_id }
     : {
@@ -215,7 +271,7 @@ function authorFromRow(row: z.infer<typeof AuthorRowSchema>): BoardAuthor {
       };
 }
 
-function boardThreadFromRow(row: z.infer<typeof ThreadRowSchema>): BoardThread {
+function boardThreadFromRow(row: typeof ThreadRowSchema.Type): BoardThread {
   return {
     id: row.id,
     title: row.title,
@@ -226,7 +282,7 @@ function boardThreadFromRow(row: z.infer<typeof ThreadRowSchema>): BoardThread {
 }
 
 function postFromRow(
-  row: z.infer<typeof PostRowSchema>,
+  row: typeof PostRowSchema.Type,
   references: readonly BoardReference[],
 ): BoardPost {
   return {
@@ -247,8 +303,10 @@ function referencesFor(db: DatabaseSync, postId: string): readonly BoardReferenc
   const rows = db
     .prepare('SELECT ref_kind, ref_value FROM board_post_refs WHERE post_id=? ORDER BY ordinal')
     .all(postId);
+
   return rows.map((raw) => {
-    const row = ReferenceRowSchema.parse(raw);
+    const row = decode(ReferenceRowSchema, raw);
+
     return { kind: row.ref_kind, value: row.ref_value };
   });
 }
@@ -307,23 +365,31 @@ export class Board {
 
   private assertAuthor(db: DatabaseSync, author: BoardAuthor) {
     requireText('author id', author.id);
+
     if (author.kind !== 'session') return;
+
     if (author.generation === undefined) throw new Error('session authors require a generation');
+
     const session = db
       .prepare('SELECT 1 FROM agent_sessions WHERE id=? AND generation=? AND project_id=?')
       .get(author.id, author.generation, this.projectId);
+
     if (session === undefined)
       throw new Error('board author is not a registered session for this project');
   }
 
   private assertRecipient(db: DatabaseSync, recipient: BoardRecipient) {
     requireText('recipient id', recipient.id);
+
     if (recipient.kind !== 'session') return;
+
     if (recipient.generation === undefined)
       throw new Error('session recipients require a generation');
+
     const session = db
       .prepare('SELECT 1 FROM agent_sessions WHERE id=? AND generation=? AND project_id=?')
       .get(recipient.id, recipient.generation, this.projectId);
+
     if (session === undefined)
       throw new Error('board recipient is not a registered session for this project');
   }
@@ -337,23 +403,29 @@ export class Board {
   }): BoardThread {
     const title = requireText('thread title', input.title);
     const idempotencyKey = requireText('thread idempotency key', input.idempotencyKey);
+
     return this.#store.transaction((db) => {
       this.assertAuthor(db, input.author);
+
       const existing = db
         .prepare(
           'SELECT * FROM board_threads WHERE project_id=? AND source_author_kind=? AND source_author_id=? AND idempotency_key=?',
         )
         .get(this.projectId, input.author.kind, input.author.id, idempotencyKey);
+
       if (existing !== undefined) {
-        const thread = ThreadRowSchema.parse(existing);
+        const thread = decode(ThreadRowSchema, existing);
+
         if (
           thread.title !== title ||
           thread.job_id !== (input.jobId ?? null) ||
           !sameAuthor(authorFromRow(thread), input.author)
         )
           throw new Error('thread idempotency key was already used for different content');
+
         return boardThreadFromRow(thread);
       }
+
       const id = input.id ?? randomUUID();
       const createdAt = now();
       db.prepare(
@@ -369,6 +441,7 @@ export class Board {
         idempotencyKey,
         createdAt,
       );
+
       return { id, title, jobId: input.jobId ?? null, author: input.author, createdAt };
     });
   }
@@ -387,22 +460,27 @@ export class Board {
     const threadId = requireText('thread id', input.threadId);
     const body = requireText('post body', input.body);
     const idempotencyKey = requireText('idempotency key', input.idempotencyKey);
-    BoardPostKindSchema.parse(input.kind);
+    decode(BoardPostKindSchema, input.kind);
     const references = input.references ?? [];
+
     for (const reference of references) {
       requireText('reference kind', reference.kind);
       requireText('reference value', reference.value);
     }
+
     return this.#store.transaction((db) => {
       this.assertAuthor(db, input.author);
+
       const existing = db
         .prepare(
           'SELECT * FROM board_posts WHERE project_id=? AND source_author_kind=? AND source_author_id=? AND idempotency_key=?',
         )
         .get(this.projectId, input.author.kind, input.author.id, idempotencyKey);
+
       if (existing !== undefined) {
-        const postRow = PostRowSchema.parse(existing);
+        const postRow = decode(PostRowSchema, existing);
         const post = postFromRow(postRow, referencesFor(db, postRow.id));
+
         if (
           post.threadId !== threadId ||
           post.body !== body ||
@@ -413,12 +491,16 @@ export class Board {
           !sameAuthor(post.author, input.author)
         )
           throw new Error('idempotency key was already used for a different post');
+
         return post;
       }
+
       const thread = db
         .prepare('SELECT id FROM board_threads WHERE id=? AND project_id=?')
         .get(threadId, this.projectId);
+
       if (thread === undefined) throw new Error('board thread does not exist in this project');
+
       if (
         input.replyToPostId !== undefined &&
         db
@@ -426,6 +508,7 @@ export class Board {
           .get(input.replyToPostId, this.projectId, threadId) === undefined
       )
         throw new Error('reply target does not exist in this thread');
+
       if (
         input.replacesPostId !== undefined &&
         db
@@ -433,13 +516,16 @@ export class Board {
           .get(input.replacesPostId, this.projectId, threadId) === undefined
       )
         throw new Error('replacement target does not exist in this thread');
-      const next = NextSequenceRowSchema.parse(
+
+      const next = decode(
+        NextSequenceRowSchema,
         db
           .prepare(
             'SELECT COALESCE(MAX(sequence),0)+1 AS sequence FROM board_posts WHERE project_id=? AND thread_id=?',
           )
           .get(this.projectId, threadId),
       );
+
       const id = input.id ?? randomUUID();
       const createdAt = now();
       db.prepare(
@@ -459,17 +545,21 @@ export class Board {
         idempotencyKey,
         createdAt,
       );
+
       for (const [ordinal, reference] of references.entries())
         db.prepare(
           'INSERT INTO board_post_refs(post_id,ordinal,ref_kind,ref_value) VALUES(?,?,?,?)',
         ).run(id, ordinal, reference.kind, reference.value);
+
       const subscriptions = db
         .prepare(
           'SELECT * FROM board_subscriptions WHERE project_id=? AND deactivated_at IS NULL AND (thread_id IS NULL OR thread_id=?)',
         )
         .all(this.projectId, threadId);
+
       for (const rawSubscription of subscriptions) {
-        const subscription = SubscriptionRowSchema.parse(rawSubscription);
+        const subscription = decode(SubscriptionRowSchema, rawSubscription);
+
         const subscriber: BoardRecipient =
           subscription.subscriber_generation === null
             ? { kind: subscription.subscriber_kind, id: subscription.subscriber_id }
@@ -478,13 +568,15 @@ export class Board {
                 id: subscription.subscriber_id,
                 generation: subscription.subscriber_generation,
               };
+
         if (
           subscriber.kind === input.author.kind &&
           subscriber.id === input.author.id &&
           subscriber.generation === input.author.generation
         )
           continue;
-        const eventKinds = EventKindsSchema.parse(JSON.parse(subscription.event_kinds_json));
+        const eventKinds = decode(EventKindsSchema, JSON.parse(subscription.event_kinds_json));
+
         if (!eventKinds.includes(input.kind)) continue;
         db.prepare(
           `INSERT INTO board_subscription_threads(subscription_id,project_id,thread_id,start_sequence,latest_sequence,updated_at)
@@ -513,6 +605,7 @@ export class Board {
           createdAt,
         );
       }
+
       return {
         id,
         threadId,
@@ -533,9 +626,11 @@ export class Board {
   ): Page<BoardThread> {
     const limit = boundedLimit(input.limit);
     const rawCursor = assertCursor(input.cursor, 'threads', this.projectId);
+
     if (rawCursor !== undefined && rawCursor.kind !== 'threads')
       throw new Error('board cursor does not match this request');
     const cursor = rawCursor;
+
     return this.#store.read((db) => {
       const rows = db
         .prepare(
@@ -549,10 +644,13 @@ export class Board {
           cursor?.id ?? '',
           limit + 1,
         );
+
       const entries = rows
         .slice(0, limit)
-        .map((row) => boardThreadFromRow(ThreadRowSchema.parse(row)));
+        .map((row) => boardThreadFromRow(decode(ThreadRowSchema, row)));
+
       const tail = entries.at(-1);
+
       return {
         entries,
         nextCursor:
@@ -560,7 +658,7 @@ export class Board {
             ? encodeCursor({
                 kind: 'threads',
                 projectId: this.projectId,
-                createdAt: tail.createdAt,
+                createdAt: decode(TimestampSchema, tail.createdAt),
                 id: tail.id,
               })
             : null,
@@ -576,11 +674,14 @@ export class Board {
     const threadId = requireText('thread id', input.threadId);
     const limit = boundedLimit(input.limit);
     const rawCursor = assertCursor(input.cursor, 'posts', this.projectId);
+
     if (rawCursor !== undefined && rawCursor.kind !== 'posts')
       throw new Error('board cursor does not match this thread');
     const cursor = rawCursor;
+
     if (cursor !== undefined && cursor.threadId !== threadId)
       throw new Error('board cursor does not match this thread');
+
     return this.#store.read((db) => {
       if (
         db
@@ -588,16 +689,21 @@ export class Board {
           .get(threadId, this.projectId) === undefined
       )
         throw new Error('board thread does not exist in this project');
+
       const rows = db
         .prepare(
           'SELECT * FROM board_posts WHERE project_id=? AND thread_id=? AND sequence>? ORDER BY sequence LIMIT ?',
         )
         .all(this.projectId, threadId, cursor?.sequence ?? 0, limit + 1);
+
       const entries = rows.slice(0, limit).map((raw) => {
-        const row = PostRowSchema.parse(raw);
+        const row = decode(PostRowSchema, raw);
+
         return postFromRow(row, referencesFor(db, row.id));
       });
+
       const tail = entries.at(-1);
+
       return {
         entries,
         nextCursor:
@@ -621,11 +727,14 @@ export class Board {
     const query = requireText('search query', input.query);
     const limit = boundedLimit(input.limit);
     const rawCursor = assertCursor(input.cursor, 'search', this.projectId);
+
     if (rawCursor !== undefined && rawCursor.kind !== 'search')
       throw new Error('board cursor does not match this search');
     const cursor = rawCursor;
+
     if (cursor !== undefined && cursor.query !== query)
       throw new Error('board cursor does not match this search');
+
     return this.#store.read((db) => {
       const rows = db
         .prepare(
@@ -640,11 +749,15 @@ export class Board {
           cursor?.id ?? '',
           limit + 1,
         );
+
       const entries = rows.slice(0, limit).map((raw) => {
-        const row = PostRowSchema.parse(raw);
+        const row = decode(PostRowSchema, raw);
+
         return postFromRow(row, referencesFor(db, row.id));
       });
+
       const tail = entries.at(-1);
+
       return {
         entries,
         nextCursor:
@@ -653,7 +766,7 @@ export class Board {
                 kind: 'search',
                 projectId: this.projectId,
                 query,
-                createdAt: tail.createdAt,
+                createdAt: decode(TimestampSchema, tail.createdAt),
                 id: tail.id,
               })
             : null,
@@ -668,10 +781,12 @@ export class Board {
   }): Page<BoardPost> {
     const limit = boundedLimit(input.limit);
     const rawCursor = assertCursor(input.cursor, 'inbox', this.projectId);
+
     if (rawCursor !== undefined && rawCursor.kind !== 'inbox')
       throw new Error('board cursor does not match this inbox');
     const cursor = rawCursor;
     const generation = recipientGeneration(input.recipient);
+
     if (
       cursor !== undefined &&
       (cursor.recipientKind !== input.recipient.kind ||
@@ -679,8 +794,10 @@ export class Board {
         cursor.recipientGeneration !== generation)
     )
       throw new Error('board cursor does not match this recipient generation');
+
     return this.#store.read((db) => {
       this.assertRecipient(db, input.recipient);
+
       const rows = db
         .prepare(
           `SELECT DISTINCT p.* FROM board_posts p
@@ -694,8 +811,7 @@ export class Board {
             AND c.reader_id=s.subscriber_id
             AND c.reader_generation=COALESCE(s.subscriber_generation,0)
             AND c.thread_id=p.thread_id
-           WHERE p.project_id=?
-             AND s.deactivated_at IS NULL
+           WHERE p.project_id=? AND s.deactivated_at IS NULL
              AND s.subscriber_kind=? AND s.subscriber_id=?
              AND COALESCE(s.subscriber_generation,0)=?
              AND p.sequence>MAX(st.start_sequence,COALESCE(c.last_sequence,0))
@@ -718,11 +834,15 @@ export class Board {
           cursor?.id ?? '',
           limit + 1,
         );
+
       const entries = rows.slice(0, limit).map((raw) => {
-        const row = PostRowSchema.parse(raw);
+        const row = decode(PostRowSchema, raw);
+
         return postFromRow(row, referencesFor(db, row.id));
       });
+
       const tail = entries.at(-1);
+
       return {
         entries,
         nextCursor:
@@ -733,7 +853,7 @@ export class Board {
                 recipientKind: input.recipient.kind,
                 recipientId: input.recipient.id,
                 recipientGeneration: generation,
-                createdAt: tail.createdAt,
+                createdAt: decode(TimestampSchema, tail.createdAt),
                 id: tail.id,
               })
             : null,
@@ -749,15 +869,19 @@ export class Board {
     readonly id?: string;
   }): BoardSubscription {
     const createdAt = now();
-    const eventKinds = EventKindsSchema.parse(input.eventKinds ?? DefaultSubscriptionEventKinds);
+    const eventKinds = decode(EventKindsSchema, input.eventKinds ?? DefaultSubscriptionEventKinds);
+
     const requestedStartPolicy =
       input.startPolicy === undefined
         ? undefined
-        : BoardSubscriptionStartPolicySchema.parse(input.startPolicy);
+        : decode(BoardSubscriptionStartPolicySchema, input.startPolicy);
+
     const newStartPolicy = requestedStartPolicy ?? { kind: 'latest' as const };
+
     return this.#store.transaction((db) => {
       this.assertRecipient(db, input.subscriber);
       const threadId = input.threadId ?? null;
+
       if (
         threadId !== null &&
         db
@@ -765,6 +889,7 @@ export class Board {
           .get(threadId, this.projectId) === undefined
       )
         throw new Error('subscription thread does not exist in this project');
+
       const existing = db
         .prepare(
           'SELECT * FROM board_subscriptions WHERE project_id=? AND subscriber_kind=? AND subscriber_id=? AND subscriber_generation IS ? AND thread_id IS ?',
@@ -776,11 +901,13 @@ export class Board {
           input.subscriber.generation ?? null,
           threadId,
         );
+
       if (existing !== undefined) {
-        const subscription = SubscriptionRowSchema.parse(existing);
+        const subscription = decode(SubscriptionRowSchema, existing);
         db.prepare(
           'UPDATE board_subscriptions SET deactivated_at=NULL,event_kinds_json=? WHERE id=?',
         ).run(JSON.stringify(eventKinds), subscription.id);
+
         if (requestedStartPolicy !== undefined)
           this.resetSubscription(
             db,
@@ -789,6 +916,7 @@ export class Board {
             threadId,
             requestedStartPolicy,
           );
+
         return {
           id: subscription.id,
           subscriber: input.subscriber,
@@ -797,6 +925,7 @@ export class Board {
           createdAt: subscription.created_at,
         };
       }
+
       const id = input.id ?? randomUUID();
       db.prepare(
         'INSERT INTO board_subscriptions(id,project_id,subscriber_kind,subscriber_id,subscriber_generation,thread_id,event_kinds_json,created_at,deactivated_at) VALUES(?,?,?,?,?,?,?,?,NULL)',
@@ -823,13 +952,8 @@ export class Board {
         createdAt,
       );
       this.resetSubscription(db, id, input.subscriber, threadId, newStartPolicy);
-      return {
-        id,
-        subscriber: input.subscriber,
-        threadId,
-        eventKinds,
-        createdAt,
-      };
+
+      return { id, subscriber: input.subscriber, threadId, eventKinds, createdAt };
     });
   }
 
@@ -844,6 +968,7 @@ export class Board {
     db.prepare('DELETE FROM board_subscription_threads WHERE subscription_id=?').run(
       subscriptionId,
     );
+
     const threads = db
       .prepare(
         `SELECT t.id,COALESCE(MAX(p.sequence),0) AS head
@@ -853,9 +978,11 @@ export class Board {
          GROUP BY t.id ORDER BY t.created_at,t.id`,
       )
       .all(this.projectId, threadId, threadId)
-      .map((row) => ThreadHeadRowSchema.parse(row));
+      .map((row) => decode(ThreadHeadRowSchema, row));
+
     for (const thread of threads) {
       const start = startSequence(policy, Number(thread.head));
+
       const latest = Number(
         db
           .prepare(
@@ -875,10 +1002,12 @@ export class Board {
             recipientGeneration(subscriber),
           )?.sequence ?? 0,
       );
+
       db.prepare(
         'INSERT INTO board_subscription_threads(subscription_id,project_id,thread_id,start_sequence,latest_sequence,updated_at) VALUES(?,?,?,?,?,?)',
       ).run(subscriptionId, this.projectId, thread.id, start, latest, timestamp);
     }
+
     const unread = db
       .prepare(
         `SELECT 1 FROM board_subscription_threads st
@@ -889,17 +1018,21 @@ export class Board {
            AND st.latest_sequence>MAX(st.start_sequence,COALESCE(c.last_sequence,0)) LIMIT 1`,
       )
       .get(subscriber.kind, subscriber.id, recipientGeneration(subscriber), subscriptionId);
+
     const uncertainWake = db
       .prepare(
         "SELECT state FROM board_subscription_wakes WHERE subscription_id=? AND state IN ('claimed','unconfirmed')",
       )
       .get(subscriptionId);
+
     if (uncertainWake !== undefined) {
       db.prepare(
         'UPDATE board_subscription_wakes SET wake_revision=wake_revision+1,dirty_at=COALESCE(dirty_at,?) WHERE subscription_id=?',
       ).run(timestamp, subscriptionId);
+
       return;
     }
+
     db.prepare(
       `UPDATE board_subscription_wakes SET
          state=?,wake_revision=wake_revision+1,claimed_revision=NULL,owner_generation=NULL,
@@ -929,6 +1062,7 @@ export class Board {
           input.subscriber.generation ?? null,
           input.threadId ?? null,
         );
+
       db.prepare(
         `UPDATE board_subscription_wakes SET state='read',next_attempt_at=NULL,dirty_at=NULL,
          owner_generation=NULL,claimed_revision=NULL,read_at=?,last_error=NULL
@@ -944,6 +1078,7 @@ export class Board {
         input.subscriber.generation ?? null,
         input.threadId ?? null,
       );
+
       return Number(result.changes) > 0;
     });
   }
@@ -955,14 +1090,17 @@ export class Board {
   }) {
     if (!Number.isInteger(input.sequence) || input.sequence < 0)
       throw new Error('read sequence must be a non-negative integer');
+
     return this.#store.transaction((db) => {
       this.assertRecipient(db, input.reader);
+
       if (
         db
           .prepare('SELECT 1 FROM board_threads WHERE id=? AND project_id=?')
           .get(input.threadId, this.projectId) === undefined
       )
         throw new Error('board thread does not exist in this project');
+
       if (
         input.sequence > 0 &&
         db
@@ -981,6 +1119,7 @@ export class Board {
         input.sequence,
         now(),
       );
+
       const subscriptions = db
         .prepare(
           `SELECT s.id FROM board_subscriptions s
@@ -996,7 +1135,8 @@ export class Board {
           recipientGeneration(input.reader),
           input.threadId,
         )
-        .map((row) => IdRowSchema.parse(row));
+        .map((row) => decode(IdRowSchema, row));
+
       for (const subscription of subscriptions) {
         const unread = db
           .prepare(
@@ -1013,6 +1153,7 @@ export class Board {
             recipientGeneration(input.reader),
             subscription.id,
           );
+
         if (unread === undefined)
           db.prepare(
             `UPDATE board_subscription_wakes SET state='read',next_attempt_at=NULL,dirty_at=NULL,
@@ -1020,6 +1161,7 @@ export class Board {
              WHERE subscription_id=?`,
           ).run(now(), subscription.id);
       }
+
       return true;
     });
   }

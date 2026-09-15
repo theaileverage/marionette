@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { Schema } from 'effect';
 import {
   existsSync,
   mkdirSync,
@@ -23,10 +24,13 @@ import {
 } from '../../src/v1/output-contracts.js';
 
 const projectRoot = process.cwd();
+
 const buildDirectory = join(projectRoot, '.v1-test', 'cli-ux');
+
 const cliPath = join(buildDirectory, 'cli.js');
 
 type CliResult = { status: number | null; stdout: string; stderr: string };
+
 type ProjectFixture = {
   cwd: string;
   root: string;
@@ -35,6 +39,7 @@ type ProjectFixture = {
   stateDirectory: string;
   bindingPath: string;
 };
+
 const errorEnvelopeSchema = z
   .object({
     error: z
@@ -48,6 +53,7 @@ const errorEnvelopeSchema = z
       .strict(),
   })
   .strict();
+
 type MachineError = z.infer<typeof errorEnvelopeSchema>['error'];
 
 before(async () => {
@@ -70,7 +76,9 @@ function environment(stateHome: string, overrides: NodeJS.ProcessEnv = {}): Node
     MARIONETTE_STATE_HOME: stateHome,
     ...overrides,
   };
+
   if (!Object.hasOwn(overrides, 'MARIONETTE_CONTEXT')) delete result.MARIONETTE_CONTEXT;
+
   return result;
 }
 
@@ -89,7 +97,9 @@ function runCli(
       timeout: 10_000,
     },
   );
+
   assert.ifError(result.error);
+
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
@@ -134,7 +144,9 @@ function runCliInPty(
       timeout: 10_000,
     },
   );
+
   assert.ifError(result.error);
+
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
@@ -143,15 +155,22 @@ function git(cwd: string, args: readonly string[]): string {
     encoding: 'utf8',
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
   });
+
   assert.equal(result.status, 0, result.stderr);
+
   return result.stdout.trim();
 }
 
-function parseCliJson<Output>(result: CliResult, schema: z.ZodType<Output>): Output {
+function parseCliJson<Output>(
+  result: CliResult,
+  schema: Schema.ConstraintDecoder<Output, never> | z.ZodType<Output>,
+): Output {
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stderr, '');
   assert.match(result.stdout, /^\{.*\}\n$|^\[.*\]\n$/s);
-  return schema.parse(JSON.parse(result.stdout));
+  const value: unknown = JSON.parse(result.stdout);
+
+  return 'ast' in schema ? Schema.decodeUnknownSync(schema)(value) : schema.parse(value);
 }
 
 function createProject(): ProjectFixture {
@@ -165,6 +184,7 @@ function createProject(): ProjectFixture {
   writeFileSync(join(repositoryRoot, 'tracked.txt'), 'base\n');
   git(repositoryRoot, ['add', 'tracked.txt']);
   git(repositoryRoot, ['commit', '-qm', 'base']);
+
   const context = parseCliJson(
     runCli(['init', '--project', repositoryRoot, '--state-home', stateHome, '--output', 'json'], {
       cwd: root,
@@ -172,6 +192,7 @@ function createProject(): ProjectFixture {
     }),
     operationOutputSchemas.context,
   );
+
   assert.doesNotMatch(JSON.stringify(context), /token/i);
   assert.deepEqual(context.authentication, {
     source: 'local-session-file',
@@ -179,6 +200,7 @@ function createProject(): ProjectFixture {
     role: 'user',
     workspaceId: null,
   });
+
   return {
     cwd: repositoryRoot,
     root,
@@ -200,11 +222,13 @@ function assertMachineError(
   assert.deepEqual(Object.keys(envelope.error), ['code', 'message', 'fields', 'retry', 'mutation']);
   assert.equal(envelope.error.code, expected.code);
   assert.deepEqual(envelope.error.fields, expected.fields ?? []);
+
   return envelope.error;
 }
 
 function retirementCount(databasePath: string): number {
   const database = new DatabaseSync(databasePath, { readOnly: true });
+
   try {
     return Number(
       database.prepare('SELECT count(*) AS count FROM workspace_retirements').get()?.count,
@@ -219,6 +243,7 @@ test('init installs the project skill and preserves local skill changes', () => 
   const repositoryRoot = join(root, 'repository');
   const stateHome = join(root, 'state');
   const skillPath = join(repositoryRoot, '.agents', 'skills', 'marionette', 'SKILL.md');
+
   const onboardingSchema = z
     .object({
       onboarding: z
@@ -229,13 +254,16 @@ test('init installs the project skill and preserves local skill changes', () => 
         .strict(),
     })
     .passthrough();
+
   mkdirSync(repositoryRoot);
   git(repositoryRoot, ['init', '-q']);
+
   try {
     const first = runCli(
       ['init', '--project', repositoryRoot, '--state-home', stateHome, '--output', 'json'],
       { cwd: root, stateHome },
     );
+
     assert.equal(first.status, 0, first.stderr);
     const firstOutput = onboardingSchema.parse(JSON.parse(first.stdout));
     assert.deepEqual(firstOutput.onboarding.skill, { status: 'installed', path: skillPath });
@@ -243,10 +271,12 @@ test('init installs the project skill and preserves local skill changes', () => 
     assert.match(readFileSync(skillPath, 'utf8'), /^---\nname: marionette\n/);
 
     writeFileSync(skillPath, 'local project instructions\n');
+
     const second = runCli(
       ['init', '--project', repositoryRoot, '--state-home', stateHome, '--output', 'json'],
       { cwd: root, stateHome },
     );
+
     assert.equal(second.status, 0, second.stderr);
     const secondOutput = onboardingSchema.parse(JSON.parse(second.stdout));
     assert.deepEqual(secondOutput.onboarding.skill, { status: 'existing', path: skillPath });
@@ -258,12 +288,14 @@ test('init installs the project skill and preserves local skill changes', () => 
 
 test('flags, file input, stdin, inline JSON, and full exec JSON produce the same raw result', () => {
   const fixture = createProject();
+
   try {
     const request = { title: 'CLI parity', idempotencyKey: 'cli-parity' };
     const requestPath = join(fixture.root, 'request.json');
     const fullRequest = { operation: 'board.create', ...request };
     writeFileSync(requestPath, JSON.stringify(request));
     const common = ['--project', fixture.bindingPath, '--output', 'json'];
+
     const flagsResult = parseCliJson(
       runCli(
         [
@@ -279,6 +311,7 @@ test('flags, file input, stdin, inline JSON, and full exec JSON produce the same
       ),
       operationOutputSchemas['board.create'],
     );
+
     const equivalentResults = [
       parseCliJson(
         runCli(['board', 'create', '--input', requestPath, ...common], fixture),
@@ -300,6 +333,7 @@ test('flags, file input, stdin, inline JSON, and full exec JSON produce the same
         operationOutputSchemas['board.create'],
       ),
     ];
+
     for (const result of equivalentResults) assert.deepEqual(result, flagsResult);
     assert.equal(flagsResult.title, request.title);
 
@@ -323,6 +357,7 @@ test('flags, file input, stdin, inline JSON, and full exec JSON produce the same
       ),
       operationOutputSchemas['board.post'],
     );
+
     assert.equal(post.body, 'No background process');
     assert.equal(existsSync(join(fixture.stateDirectory, 'watcher.log')), false);
   } finally {
@@ -333,6 +368,7 @@ test('flags, file input, stdin, inline JSON, and full exec JSON produce the same
 test('invalid command input exits 2 before project discovery and never exposes parser input', () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'marionette-v1-cli-invalid-')));
   const stateHome = join(root, 'state');
+
   try {
     const cases = [
       {
@@ -375,16 +411,20 @@ test('invalid command input exits 2 before project discovery and never exposes p
         fields: ['limit'],
       },
     ];
+
     for (const entry of cases) {
       const result = runCli(entry.args, { cwd: root, stateHome });
+
       const error = assertMachineError(result, {
         status: 2,
         code: entry.code,
         fields: entry.fields,
       });
+
       assert.equal(error.mutation, 'not-started');
       assert.doesNotMatch(result.stderr, /TOP_SECRET|Zod|issues|received/i);
     }
+
     assert.equal(existsSync(stateHome), false);
     assert.equal(existsSync(join(root, '.marionette-v1')), false);
   } finally {
@@ -397,12 +437,14 @@ test('malformed credential JSON is redacted at the process boundary', () => {
   const stateHome = join(root, 'state');
   const contextPath = join(root, 'context.json');
   writeFileSync(contextPath, 'TOP_SECRET_CREDENTIAL_FRAGMENT{');
+
   try {
     const result = runCli(['context', '--output', 'json'], {
       cwd: root,
       stateHome,
       env: { MARIONETTE_CONTEXT: contextPath },
     });
+
     const error = assertMachineError(result, { status: 1, code: 'operation-failed' });
     assert.equal(error.message, 'Stored or external JSON is invalid.');
     assert.equal(error.mutation, 'not-started');
@@ -414,6 +456,7 @@ test('malformed credential JSON is redacted at the process boundary', () => {
 
 test('TTY defaults to bounded escaped human output while an explicit machine mode stays machine-readable', () => {
   const fixture = createProject();
+
   try {
     const title = `unsafe\u001b[31m\u009b${'x'.repeat(5_000)}`;
     parseCliJson(
@@ -446,6 +489,7 @@ test('TTY defaults to bounded escaped human output while an explicit machine mod
       ['board', 'list', '--unknown=TOP_SECRET_PTY', '--output', 'json'],
       fixture,
     );
+
     assert.equal(machine.status, 2);
     const error = errorEnvelopeSchema.parse(JSON.parse(machine.stdout.trim()));
     assert.equal(error.error.code, 'invalid-options');
@@ -459,6 +503,7 @@ test('workspace retirement dry-run validates its preview and leaves the real tar
   const fixture = createProject();
   const workspacePath = join(fixture.root, 'workspace');
   const workspaceId = 'workspace_cli_dry_run';
+
   try {
     git(fixture.repositoryRoot, [
       'worktree',
@@ -495,9 +540,11 @@ test('workspace retirement dry-run validates its preview and leaves the real tar
       ),
       operationOutputSchemas['workspace.register'],
     );
-    const databasePath = bindingSchema.parse(
+
+    const databasePath = Schema.decodeUnknownSync(bindingSchema)(
       JSON.parse(readFileSync(fixture.bindingPath, 'utf8')),
     ).databasePath;
+
     const beforeWorkspace = parseCliJson(
       runCli(
         [
@@ -514,6 +561,7 @@ test('workspace retirement dry-run validates its preview and leaves the real tar
       ),
       operationOutputSchemas['workspace.get'],
     );
+
     const beforeBinding = readFileSync(fixture.bindingPath);
     const beforeWorktrees = git(fixture.repositoryRoot, ['worktree', 'list', '--porcelain']);
     assert.equal(retirementCount(databasePath), 0);
@@ -534,6 +582,7 @@ test('workspace retirement dry-run validates its preview and leaves the real tar
       ],
       fixture,
     );
+
     const preview = parseCliJson(previewResult, retirementPreviewOutputSchema);
     assert.equal(preview.kind, 'ready');
     assert.equal(preview.workspaceId, workspaceId);
@@ -569,6 +618,7 @@ test('workspace retirement dry-run validates its preview and leaves the real tar
 
     const localCredential = join(fixture.stateDirectory, 'local-user.json');
     rmSync(localCredential);
+
     const missingCredential = runCli(
       [
         'workspace',
@@ -585,6 +635,7 @@ test('workspace retirement dry-run validates its preview and leaves the real tar
       ],
       fixture,
     );
+
     assertMachineError(missingCredential, { status: 1, code: 'operation-failed' });
     assert.equal(existsSync(localCredential), false);
     assert.equal(existsSync(workspacePath), true);

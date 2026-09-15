@@ -1,8 +1,10 @@
 // Generated from Herdr 0.9.0 (Apache-2.0); see vendor/herdr-0.9.0/LICENSE.
 // Do not edit. Run npm run sdk:generate.
 export const HERDR_PROTOCOL = 22 as const;
+
 export const HERDR_SCHEMA_SHA256 =
   '5fb46b13fdaf39c88cf699b9806685868c7ee6b0142523d84391b1606416dc0a' as const;
+
 export namespace RequestTypes {
   export type AgentPromptParams = {
     target: string;
@@ -539,6 +541,7 @@ export namespace RequestTypes {
     workspace_id: string;
   };
 }
+
 export namespace ResponseTypes {
   export type AgentInfo = {
     agent?: string | null;
@@ -1242,9 +1245,11 @@ missing manifest file). Non-fatal — the entry is kept and surfaced by plugin.l
     source_workspace_id?: string | null;
   };
 }
+
 export namespace ErrorTypes {
   export type ErrorBody = { code: string; message: string };
 }
+
 export namespace EventTypes {
   export type AgentSessionInfo = {
     agent: string;
@@ -1456,6 +1461,7 @@ export namespace EventTypes {
     path: string;
   };
 }
+
 export namespace SubscriptionTypes {
   export type AgentStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown';
   export type PaneAgentStatusChangedEvent = {
@@ -1501,6 +1507,7 @@ export namespace SubscriptionTypes {
   export type SubscriptionEventKind =
     'pane.output_matched' | 'pane.agent_status_changed' | 'pane.scroll_changed';
 }
+
 export interface HerdrParams {
   ping: RequestTypes.PingParams;
   'server.stop': RequestTypes.EmptyParams;
@@ -1605,6 +1612,7 @@ export interface HerdrParams {
   'plugin.pane.focus': RequestTypes.PluginPaneFocusParams;
   'plugin.pane.close': RequestTypes.PluginPaneCloseParams;
 }
+
 export const HERDR_METHODS = [
   'ping',
   'server.stop',
@@ -1709,8 +1717,11 @@ export const HERDR_METHODS = [
   'plugin.pane.focus',
   'plugin.pane.close',
 ] as const;
+
 export type HerdrMethod = keyof HerdrParams;
+
 export type HerdrResult = ResponseTypes.ResponseResult;
+
 export type HerdrEvent =
   | { data: EventTypes.EventData; event: EventTypes.EventKind }
   | {

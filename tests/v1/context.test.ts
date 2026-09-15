@@ -8,6 +8,7 @@ import { createBinding, resolveContext, writeSessionContext } from '../../src/v1
 
 test('inherited context stays bound when cwd changes and rejects an explicit project switch', () => {
   const root = mkdtempSync(join(tmpdir(), 'marionette-v1-context-'));
+
   try {
     const stateRoot = join(root, 'state');
     const first = join(root, 'first');
@@ -16,6 +17,7 @@ test('inherited context stays bound when cwd changes and rejects an explicit pro
     mkdirSync(second);
     const a = createBinding({ repositoryRoot: first, stateRoot });
     const b = createBinding({ repositoryRoot: second, stateRoot });
+
     const context = writeSessionContext({
       stateDirectory: a.binding.stateDirectory,
       context: {
@@ -29,6 +31,7 @@ test('inherited context stays bound when cwd changes and rejects an explicit pro
         parentWorkflowId: 'workflow-1',
       },
     });
+
     const env = { MARIONETTE_STATE_HOME: stateRoot, MARIONETTE_CONTEXT: context };
     const resolved = resolveContext({ cwd: second, env });
     assert.equal(resolved.binding.projectId, a.binding.projectId);
@@ -42,6 +45,7 @@ test('inherited context stays bound when cwd changes and rejects an explicit pro
 
 test('host mismatch and malformed context fail before project fallback', () => {
   const root = mkdtempSync(join(tmpdir(), 'marionette-v1-context-'));
+
   try {
     const repositoryRoot = join(root, 'repo');
     mkdirSync(repositoryRoot);

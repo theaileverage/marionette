@@ -1,310 +1,447 @@
-import { z } from 'zod';
+import { Effect, Schema } from "effect";
 
-const id = z.string().min(1).max(255);
+const id = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(255));
 
-export const ProjectIdSchema = id.brand<'ProjectId'>();
-export type ProjectId = z.infer<typeof ProjectIdSchema>;
-export const HostIdSchema = id.brand<'HostId'>();
-export type HostId = z.infer<typeof HostIdSchema>;
-export const WorkspaceIdSchema = id.brand<'WorkspaceId'>();
-export type WorkspaceId = z.infer<typeof WorkspaceIdSchema>;
-export const AgentSessionIdSchema = id.brand<'AgentSessionId'>();
-export type AgentSessionId = z.infer<typeof AgentSessionIdSchema>;
-export const JobIdSchema = id.brand<'JobId'>();
-export type JobId = z.infer<typeof JobIdSchema>;
-export const JobRequestIdSchema = id.brand<'JobRequestId'>();
-export type JobRequestId = z.infer<typeof JobRequestIdSchema>;
-export const BriefIdSchema = id.brand<'BriefId'>();
-export type BriefId = z.infer<typeof BriefIdSchema>;
-export const AttemptIdSchema = id.brand<'AttemptId'>();
-export type AttemptId = z.infer<typeof AttemptIdSchema>;
-export const ReservationIdSchema = id.brand<'ReservationId'>();
-export type ReservationId = z.infer<typeof ReservationIdSchema>;
-export const ResultIdSchema = id.brand<'ResultId'>();
-export type ResultId = z.infer<typeof ResultIdSchema>;
-export const WorkflowIdSchema = id.brand<'WorkflowId'>();
-export type WorkflowId = z.infer<typeof WorkflowIdSchema>;
-export const StepRunIdSchema = id.brand<'StepRunId'>();
-export type StepRunId = z.infer<typeof StepRunIdSchema>;
-export const TransitionRequestIdSchema = id.brand<'TransitionRequestId'>();
-export type TransitionRequestId = z.infer<typeof TransitionRequestIdSchema>;
-export const ControlIntentIdSchema = id.brand<'ControlIntentId'>();
-export type ControlIntentId = z.infer<typeof ControlIntentIdSchema>;
-export const ArtifactIdSchema = id.brand<'ArtifactId'>();
-export type ArtifactId = z.infer<typeof ArtifactIdSchema>;
-export const DigestSchema = z
-  .string()
-  .regex(/^[a-f0-9]{64}$/)
-  .brand<'Digest'>();
-export type Digest = z.infer<typeof DigestSchema>;
+const nonEmptyString = Schema.String.check(Schema.isMinLength(1));
 
-export const TimestampSchema = z.string().datetime().brand<'Timestamp'>();
-export type Timestamp = z.infer<typeof TimestampSchema>;
-export const RevisionSchema = z.number().int().positive();
-export type Revision = z.infer<typeof RevisionSchema>;
-export const SessionGenerationSchema = z.number().int().positive();
-export type SessionGeneration = z.infer<typeof SessionGenerationSchema>;
+const stringArray = Schema.mutable(Schema.Array(Schema.String));
 
-export const ProjectBindingSchema = z.object({
+const nonEmptyStringArray = Schema.mutable(Schema.Array(nonEmptyString));
+
+const integer = Schema.Number.check(
+  Schema.makeFilter(Number.isInteger, { expected: "an integer" }),
+);
+
+export const ProjectIdSchema = id.pipe(Schema.brand("ProjectId"));
+
+export type ProjectId = typeof ProjectIdSchema.Type;
+
+export const HostIdSchema = id.pipe(Schema.brand("HostId"));
+
+export type HostId = typeof HostIdSchema.Type;
+
+export const WorkspaceIdSchema = id.pipe(Schema.brand("WorkspaceId"));
+
+export type WorkspaceId = typeof WorkspaceIdSchema.Type;
+
+export const AgentSessionIdSchema = id.pipe(Schema.brand("AgentSessionId"));
+
+export type AgentSessionId = typeof AgentSessionIdSchema.Type;
+
+export const JobIdSchema = id.pipe(Schema.brand("JobId"));
+
+export type JobId = typeof JobIdSchema.Type;
+
+export const JobRequestIdSchema = id.pipe(Schema.brand("JobRequestId"));
+
+export type JobRequestId = typeof JobRequestIdSchema.Type;
+
+export const BriefIdSchema = id.pipe(Schema.brand("BriefId"));
+
+export type BriefId = typeof BriefIdSchema.Type;
+
+export const AttemptIdSchema = id.pipe(Schema.brand("AttemptId"));
+
+export type AttemptId = typeof AttemptIdSchema.Type;
+
+export const ReservationIdSchema = id.pipe(Schema.brand("ReservationId"));
+
+export type ReservationId = typeof ReservationIdSchema.Type;
+
+export const ResultIdSchema = id.pipe(Schema.brand("ResultId"));
+
+export type ResultId = typeof ResultIdSchema.Type;
+
+export const WorkflowIdSchema = id.pipe(Schema.brand("WorkflowId"));
+
+export type WorkflowId = typeof WorkflowIdSchema.Type;
+
+export const StepRunIdSchema = id.pipe(Schema.brand("StepRunId"));
+
+export type StepRunId = typeof StepRunIdSchema.Type;
+
+export const TransitionRequestIdSchema = id.pipe(Schema.brand("TransitionRequestId"));
+
+export type TransitionRequestId = typeof TransitionRequestIdSchema.Type;
+
+export const ControlIntentIdSchema = id.pipe(Schema.brand("ControlIntentId"));
+
+export type ControlIntentId = typeof ControlIntentIdSchema.Type;
+
+export const ArtifactIdSchema = id.pipe(Schema.brand("ArtifactId"));
+
+export type ArtifactId = typeof ArtifactIdSchema.Type;
+
+export const DigestSchema = Schema.String.check(
+  Schema.isPattern(/^[a-f0-9]{64}$/),
+).pipe(Schema.brand("Digest"));
+
+export type Digest = typeof DigestSchema.Type;
+
+// Matches Zod 3's default datetime contract: a real calendar date, UTC `Z`,
+// minute precision or optional seconds, and arbitrary fractional-second precision.
+const timestampPattern =
+  /^((\d\d[2468][048]|\d\d[13579][26]|\d\d0[48]|[02468][048]00|[13579][26]00)-02-29|\d{4}-((0[13578]|1[02])-(0[1-9]|[12]\d|3[01])|(0[469]|11)-(0[1-9]|[12]\d|30)|(02)-(0[1-9]|1\d|2[0-8])))T([01]\d|2[0-3]):[0-5]\d(:[0-5]\d(\.\d+)?)?Z$/;
+
+export const TimestampSchema = Schema.String.check(
+  Schema.isPattern(timestampPattern),
+).pipe(Schema.brand("Timestamp"));
+
+export type Timestamp = typeof TimestampSchema.Type;
+
+export const RevisionSchema = integer.check(Schema.isGreaterThan(0));
+
+export type Revision = typeof RevisionSchema.Type;
+
+export const SessionGenerationSchema = integer.check(Schema.isGreaterThan(0));
+
+export type SessionGeneration = typeof SessionGenerationSchema.Type;
+
+export const ProjectBindingSchema = Schema.Struct({
   id: ProjectIdSchema,
   hostId: HostIdSchema,
-  repositoryRoot: z.string().min(1),
-  stateDirectory: z.string().min(1),
+  repositoryRoot: nonEmptyString,
+  stateDirectory: nonEmptyString,
 });
-export type ProjectBinding = z.infer<typeof ProjectBindingSchema>;
 
-export const InputSnapshotSchema = z.object({
-  name: z.string().min(1),
+export type ProjectBinding = typeof ProjectBindingSchema.Type;
+
+export const InputSnapshotSchema = Schema.Struct({
+  name: nonEmptyString,
   digest: DigestSchema,
 });
-export type InputSnapshot = z.infer<typeof InputSnapshotSchema>;
 
-export const OriginalRequestSchema = z.object({
-  text: z.string().min(1),
+export type InputSnapshot = typeof InputSnapshotSchema.Type;
+
+export const OriginalRequestSchema = Schema.Struct({
+  text: nonEmptyString,
   digest: DigestSchema,
-  inputSnapshots: z.array(InputSnapshotSchema),
+  inputSnapshots: Schema.mutable(Schema.Array(InputSnapshotSchema)),
 });
-export type OriginalRequest = z.infer<typeof OriginalRequestSchema>;
 
-export const BriefContentSchema = z.object({
-  objective: z.string().min(1),
-  scope: z.array(z.string()),
-  ownership: z.array(z.string()),
-  constraints: z.array(z.string()),
-  standingOrders: z.array(z.string()),
-  inputSnapshots: z.array(InputSnapshotSchema),
+export type OriginalRequest = typeof OriginalRequestSchema.Type;
+
+export const BriefContentSchema = Schema.Struct({
+  objective: nonEmptyString,
+  scope: stringArray,
+  ownership: stringArray,
+  constraints: stringArray,
+  standingOrders: stringArray,
+  inputSnapshots: Schema.mutable(Schema.Array(InputSnapshotSchema)),
 });
-export type BriefContent = z.infer<typeof BriefContentSchema>;
 
-export const DeliveryKindSchema = z.enum(['report', 'patch', 'commit']);
-export type DeliveryKind = z.infer<typeof DeliveryKindSchema>;
+export type BriefContent = typeof BriefContentSchema.Type;
 
-export const WorkflowStepPhaseSchema = z.enum([
-  'analysis',
-  'design',
-  'implementation',
-  'review',
-  'verification',
-  'coordination',
+export const DeliveryKindSchema = Schema.Literals(["report", "patch", "commit"]);
+
+export type DeliveryKind = typeof DeliveryKindSchema.Type;
+
+export const WorkflowStepPhaseSchema = Schema.Literals([
+  "analysis",
+  "design",
+  "implementation",
+  "review",
+  "verification",
+  "coordination",
 ]);
-export type WorkflowStepPhase = z.infer<typeof WorkflowStepPhaseSchema>;
 
-export const WorkflowStepSchema = z.object({
-  name: z.string().min(1),
+export type WorkflowStepPhase = typeof WorkflowStepPhaseSchema.Type;
+
+export const WorkflowStepSchema = Schema.Struct({
+  name: nonEmptyString,
   phase: WorkflowStepPhaseSchema,
-  resources: z.array(z.string().min(1)),
-  outputContract: z.string().min(1),
-  permittedMethods: z.array(z.string().min(1)),
-  requiredEvidence: z.array(z.string().min(1)),
-  requiresDistinctRole: z.boolean().default(false),
+  resources: nonEmptyStringArray,
+  outputContract: nonEmptyString,
+  permittedMethods: nonEmptyStringArray,
+  requiredEvidence: nonEmptyStringArray,
+  requiresDistinctRole: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+    Schema.withConstructorDefault(Effect.succeed(false)),
+  ),
 });
-export type WorkflowStep = z.infer<typeof WorkflowStepSchema>;
 
-export const TransitionKindSchema = z.enum([
-  'advance',
-  'repeat',
-  'route',
-  'await-decision',
-  'block',
-  'finish',
+export type WorkflowStep = typeof WorkflowStepSchema.Type;
+
+export const TransitionKindSchema = Schema.Literals([
+  "advance",
+  "repeat",
+  "route",
+  "await-decision",
+  "block",
+  "finish",
 ]);
-export type TransitionKind = z.infer<typeof TransitionKindSchema>;
 
-export const WorkflowRouteTargetSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('method'), method: z.string().min(1) }),
-  z.object({ kind: z.literal('child-workflow'), packageName: z.string().min(1) }),
+export type TransitionKind = typeof TransitionKindSchema.Type;
+
+export const WorkflowRouteTargetSchema = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("method"), method: nonEmptyString }),
+  Schema.Struct({ kind: Schema.Literal("child-workflow"), packageName: nonEmptyString }),
 ]);
-export type WorkflowRouteTarget = z.infer<typeof WorkflowRouteTargetSchema>;
 
-export const WorkflowTransitionRuleSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('advance'), from: z.string().min(1), to: z.string().min(1) }),
-  z.object({ kind: z.literal('repeat'), from: z.string().min(1), to: z.string().min(1) }),
-  z.object({
-    kind: z.literal('route'),
-    from: z.string().min(1),
-    targets: z.array(WorkflowRouteTargetSchema).min(1),
+export type WorkflowRouteTarget = typeof WorkflowRouteTargetSchema.Type;
+
+export const WorkflowTransitionRuleSchema = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("advance"),
+    from: nonEmptyString,
+    to: nonEmptyString,
   }),
-  z.object({ kind: z.literal('await-decision'), from: z.string().min(1) }),
-  z.object({ kind: z.literal('block'), from: z.string().min(1) }),
-  z.object({ kind: z.literal('finish'), from: z.string().min(1) }),
+  Schema.Struct({
+    kind: Schema.Literal("repeat"),
+    from: nonEmptyString,
+    to: nonEmptyString,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("route"),
+    from: nonEmptyString,
+    targets: Schema.mutable(Schema.NonEmptyArray(WorkflowRouteTargetSchema)),
+  }),
+  Schema.Struct({ kind: Schema.Literal("await-decision"), from: nonEmptyString }),
+  Schema.Struct({ kind: Schema.Literal("block"), from: nonEmptyString }),
+  Schema.Struct({ kind: Schema.Literal("finish"), from: nonEmptyString }),
 ]);
-export type WorkflowTransitionRule = z.infer<typeof WorkflowTransitionRuleSchema>;
 
-const finiteLimit = z.number().int().positive().finite();
-export const WorkflowLimitsSchema = z.object({
+export type WorkflowTransitionRule = typeof WorkflowTransitionRuleSchema.Type;
+
+const finiteLimit = integer.check(Schema.isGreaterThan(0), Schema.isFinite());
+
+export const WorkflowLimitsSchema = Schema.Struct({
   maxAttempts: finiteLimit,
   maxRepeats: finiteLimit,
   deadlineMs: finiteLimit,
   parallelism: finiteLimit,
   innerLoopDeadlineMs: finiteLimit,
 });
-export type WorkflowLimits = z.infer<typeof WorkflowLimitsSchema>;
 
-export const WorkflowPackageSnapshotSchema = z
-  .object({
-    name: z.string().min(1),
-    version: z.string().min(1),
-    digest: DigestSchema,
-    sourceDigests: z.array(DigestSchema),
-    entryStep: z.string().min(1),
-    steps: z.array(WorkflowStepSchema).min(1),
-    transitions: z.array(WorkflowTransitionRuleSchema),
-    limits: WorkflowLimitsSchema,
-  })
-  .superRefine((snapshot, context) => {
+export type WorkflowLimits = typeof WorkflowLimitsSchema.Type;
+
+export const WorkflowPackageSnapshotSchema = Schema.Struct({
+  name: nonEmptyString,
+  version: nonEmptyString,
+  digest: DigestSchema,
+  sourceDigests: Schema.mutable(Schema.Array(DigestSchema)),
+  entryStep: nonEmptyString,
+  steps: Schema.mutable(Schema.NonEmptyArray(WorkflowStepSchema)),
+  transitions: Schema.mutable(Schema.Array(WorkflowTransitionRuleSchema)),
+  limits: WorkflowLimitsSchema,
+}).check(
+  Schema.makeFilter((snapshot) => {
+    const issues: Array<Schema.FilterIssue> = [];
     const stepNames = new Set<string>();
+
     for (const [index, step] of snapshot.steps.entries()) {
       if (stepNames.has(step.name)) {
-        context.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `Duplicate workflow step ${step.name}`,
-          path: ['steps', index, 'name'],
+        issues.push({
+          path: ["steps", index, "name"],
+          issue: `Duplicate workflow step ${step.name}`,
         });
       }
+
       stepNames.add(step.name);
     }
+
     if (!stepNames.has(snapshot.entryStep)) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `Entry step ${snapshot.entryStep} is not defined`,
-        path: ['entryStep'],
+      issues.push({
+        path: ["entryStep"],
+        issue: `Entry step ${snapshot.entryStep} is not defined`,
       });
     }
-  });
-export type WorkflowPackageSnapshot = z.infer<typeof WorkflowPackageSnapshotSchema>;
+
+    return issues;
+  }),
+);
+
+export type WorkflowPackageSnapshot = typeof WorkflowPackageSnapshotSchema.Type;
+
 export type WorkflowPackage = WorkflowPackageSnapshot;
 
-export const EvidenceSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('file'), path: z.string().min(1), digest: DigestSchema }),
-  z.object({
-    kind: z.literal('git-commit'),
-    commit: z.string().min(1),
-    parent: z.string().min(1),
-    paths: z.array(z.string().min(1)),
+export const EvidenceSchema = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("file"),
+    path: nonEmptyString,
+    digest: DigestSchema,
   }),
-  z.object({
-    kind: z.literal('command'),
-    argv: z.tuple([z.string().min(1)]).rest(z.string()),
-    exitCode: z.number().int(),
+  Schema.Struct({
+    kind: Schema.Literal("git-commit"),
+    commit: nonEmptyString,
+    parent: nonEmptyString,
+    paths: nonEmptyStringArray,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("command"),
+    argv: Schema.mutable(
+      Schema.TupleWithRest(Schema.Tuple([nonEmptyString]), [Schema.String]),
+    ),
+    exitCode: integer,
     log: DigestSchema,
   }),
 ]);
-export type Evidence = z.infer<typeof EvidenceSchema>;
 
-export const VerificationSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('not-requested') }),
-  z.object({ kind: z.literal('passed'), checks: z.array(EvidenceSchema) }),
-  z.object({ kind: z.literal('failed'), checks: z.array(EvidenceSchema) }),
-]);
-export type Verification = z.infer<typeof VerificationSchema>;
+export type Evidence = typeof EvidenceSchema.Type;
 
-export const ResultContentSchema = z.discriminatedUnion('kind', [
-  z.object({
-    kind: z.literal('report'),
-    body: z.string().min(1),
-    artifactDigests: z.array(DigestSchema),
+export const VerificationSchema = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("not-requested") }),
+  Schema.Struct({
+    kind: Schema.Literal("passed"),
+    checks: Schema.mutable(Schema.Array(EvidenceSchema)),
   }),
-  z.object({
-    kind: z.literal('patch'),
-    sourceRepository: z.string().min(1),
-    baseCommit: z.string().min(1),
-    resultingTree: z.string().min(1),
-    changedPaths: z.array(z.string().min(1)),
-    artifactDigests: z.array(DigestSchema),
-  }),
-  z.object({
-    kind: z.literal('commit'),
-    sourceRepository: z.string().min(1),
-    baseCommit: z.string().min(1),
-    resultingTree: z.string().min(1),
-    resultingCommit: z.string().min(1),
-    changedPaths: z.array(z.string().min(1)),
-    artifactDigests: z.array(DigestSchema),
+  Schema.Struct({
+    kind: Schema.Literal("failed"),
+    checks: Schema.mutable(Schema.Array(EvidenceSchema)),
   }),
 ]);
-export type ResultContent = z.infer<typeof ResultContentSchema>;
 
-export const AttemptPhaseSchema = z.enum([
-  'pending',
-  'launching',
-  'running',
-  'stopping',
-  'settled',
-  'unconfirmed',
-  'closed',
-]);
-export type AttemptPhase = z.infer<typeof AttemptPhaseSchema>;
+export type Verification = typeof VerificationSchema.Type;
 
-export const WorkflowPhaseSchema = z.enum([
-  'running',
-  'pausing',
-  'paused',
-  'cancelling',
-  'cancelled',
-  'finished',
+export const ResultContentSchema = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("report"),
+    body: nonEmptyString,
+    artifactDigests: Schema.mutable(Schema.Array(DigestSchema)),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("patch"),
+    sourceRepository: nonEmptyString,
+    baseCommit: nonEmptyString,
+    resultingTree: nonEmptyString,
+    changedPaths: nonEmptyStringArray,
+    artifactDigests: Schema.mutable(Schema.Array(DigestSchema)),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("commit"),
+    sourceRepository: nonEmptyString,
+    baseCommit: nonEmptyString,
+    resultingTree: nonEmptyString,
+    resultingCommit: nonEmptyString,
+    changedPaths: nonEmptyStringArray,
+    artifactDigests: Schema.mutable(Schema.Array(DigestSchema)),
+  }),
 ]);
-export type WorkflowPhase = z.infer<typeof WorkflowPhaseSchema>;
-export const WorkflowOutcomeSchema = z.enum(['succeeded', 'failed']);
-export type WorkflowOutcome = z.infer<typeof WorkflowOutcomeSchema>;
-export const ExecutionBoundarySchema = z.enum(['all', 'design-only']);
-export type ExecutionBoundary = z.infer<typeof ExecutionBoundarySchema>;
 
-export const StepRunPhaseSchema = z.enum([
-  'pending',
-  'active',
-  'blocked',
-  'awaiting-decision',
-  'succeeded',
-  'failed',
-  'stale',
-  'closed',
-]);
-export type StepRunPhase = z.infer<typeof StepRunPhaseSchema>;
+export type ResultContent = typeof ResultContentSchema.Type;
 
-export const ControlOperationSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('pause'), mode: z.enum(['drain', 'safe', 'now']) }),
-  z.object({ kind: z.literal('cancel') }),
+export const AttemptPhaseSchema = Schema.Literals([
+  "pending",
+  "launching",
+  "running",
+  "stopping",
+  "settled",
+  "unconfirmed",
+  "closed",
 ]);
-export type ControlOperation = z.infer<typeof ControlOperationSchema>;
+
+export type AttemptPhase = typeof AttemptPhaseSchema.Type;
+
+export const AttemptRecoverySchema = Schema.Struct({
+  expectedBriefRevision: RevisionSchema,
+  outcome: Schema.Literals(["failed", "interrupted"]),
+  reason: nonEmptyString,
+  idempotencyKey: nonEmptyString,
+});
+
+export type AttemptRecovery = typeof AttemptRecoverySchema.Type;
+
+export const WorkflowPhaseSchema = Schema.Literals([
+  "running",
+  "pausing",
+  "paused",
+  "cancelling",
+  "cancelled",
+  "finished",
+]);
+
+export type WorkflowPhase = typeof WorkflowPhaseSchema.Type;
+
+export const WorkflowOutcomeSchema = Schema.Literals(["succeeded", "failed"]);
+
+export type WorkflowOutcome = typeof WorkflowOutcomeSchema.Type;
+
+export const ExecutionBoundarySchema = Schema.Literals(["all", "design-only"]);
+
+export type ExecutionBoundary = typeof ExecutionBoundarySchema.Type;
+
+export const StepRunPhaseSchema = Schema.Literals([
+  "pending",
+  "active",
+  "blocked",
+  "awaiting-decision",
+  "succeeded",
+  "failed",
+  "stale",
+  "closed",
+]);
+
+export type StepRunPhase = typeof StepRunPhaseSchema.Type;
+
+export const ControlOperationSchema = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("pause"),
+    mode: Schema.Literals(["drain", "safe", "now"]),
+  }),
+  Schema.Struct({ kind: Schema.Literal("cancel") }),
+]);
+
+export type ControlOperation = typeof ControlOperationSchema.Type;
 
 const transitionEnvelope = {
   workflowId: WorkflowIdSchema,
   sourceStepRunId: StepRunIdSchema,
-  reason: z.string().min(1),
-  evidenceResultIds: z.array(ResultIdSchema),
+  reason: nonEmptyString,
+  evidenceResultIds: Schema.mutable(Schema.Array(ResultIdSchema)),
   expectedWorkflowRevision: RevisionSchema,
   expectedBriefRevision: RevisionSchema,
   expectedControlRevision: RevisionSchema,
-  idempotencyKey: z.string().min(1),
+  idempotencyKey: nonEmptyString,
 };
 
-export const TransitionRequestSchema = z.discriminatedUnion('kind', [
-  z.object({ ...transitionEnvelope, kind: z.literal('advance'), targetStep: z.string().min(1) }),
-  z.object({ ...transitionEnvelope, kind: z.literal('repeat'), targetStep: z.string().min(1) }),
-  z.object({ ...transitionEnvelope, kind: z.literal('route'), target: WorkflowRouteTargetSchema }),
-  z.object({ ...transitionEnvelope, kind: z.literal('await-decision'), artifact: ResultIdSchema }),
-  z.object({
+export const TransitionRequestSchema = Schema.Union([
+  Schema.Struct({
     ...transitionEnvelope,
-    kind: z.literal('block'),
-    resolutionCondition: z.string().min(1),
+    kind: Schema.Literal("advance"),
+    targetStep: nonEmptyString,
   }),
-  z.object({
+  Schema.Struct({
     ...transitionEnvelope,
-    kind: z.literal('finish'),
-    result: z.discriminatedUnion('outcome', [
-      z.object({ outcome: z.literal('succeeded'), resultIds: z.array(ResultIdSchema) }),
-      z.object({
-        outcome: z.literal('failed'),
-        failureReason: z.string().min(1),
-        retainedResultIds: z.array(ResultIdSchema),
+    kind: Schema.Literal("repeat"),
+    targetStep: nonEmptyString,
+  }),
+  Schema.Struct({
+    ...transitionEnvelope,
+    kind: Schema.Literal("route"),
+    target: WorkflowRouteTargetSchema,
+  }),
+  Schema.Struct({
+    ...transitionEnvelope,
+    kind: Schema.Literal("await-decision"),
+    artifact: ResultIdSchema,
+  }),
+  Schema.Struct({
+    ...transitionEnvelope,
+    kind: Schema.Literal("block"),
+    resolutionCondition: nonEmptyString,
+  }),
+  Schema.Struct({
+    ...transitionEnvelope,
+    kind: Schema.Literal("finish"),
+    result: Schema.Union([
+      Schema.Struct({
+        outcome: Schema.Literal("succeeded"),
+        resultIds: Schema.mutable(Schema.Array(ResultIdSchema)),
+      }),
+      Schema.Struct({
+        outcome: Schema.Literal("failed"),
+        failureReason: nonEmptyString,
+        retainedResultIds: Schema.mutable(Schema.Array(ResultIdSchema)),
       }),
     ]),
   }),
 ]);
-export type TransitionRequest = z.infer<typeof TransitionRequestSchema>;
+
+export type TransitionRequest = typeof TransitionRequestSchema.Type;
 
 export type JobOrigin =
-  { kind: 'direct' } | { kind: 'workflow'; workflowId: WorkflowId; stepRunId: StepRunId };
+  | { kind: "direct" }
+  | { kind: "workflow"; workflowId: WorkflowId; stepRunId: StepRunId };
 
 export type Job = {
   id: JobId;
@@ -315,7 +452,7 @@ export type Job = {
   workspaceId: WorkspaceId;
   delivery: DeliveryKind;
   origin: JobOrigin;
-  state: 'open' | 'finished' | 'cancelled';
+  state: "open" | "finished" | "cancelled";
   createdAt: Timestamp;
 };
 

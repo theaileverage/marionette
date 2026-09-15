@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
+import { Schema } from 'effect';
 
 import {
   AgentSessionIdSchema,
@@ -31,7 +32,7 @@ type Fixture = {
   root: string;
   repositoryRoot: string;
   workspacePath: string;
-  workspaceId: ReturnType<typeof WorkspaceIdSchema.parse>;
+  workspaceId: typeof WorkspaceIdSchema.Type;
   actor: SessionIdentity;
   identity: NativeIdentity;
   attemptId: string;
@@ -43,7 +44,9 @@ function git(cwd: string, args: readonly string[]): string {
     encoding: 'utf8',
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
   });
+
   assert.equal(result.status, 0, result.stderr);
+
   return result.stdout.trim();
 }
 
@@ -70,18 +73,20 @@ function createFixture(): Fixture {
 
   const store = Store.open({
     databasePath: join(root, 'state.sqlite'),
-    project: ProjectBindingSchema.parse({
-      id: ProjectIdSchema.parse('project_runtime_retirement'),
-      hostId: HostIdSchema.parse('host_runtime_retirement'),
+    project: Schema.decodeUnknownSync(ProjectBindingSchema)({
+      id: Schema.decodeUnknownSync(ProjectIdSchema)('project_runtime_retirement'),
+      hostId: Schema.decodeUnknownSync(HostIdSchema)('host_runtime_retirement'),
       repositoryRoot,
       stateDirectory: join(root, 'state'),
     }),
     clock: () => new Date('2026-09-11T00:00:00.000Z'),
   });
+
   const actor = {
-    id: AgentSessionIdSchema.parse('session_actor'),
-    generation: SessionGenerationSchema.parse(1),
+    id: Schema.decodeUnknownSync(AgentSessionIdSchema)('session_actor'),
+    generation: Schema.decodeUnknownSync(SessionGenerationSchema)(1),
   };
+
   store.registerSession({
     ...actor,
     workspaceId: null,
@@ -94,7 +99,7 @@ function createFixture(): Fixture {
     nativeServerGeneration: null,
     nativeLocator: null,
   });
-  const workspaceId = WorkspaceIdSchema.parse('workspace_runtime_retirement');
+  const workspaceId = Schema.decodeUnknownSync(WorkspaceIdSchema)('workspace_runtime_retirement');
   store.registerWorkspace({
     actor,
     id: workspaceId,
@@ -106,12 +111,13 @@ function createFixture(): Fixture {
     writes: [],
     idempotencyKey: 'workspace',
   });
+
   const job = store.createJob({
     actor,
     stableKey: 'runtime-retirement',
     request: {
       text: 'Retire a settled runtime workspace',
-      digest: DigestSchema.parse(createHash('sha256').update('runtime retirement').digest('hex')),
+      digest: Schema.decodeUnknownSync(DigestSchema)(createHash('sha256').update('runtime retirement').digest('hex')),
       inputSnapshots: [],
     },
     brief: {
@@ -128,6 +134,7 @@ function createFixture(): Fixture {
     dependencies: [],
     idempotencyKey: 'job',
   });
+
   const identity: NativeIdentity = {
     binding: {
       hostId: store.project.hostId,
@@ -150,10 +157,12 @@ function createFixture(): Fixture {
     identityRevision: 1,
     ownedTabId: 'tab-1',
   };
+
   const session = {
-    id: AgentSessionIdSchema.parse('session_worker'),
-    generation: SessionGenerationSchema.parse(1),
+    id: Schema.decodeUnknownSync(AgentSessionIdSchema)('session_worker'),
+    generation: Schema.decodeUnknownSync(SessionGenerationSchema)(1),
   };
+
   store.registerSession({
     ...session,
     workspaceId,
@@ -166,6 +175,7 @@ function createFixture(): Fixture {
     nativeServerGeneration: identity.binding.endpoint.serverStartToken,
     nativeLocator: nativeLocatorForRetirement(identity),
   });
+
   const admitted = store.admitAttempt({
     actor,
     jobId: job.id,
@@ -176,6 +186,7 @@ function createFixture(): Fixture {
     workflow: { kind: 'direct' },
     idempotencyKey: 'attempt',
   });
+
   store.settleAttempt({
     actor,
     attemptId: admitted.attempt.id,
@@ -222,6 +233,7 @@ function createFixture(): Fixture {
         '2026-09-11T00:00:00.000Z',
       );
   });
+
   return {
     root,
     repositoryRoot,
@@ -253,16 +265,20 @@ class FixtureAdapter extends HerdrNativeAdapter {
   override async cleanup(identity: NativeIdentity, authorized: boolean): Promise<CleanupResult> {
     assert.equal(authorized, true);
     const prepared = await this.effects.prepare({ kind: 'cleanup', tabId: identity.ownedTabId });
+
     if (prepared.kind === 'rejected') return { kind: 'unsupported', reason: prepared.reason };
     this.cleanupCalls += 1;
+
     return { kind: 'cleaned', operationId: prepared.operationId };
   }
 }
 
 test('runtime retirement cleans only its persisted identity with a settled attempt', async () => {
   const fixture = createFixture();
+
   try {
     let adapter: FixtureAdapter | undefined;
+
     const retired = await retireRuntimeWorkspace({
       store: fixture.store,
       actor: fixture.actor,
@@ -270,6 +286,7 @@ test('runtime retirement cleans only its persisted identity with a settled attem
       idempotencyKey: 'retire-runtime',
       adapterFor: (journal) => composeHerdrAdapter((adapter = new FixtureAdapter(journal))),
     });
+
     assert.equal(retired.kind, 'completed');
     assert.equal(adapter?.cleanupCalls, 1);
     assert.equal(
@@ -291,6 +308,7 @@ test('runtime retirement cleans only its persisted identity with a settled attem
 
 test('runtime retirement does not resend a cleanup already claimed before its outcome', async () => {
   const fixture = createFixture();
+
   try {
     fixture.store.transaction((database) => {
       database
@@ -307,6 +325,7 @@ test('runtime retirement does not resend a cleanup already claimed before its ou
         );
     });
     let adapter: FixtureAdapter | undefined;
+
     const retired = await retireRuntimeWorkspace({
       store: fixture.store,
       actor: fixture.actor,
@@ -314,6 +333,7 @@ test('runtime retirement does not resend a cleanup already claimed before its ou
       idempotencyKey: 'retire-preclaimed-cleanup',
       adapterFor: (journal) => composeHerdrAdapter((adapter = new FixtureAdapter(journal))),
     });
+
     assert.equal(retired.kind, 'blocked');
     assert.match(retired.reason, /already claimed/);
     assert.equal(adapter?.cleanupCalls, 0);
@@ -325,6 +345,7 @@ test('runtime retirement does not resend a cleanup already claimed before its ou
 
 test('runtime retirement rejects a native identity whose session binding changed', async () => {
   const fixture = createFixture();
+
   try {
     fixture.store.transaction((database) => {
       database

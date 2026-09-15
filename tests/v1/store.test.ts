@@ -4,7 +4,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
-import { z } from 'zod';
+import { Schema } from 'effect';
 
 import {
   AgentSessionIdSchema,
@@ -19,8 +19,9 @@ import {
 import { ArtifactFiles, registerArtifact } from '../../src/v1/artifacts.js';
 import { Store, StoreError, type AgentSession, type SessionIdentity } from '../../src/v1/store.js';
 
-const zeroDigest = DigestSchema.parse('0'.repeat(64));
-const oneDigest = DigestSchema.parse('1'.repeat(64));
+const zeroDigest = Schema.decodeUnknownSync(DigestSchema)('0'.repeat(64));
+
+const oneDigest = Schema.decodeUnknownSync(DigestSchema)('1'.repeat(64));
 
 function tokenHash(token: string): string {
   return createHash('sha256').update(token).digest('hex');
@@ -35,30 +36,33 @@ type Fixture = {
   project: ProjectBinding;
   controller: AgentSession;
   worker: AgentSession;
-  workspaceId: ReturnType<typeof WorkspaceIdSchema.parse>;
+  workspaceId: typeof WorkspaceIdSchema.Type;
 };
 
 function fixture(t: TestContext): Fixture {
   const directory = mkdtempSync(join(tmpdir(), 'marionette-v1-store-'));
   let sequence = 0;
+
   const project = {
-    id: ProjectIdSchema.parse('project_store'),
-    hostId: HostIdSchema.parse('host_store'),
+    id: Schema.decodeUnknownSync(ProjectIdSchema)('project_store'),
+    hostId: Schema.decodeUnknownSync(HostIdSchema)('host_store'),
     repositoryRoot: '/repo',
     stateDirectory: join(directory, 'state'),
   };
+
   const store = Store.open({
     databasePath: join(directory, 'state.sqlite'),
     project,
     idFactory: (kind) => `${kind}_${++sequence}`,
   });
+
   t.after(() => {
     store.close();
     rmSync(directory, { recursive: true, force: true });
   });
 
   const controller = store.registerSession({
-    id: AgentSessionIdSchema.parse('controller'),
+    id: Schema.decodeUnknownSync(AgentSessionIdSchema)('controller'),
     generation: 1,
     workspaceId: null,
     role: 'controller',
@@ -70,7 +74,8 @@ function fixture(t: TestContext): Fixture {
     nativeServerGeneration: null,
     nativeLocator: null,
   });
-  const workspaceId = WorkspaceIdSchema.parse('workspace_main');
+
+  const workspaceId = Schema.decodeUnknownSync(WorkspaceIdSchema)('workspace_main');
   store.registerWorkspace({
     actor: controller,
     id: workspaceId,
@@ -82,8 +87,9 @@ function fixture(t: TestContext): Fixture {
     writes: ['src/**'],
     idempotencyKey: 'workspace-main',
   });
+
   const worker = store.registerSession({
-    id: AgentSessionIdSchema.parse('worker'),
+    id: Schema.decodeUnknownSync(AgentSessionIdSchema)('worker'),
     generation: 1,
     workspaceId,
     role: 'worker',
@@ -95,6 +101,7 @@ function fixture(t: TestContext): Fixture {
     nativeServerGeneration: null,
     nativeLocator: null,
   });
+
   return { store, project, controller, worker, workspaceId };
 }
 
@@ -134,7 +141,7 @@ function registerWorker(
   executionRole = 'implementation',
 ): AgentSession {
   return fixtureValue.store.registerSession({
-    id: AgentSessionIdSchema.parse(name),
+    id: Schema.decodeUnknownSync(AgentSessionIdSchema)(name),
     generation: 1,
     workspaceId: fixtureValue.workspaceId,
     role: 'worker',
@@ -155,6 +162,7 @@ function admitRunningAttempt(
   const job = current.store.createJob(
     directJobInput(current, input.jobKey, `create-${input.jobKey}`),
   );
+
   const admission = current.store.admitAttempt({
     actor: current.controller,
     jobId: job.id,
@@ -165,6 +173,7 @@ function admitRunningAttempt(
     workflow: { kind: 'direct' },
     idempotencyKey: input.admissionKey,
   });
+
   current.store.claimAttemptLaunch({
     actor: current.controller,
     attemptId: admission.attempt.id,
@@ -180,6 +189,7 @@ function admitRunningAttempt(
     nativeLocator: `pane-${input.jobKey}`,
     idempotencyKey: input.observationKey,
   });
+
   return admission.attempt;
 }
 
@@ -223,7 +233,7 @@ test('binds a database to one project and authenticates immutable session genera
     () =>
       Store.open({
         databasePath: current.store.databasePath,
-        project: { ...current.project, id: ProjectIdSchema.parse('another_project') },
+        project: { ...current.project, id: Schema.decodeUnknownSync(ProjectIdSchema)('another_project') },
       }),
     hasCode('binding-mismatch'),
   );
@@ -288,13 +298,15 @@ test('creates jobs idempotently and fences active workspace retirement', (t) => 
 
 test('rejects results whose file or command evidence has no durable artifact', (t) => {
   const current = fixture(t);
+
   const attempt = admitRunningAttempt(current, {
     jobKey: 'unverified-evidence',
     admissionKey: 'admit-unverified-evidence',
     launchKey: 'launch-unverified-evidence',
     observationKey: 'observe-unverified-evidence',
   });
-  const missingLog = EvidenceSchema.parse({
+
+  const missingLog = Schema.decodeUnknownSync(EvidenceSchema)({
     kind: 'command',
     argv: ['bun', 'test'],
     exitCode: 0,
@@ -317,7 +329,7 @@ test('rejects results whose file or command evidence has no durable artifact', (
       }),
     hasCode('not-found'),
   );
-  const missingFile = EvidenceSchema.parse({ kind: 'file', path: 'report.md', digest: zeroDigest });
+  const missingFile = Schema.decodeUnknownSync(EvidenceSchema)({ kind: 'file', path: 'report.md', digest: zeroDigest });
   assert.throws(
     () =>
       current.store.recordResult({
@@ -338,19 +350,22 @@ test('rejects results whose file or command evidence has no durable artifact', (
 
 test('rejects results whose evidence catalog bytes fail integrity verification', (t) => {
   const current = fixture(t);
+
   const attempt = admitRunningAttempt(current, {
     jobKey: 'damaged-evidence',
     admissionKey: 'admit-damaged-evidence',
     launchKey: 'launch-damaged-evidence',
     observationKey: 'observe-damaged-evidence',
   });
+
   const files = new ArtifactFiles(current.project.stateDirectory);
   const artifact = files.put(Buffer.from('original test log'));
-  const digest = DigestSchema.parse(artifact.digest);
+  const digest = Schema.decodeUnknownSync(DigestSchema)(artifact.digest);
   registerArtifact(current.store, files, artifact);
   chmodSync(files.path(artifact), 0o600);
   writeFileSync(files.path(artifact), 'tampered log');
-  const damagedLog = EvidenceSchema.parse({
+
+  const damagedLog = Schema.decodeUnknownSync(EvidenceSchema)({
     kind: 'command',
     argv: ['bun', 'test'],
     exitCode: 0,
@@ -377,22 +392,26 @@ test('rejects results whose evidence catalog bytes fail integrity verification',
 
 test('retains evidence-only artifacts and rejects damage before first acceptance', (t) => {
   const current = fixture(t);
+
   const attempt = admitRunningAttempt(current, {
     jobKey: 'evidence-retention',
     admissionKey: 'admit-evidence-retention',
     launchKey: 'launch-evidence-retention',
     observationKey: 'observe-evidence-retention',
   });
+
   const files = new ArtifactFiles(current.project.stateDirectory);
   const artifact = files.put(Buffer.from('original command log'));
-  const digest = DigestSchema.parse(artifact.digest);
+  const digest = Schema.decodeUnknownSync(DigestSchema)(artifact.digest);
   registerArtifact(current.store, files, artifact);
-  const evidence = EvidenceSchema.parse({
+
+  const evidence = Schema.decodeUnknownSync(EvidenceSchema)({
     kind: 'command',
     argv: ['bun', 'test'],
     exitCode: 0,
     log: digest,
   });
+
   const recorded = current.store.recordResult({
     actor: current.worker,
     attemptId: attempt.id,
@@ -405,6 +424,7 @@ test('retains evidence-only artifacts and rejects damage before first acceptance
     upstreamResultIds: [],
     idempotencyKey: 'record-evidence-retention',
   });
+
   chmodSync(files.path(artifact), 0o600);
   writeFileSync(files.path(artifact), 'tampered command log');
 
@@ -428,7 +448,9 @@ test('retains evidence-only artifacts and rejects damage before first acceptance
            WHERE ra.result_id = ?`,
         )
         .all(recorded.id)
-        .map((row) => ({ digest: z.object({ digest: DigestSchema }).parse(row).digest })),
+        .map((row) => ({
+          digest: Schema.decodeUnknownSync(Schema.Struct({ digest: DigestSchema }))(row).digest,
+        })),
     ),
     [{ digest }],
   );
@@ -436,12 +458,14 @@ test('retains evidence-only artifacts and rejects damage before first acceptance
 
 test('rejects new worker results after settlement but replays an already recorded result', (t) => {
   const current = fixture(t);
+
   const attempt = admitRunningAttempt(current, {
     jobKey: 'settled-result',
     admissionKey: 'admit-settled-result',
     launchKey: 'launch-settled-result',
     observationKey: 'observe-settled-result',
   });
+
   const command = {
     actor: current.worker,
     attemptId: attempt.id,
@@ -454,6 +478,7 @@ test('rejects new worker results after settlement but replays an already recorde
     upstreamResultIds: [],
     idempotencyKey: 'record-before-settlement',
   };
+
   const recorded = current.store.recordResult(command);
   current.store.settleAttempt({
     actor: current.controller,
@@ -472,6 +497,7 @@ test('rejects new worker results after settlement but replays an already recorde
 test('fences attempt launch, persists immutable results, and releases settled resources', (t) => {
   const current = fixture(t);
   const job = current.store.createJob(directJobInput(current, 'job-result', 'create-result-job'));
+
   const admission = current.store.admitAttempt({
     actor: current.controller,
     jobId: job.id,
@@ -482,6 +508,7 @@ test('fences attempt launch, persists immutable results, and releases settled re
     workflow: { kind: 'direct' },
     idempotencyKey: 'admit-result-attempt',
   });
+
   assert.equal(admission.replayed, false);
   assert.equal(
     current.store.admitAttempt({
@@ -528,16 +555,21 @@ test('fences attempt launch, persists immutable results, and releases settled re
     nativeLocator: 'pane-1',
     idempotencyKey: 'observe-result-attempt',
   });
+
+  assert.deepEqual(current.store.discoverResult(admission.attempt.id), { kind: 'pending' });
+
   const files = new ArtifactFiles(current.project.stateDirectory);
   const artifact = files.put(Buffer.from('verified command output'));
-  const artifactDigest = DigestSchema.parse(artifact.digest);
+  const artifactDigest = Schema.decodeUnknownSync(DigestSchema)(artifact.digest);
   registerArtifact(current.store, files, artifact);
-  const evidence = EvidenceSchema.parse({
+
+  const evidence = Schema.decodeUnknownSync(EvidenceSchema)({
     kind: 'command',
     argv: ['bun', 'test'],
     exitCode: 0,
     log: artifactDigest,
   });
+
   const result = current.store.recordResult({
     actor: current.worker,
     attemptId: admission.attempt.id,
@@ -554,7 +586,13 @@ test('fences attempt launch, persists immutable results, and releases settled re
     upstreamResultIds: [],
     idempotencyKey: 'record-result',
   });
+
   assert.deepEqual(current.store.getResult(result.id), result);
+  assert.deepEqual(current.store.discoverResult(admission.attempt.id), {
+    kind: 'found',
+    result,
+  });
+
   assert.equal(
     current.store.read(
       (database) =>
@@ -566,6 +604,7 @@ test('fences attempt launch, persists immutable results, and releases settled re
   );
   const nextWorker = registerWorker(current, 'next-worker');
   const nextJob = current.store.createJob(directJobInput(current, 'next-job', 'create-next-job'));
+
   const admitNext = () =>
     current.store.admitAttempt({
       actor: current.controller,
@@ -577,7 +616,9 @@ test('fences attempt launch, persists immutable results, and releases settled re
       workflow: { kind: 'direct' },
       idempotencyKey: 'admit-next-attempt',
     });
+
   assert.throws(admitNext, hasCode('invalid-state'));
+
   const acceptance = current.store.decideResult({
     actor: current.controller,
     resultId: result.id,
@@ -585,6 +626,7 @@ test('fences attempt launch, persists immutable results, and releases settled re
     decision: { kind: 'accepted' },
     idempotencyKey: 'accept-result',
   });
+
   assert.equal(acceptance.decision, 'accepted');
   chmodSync(files.path(artifact), 0o600);
   writeFileSync(files.path(artifact), 'tampered command output');
@@ -614,10 +656,12 @@ test('fences attempt launch, persists immutable results, and releases settled re
   });
   assert.doesNotThrow(admitNext);
   current.store.close();
+
   const reopened = Store.open({
     databasePath: current.store.databasePath,
     project: current.project,
   });
+
   t.after(() => reopened.close());
   assert.deepEqual(reopened.getResult(result.id).content, {
     kind: 'report',
@@ -628,9 +672,11 @@ test('fences attempt launch, persists immutable results, and releases settled re
 
 test('keeps uncertain resources reserved until later native settlement', (t) => {
   const current = fixture(t);
+
   const firstJob = current.store.createJob(
     directJobInput(current, 'uncertain-one', 'uncertain-one'),
   );
+
   const first = current.store.admitAttempt({
     actor: current.controller,
     jobId: firstJob.id,
@@ -641,6 +687,7 @@ test('keeps uncertain resources reserved until later native settlement', (t) => 
     workflow: { kind: 'direct' },
     idempotencyKey: 'admit-uncertain-one',
   });
+
   current.store.settleAttempt({
     actor: current.controller,
     attemptId: first.attempt.id,
@@ -649,9 +696,11 @@ test('keeps uncertain resources reserved until later native settlement', (t) => 
   });
 
   const nextWorker = registerWorker(current, 'uncertain-worker');
+
   const nextJob = current.store.createJob(
     directJobInput(current, 'uncertain-two', 'uncertain-two'),
   );
+
   const admitNext = () =>
     current.store.admitAttempt({
       actor: current.controller,
@@ -663,6 +712,7 @@ test('keeps uncertain resources reserved until later native settlement', (t) => 
       workflow: { kind: 'direct' },
       idempotencyKey: 'admit-uncertain-two',
     });
+
   assert.throws(admitNext, hasCode('resource-busy'));
   current.store.settleAttempt({
     actor: current.controller,
@@ -675,7 +725,8 @@ test('keeps uncertain resources reserved until later native settlement', (t) => 
 
 test('fences managed admission by workflow and control revision', (t) => {
   const current = fixture(t);
-  const workflowPackage = WorkflowPackageSnapshotSchema.parse({
+
+  const workflowPackage = Schema.decodeUnknownSync(WorkflowPackageSnapshotSchema)({
     name: 'reviewed-change',
     version: '1',
     digest: oneDigest,
@@ -710,6 +761,7 @@ test('fences managed admission by workflow and control revision', (t) => {
       innerLoopDeadlineMs: 30_000,
     },
   });
+
   const workflow = current.store.createWorkflow({
     actor: current.controller,
     stableKey: 'managed-workflow',
@@ -721,6 +773,7 @@ test('fences managed admission by workflow and control revision', (t) => {
     boundary: 'all',
     idempotencyKey: 'create-managed-workflow',
   });
+
   assert.equal(current.store.getStepRun(workflow.currentStepRunId).stepName, 'implement');
   const managedWorker = registerWorker(current, 'managed-worker', workflow.id);
   assert.throws(
@@ -743,6 +796,7 @@ test('fences managed admission by workflow and control revision', (t) => {
       }),
     hasCode('stale-revision'),
   );
+
   const admitted = current.store.admitAttempt({
     actor: current.controller,
     jobId: workflow.rootJobId,
@@ -759,6 +813,7 @@ test('fences managed admission by workflow and control revision', (t) => {
     },
     idempotencyKey: 'managed-admission',
   });
+
   assert.equal(admitted.workflowRevision, 2);
   assert.equal(current.store.getStepRun(workflow.currentStepRunId).phase, 'active');
   const parallelWorker = registerWorker(current, 'parallel-worker', workflow.id);
@@ -808,6 +863,7 @@ test('fences managed admission by workflow and control revision', (t) => {
     nativeLocator: 'managed-pane',
     idempotencyKey: 'observe-managed-attempt',
   });
+
   const incompleteResult = current.store.recordResult({
     actor: managedWorker,
     attemptId: admitted.attempt.id,
@@ -820,6 +876,7 @@ test('fences managed admission by workflow and control revision', (t) => {
     upstreamResultIds: [],
     idempotencyKey: 'record-managed-result',
   });
+
   assert.throws(
     () =>
       current.store.decideResult({
@@ -835,10 +892,11 @@ test('fences managed admission by workflow and control revision', (t) => {
 
 test('requires review sessions to have a distinct identity and execution role', (t) => {
   const current = fixture(t);
-  const workflowPackage = WorkflowPackageSnapshotSchema.parse({
+
+  const workflowPackage = Schema.decodeUnknownSync(WorkflowPackageSnapshotSchema)({
     name: 'separated-review',
     version: '1',
-    digest: DigestSchema.parse('2'.repeat(64)),
+    digest: Schema.decodeUnknownSync(DigestSchema)('2'.repeat(64)),
     sourceDigests: [],
     entryStep: 'implement',
     steps: [
@@ -873,6 +931,7 @@ test('requires review sessions to have a distinct identity and execution role', 
       innerLoopDeadlineMs: 30_000,
     },
   });
+
   const workflow = current.store.createWorkflow({
     actor: current.controller,
     stableKey: 'separated-review',
@@ -884,7 +943,9 @@ test('requires review sessions to have a distinct identity and execution role', 
     boundary: 'all',
     idempotencyKey: 'create-separated-review',
   });
+
   const implementer = registerWorker(current, 'separation-implementer', workflow.id);
+
   const implementation = current.store.admitAttempt({
     actor: current.controller,
     jobId: workflow.rootJobId,
@@ -901,6 +962,7 @@ test('requires review sessions to have a distinct identity and execution role', 
     },
     idempotencyKey: 'admit-separation-implementation',
   });
+
   current.store.settleAttempt({
     actor: current.controller,
     attemptId: implementation.attempt.id,
@@ -934,6 +996,7 @@ test('requires review sessions to have a distinct identity and execution role', 
     workflow.id,
     'implementation',
   );
+
   const reviewAdmission = (session: AgentSession, idempotencyKey: string) =>
     current.store.admitAttempt({
       actor: current.controller,
@@ -951,6 +1014,7 @@ test('requires review sessions to have a distinct identity and execution role', 
       },
       idempotencyKey,
     });
+
   assert.throws(
     () => reviewAdmission(sameRoleReviewer, 'reject-same-role-reviewer'),
     hasCode('permission-denied'),
