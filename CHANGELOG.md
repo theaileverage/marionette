@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.0-alpha.3 — 2026-09-15
+
+- Group terminal help by work area and align command names with their descriptions.
+- Color command names on capable terminals, respect `NO_COLOR`, and keep JSON help unchanged.
+
 ## 1.0.0-alpha.2 — 2026-09-15
 
 - Make the Effect runtime the default implementation. The released source is the former Effect port rather than a parallel implementation.
