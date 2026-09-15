@@ -497,8 +497,9 @@ for (const state of ['active', 'unconfirmed'] as const) {
         idempotencyKey: `preview-${state}-stale-binding`,
       });
 
-      assert.equal(preview.kind, 'blocked');
-      assert.match(preview.reason, /does not match its persisted session binding/);
+      if (preview.kind !== 'blocked') throw new Error('Expected a stale active session to block retirement');
+
+      assert.match(preview.reason ?? '', /does not match its persisted session binding/);
 
       await assert.rejects(
         retireRuntimeWorkspace({
