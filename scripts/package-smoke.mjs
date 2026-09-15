@@ -14,6 +14,8 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
+const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+
 const scratch = join(root, '.test-output', `package-smoke-${process.pid}`);
 
 const staged = join(scratch, 'package');
@@ -56,7 +58,7 @@ function cli(args, status = 0) {
 }
 
 try {
-  assert.equal(cli(['--version']).version, '1.0.0-alpha.1');
+  assert.equal(cli(['--version']).version, manifest.version);
   cli(['init', '--project', repo, '--state-home', env.MARIONETTE_STATE_HOME]);
   assert.ok(existsSync(join(repo, '.agents/skills/marionette/SKILL.md')));
   const context = cli(['context']);
@@ -99,10 +101,10 @@ try {
   assert.equal(sql.rows[0].id, thread.id);
   assert.equal(cli(['board', 'read', '--no-such-flag'], 2).error.code, 'invalid-options');
 
-  const manifest = JSON.parse(readFileSync(join(staged, 'package.json'), 'utf8'));
+  const stagedManifest = JSON.parse(readFileSync(join(staged, 'package.json'), 'utf8'));
 
-  const imports = Object.keys(manifest.exports).map((subpath) =>
-    subpath === '.' ? manifest.name : manifest.name + subpath.slice(1));
+  const imports = Object.keys(stagedManifest.exports).map((subpath) =>
+    subpath === '.' ? stagedManifest.name : stagedManifest.name + subpath.slice(1));
 
   const importedPackage = spawnSync(process.execPath, ['--input-type=module', '-e',
     `await Promise.all(${JSON.stringify(imports)}.map((name) => import(name)))`], {
@@ -114,7 +116,7 @@ try {
   const consumer = join(staged, 'consumer.ts');
   writeFileSync(consumer, [
     "import { Effect, Schema } from 'effect';",
-    `import { MarionetteService, marionetteLayer, OperationError, ClientOperationError, JobIdSchema } from '${manifest.name}';`,
+    `import { MarionetteService, marionetteLayer, OperationError, ClientOperationError, JobIdSchema } from '${stagedManifest.name}';`,
     "const id: typeof JobIdSchema.Type = Schema.decodeUnknownSync(JobIdSchema)('job-consumer');",
     "const program = Effect.gen(function* () { const client = yield* MarionetteService; return yield* client.execute({ operation: 'context' }); });",
     "const runnable = program.pipe(Effect.provide(marionetteLayer({ cwd: '/fixture' })));",
@@ -170,7 +172,7 @@ try {
           'all declared package export subpaths',
           'public Effect consumer declarations',
         ],
-        cliVersion: '1.0.0-alpha.1',
+        cliVersion: manifest.version,
         projectId: context.project.id,
       },
       null,

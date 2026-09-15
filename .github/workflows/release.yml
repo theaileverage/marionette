@@ -37,10 +37,12 @@ jobs:
         with:
           bun-version: 1.3.14
       - name: Validate release tag and main ancestry
+        id: release-version
         run: |
           node scripts/release.mjs check
           test "$RELEASE_TAG" = "v$(node -p 'require("./package.json").version')"
           git merge-base --is-ancestor HEAD origin/main
+          echo "version=$(node -p 'require("./package.json").version')" >> "$GITHUB_OUTPUT"
       - run: bun install --frozen-lockfile
       - run: npm run check
       - run: npm run test
@@ -53,7 +55,7 @@ jobs:
           npm pack --pack-destination release-assets
           node scripts/release.mjs smoke "release-assets/theaileverage-marionette-$(node -p 'require("./package.json").version').tgz"
       - name: Publish CLI alpha through npm trusted publishing
-        if: env.RELEASE_TAG == 'v1.0.0-alpha.1'
+        if: contains(steps.release-version.outputs.version, '-alpha.')
         run: |
           npm install --global npm@11.19.1
-          npm publish ./release-assets/theaileverage-marionette-1.0.0-alpha.1.tgz --tag alpha --access public --provenance
+          npm publish "./release-assets/theaileverage-marionette-${{ steps.release-version.outputs.version }}.tgz" --tag alpha --access public --provenance
