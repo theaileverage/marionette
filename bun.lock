@@ -8,7 +8,7 @@
         "effect": "4.0.0-rc.112",
       },
       "devDependencies": {
-        "@effect/tsgo": "0.43.0",
+        "@effect/tsgo": "0.45.0",
         "@oxlint/plugins": "1.82.0",
         "@types/node": "24.13.4",
         "esbuild": "0.28.2",
@@ -19,21 +19,21 @@
     },
   },
   "packages": {
-    "@effect/tsgo": ["@effect/tsgo@0.43.0", "", { "optionalDependencies": { "@effect/tsgo-darwin-arm64": "0.43.0", "@effect/tsgo-darwin-x64": "0.43.0", "@effect/tsgo-linux-arm": "0.43.0", "@effect/tsgo-linux-arm64": "0.43.0", "@effect/tsgo-linux-x64": "0.43.0", "@effect/tsgo-win32-arm64": "0.43.0", "@effect/tsgo-win32-x64": "0.43.0" }, "bin": { "effect-tsgo": "dist/effect-tsgo.cjs" } }, "sha512-Xpe9UNrQ4JGNXbk2YHE8r6Z575pswKcU4HS53CSHcT8obGAN14KmMh4a+A29Ky6TDdKaI4nwalkRwSizJi+9tw=="],
+    "@effect/tsgo": ["@effect/tsgo@0.45.0", "", { "optionalDependencies": { "@effect/tsgo-darwin-arm64": "0.45.0", "@effect/tsgo-darwin-x64": "0.45.0", "@effect/tsgo-linux-arm": "0.45.0", "@effect/tsgo-linux-arm64": "0.45.0", "@effect/tsgo-linux-x64": "0.45.0", "@effect/tsgo-win32-arm64": "0.45.0", "@effect/tsgo-win32-x64": "0.45.0" }, "bin": { "effect-tsgo": "dist/effect-tsgo.cjs" } }, "sha512-gPG0ixVHgtYBUe5DbKX9vzHlhqd9+ZEfs4m/XWy0808av0A2XqMzaG3F5rnPBN7EUJRPlo9TluIi8WHx/pBV+A=="],
 
-    "@effect/tsgo-darwin-arm64": ["@effect/tsgo-darwin-arm64@0.43.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-IG/JjY2n2YbUCQUwTLss9dF/VLe/m9tXQsyUHxhqFWW0Ih/3AJN3zIEnKu1JH19eQASFgsnm5zJQXHpVmiMRng=="],
+    "@effect/tsgo-darwin-arm64": ["@effect/tsgo-darwin-arm64@0.45.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-WUoiEVcm8E19QK6fl63lsssM4dkT9IFnULbmqQ6LBfv7H9uRkpE9S3thj8ZtZ+vl/QY8atwfuaTf+3A1m/kGtQ=="],
 
-    "@effect/tsgo-darwin-x64": ["@effect/tsgo-darwin-x64@0.43.0", "", { "os": "darwin", "cpu": "x64" }, "sha512-diUSga2Zhl7gp6TDJzw+JQ1CGOi1SvVS1gBWWS3AQExlYZaku3eQmtIQ6LJSfxTDBkVtk30zFuqT7/uqvXJkFA=="],
+    "@effect/tsgo-darwin-x64": ["@effect/tsgo-darwin-x64@0.45.0", "", { "os": "darwin", "cpu": "x64" }, "sha512-s3yz7ZfIzvObXJ/r5xd9sEPxHKC3L+D+yedS1BV2Kpn47Je2svYCNYKxzXIpqFLkNjK+RcOQrcfYbYEpKZZa6g=="],
 
-    "@effect/tsgo-linux-arm": ["@effect/tsgo-linux-arm@0.43.0", "", { "os": "linux", "cpu": "arm" }, "sha512-NCcggB9V3C3J0/mrP6K/O8EzoOj0ua6p85WZA4nNj/3mFXh8H3eTc4LPwdsVCiIi66u0qNNefFJjV2uNgDP6Qw=="],
+    "@effect/tsgo-linux-arm": ["@effect/tsgo-linux-arm@0.45.0", "", { "os": "linux", "cpu": "arm" }, "sha512-f6zL6YbWA9lXdfJ//KOjUz/U3CdGtajKi5NsR/lcQaKfZiJwHfeeLBB3yetF3qbPGSA149/kuMoDMWL13RUH3A=="],
 
-    "@effect/tsgo-linux-arm64": ["@effect/tsgo-linux-arm64@0.43.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-5HZ2G8zeIUYxG9DL0zgoibjd/EgHjK2BrTS28DMdmwd0+uRpMhCRPHnfGxurTDEprcCavAOfvKx+32EKe4HWhA=="],
+    "@effect/tsgo-linux-arm64": ["@effect/tsgo-linux-arm64@0.45.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-N+lyzixtylOOn49demDaqg0kb/U8ISxM10Gphs1pIMSGlqlfqC4inYEoFpYej+f4T/cRlkA11Ue7wJzNz83ePA=="],
 
-    "@effect/tsgo-linux-x64": ["@effect/tsgo-linux-x64@0.43.0", "", { "os": "linux", "cpu": "x64" }, "sha512-prRQeThBFCLngHdPMiF+FzcvdEhh7tqFkZ7mZct87FYJNCNaWjO8I6wJsjRY3SOyV7gaMRZrTTpV54sCdErQvQ=="],
+    "@effect/tsgo-linux-x64": ["@effect/tsgo-linux-x64@0.45.0", "", { "os": "linux", "cpu": "x64" }, "sha512-aWt0G8celAxJOis4+xiILkyMP/3J+vukimUhSoCmUAPt8zoT9qhZcN64XYZE7jfqp88ByRdgN9GK1/C7YfPtcQ=="],
 
-    "@effect/tsgo-win32-arm64": ["@effect/tsgo-win32-arm64@0.43.0", "", { "os": "win32", "cpu": "arm64" }, "sha512-O25TBiemFMEdtHscIJMmQ7NMPnIWPLWkuvudeSAB/VTmsfHoIgCsldC1vGDq3xP7wJDlxNPblZpCDpbnEO9s0Q=="],
+    "@effect/tsgo-win32-arm64": ["@effect/tsgo-win32-arm64@0.45.0", "", { "os": "win32", "cpu": "arm64" }, "sha512-EAdeV366ja+M4XCx6xjXMv4Xkc0Fgzy4bapa0saDWcGhllNLqJDfOk4lk0BgAEjBUI8+0xC+PXKVB5SMz4EpVA=="],
 
-    "@effect/tsgo-win32-x64": ["@effect/tsgo-win32-x64@0.43.0", "", { "os": "win32", "cpu": "x64" }, "sha512-Ic3hLnr8v8DBZ9Hx4VflSXJZSJh/Ak8PY/Tnz8nNWONtIpvBWTzFMXFmrib2h2O8N61FoAR/KG1S2M6mEqsExg=="],
+    "@effect/tsgo-win32-x64": ["@effect/tsgo-win32-x64@0.45.0", "", { "os": "win32", "cpu": "x64" }, "sha512-1Hsr/sT5dmIafoY9L0ASJo4VqGyPNzM1nwTb4Wj1Lmjq6kGuwO/PVozFg3WZZ0piChFmgiU3nx1AKZfyqgjGUw=="],
 
     "@esbuild/aix-ppc64": ["@esbuild/aix-ppc64@0.28.2", "", { "os": "aix", "cpu": "ppc64" }, "sha512-XExcO+dvLKvVtNTibSTBej1NCAbaGhWn9Ww1ZPx80qsahhPFe/8jgWP0IchNe0F3HwkU7n8ejhH8bjonqht8mQ=="],
 
