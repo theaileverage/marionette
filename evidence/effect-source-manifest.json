@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "reviewedRevision": "legacy-local-session-migration-r2+settled-native-binding-retirement-r1",
+  "reviewedRevision": "legacy-local-session-migration-r2+settled-native-binding-retirement-r1+alpha.2-release-r1",
   "reviewBaseCommit": "68ded44",
   "portSourceCommit": "0ddd61dcf87f0180b17c4a16dafcca83b14493a5",
   "files": [
@@ -210,7 +210,7 @@
     },
     {
       "path": "src/v1/version.ts",
-      "sha256": "c8d74869b4701bef8b3f3b057349bcc589c1a9b8ffc3eadf5ce1bbb2cb28ec75"
+      "sha256": "5fb8a4be9bcda2d05d532da791bc523170c2e050b38a996bb80ba530d88487b1"
     },
     {
       "path": "src/v1/wake.ts",

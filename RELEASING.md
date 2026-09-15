@@ -1,6 +1,6 @@
 # Releasing Marionette
 
-The current target is `1.0.0-alpha.1`. Alpha publication uses the `alpha` npm dist-tag. A stable release requires separate live acceptance of the remaining execution contracts.
+The current target is `1.0.0-alpha.2`. Alpha publication uses the `alpha` npm dist-tag. A stable release requires separate live acceptance of the remaining execution contracts.
 
 Prepare a version with `npm run release:prepare -- VERSION`. Review the version and changelog changes, update `bun.lock`, and update the reviewed source manifest if source changed. Run the same checks as CI:
 

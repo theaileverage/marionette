@@ -1,6 +1,13 @@
 # Changelog
 
-## 1.0.0-alpha.1 Unreleased
+## 1.0.0-alpha.2 — 2026-09-15
+
+- Make the Effect runtime the default implementation. The released source is the former Effect port rather than a parallel implementation.
+- Initialize project state in `.marionette`, while safely recognizing legacy local bindings during migration.
+- Keep workspace retirement blocked by active or unconfirmed native bindings, but allow settled stale bindings to be ignored without cleanup replay.
+- Restore alpha release verification, package smoke coverage, and trusted npm publishing for every alpha version.
+
+## 1.0.0-alpha.1 — 2026-09-14
 
 - Introduce a Node 26.8.1+ CLI and importable SDK with a shared operation boundary.
 - Store project, session, job, input, result, board, and execution records in versioned SQLite migrations.
