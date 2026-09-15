@@ -126,7 +126,7 @@ sys.exit(128 + os.WTERMSIG(status))
 
 function runCliInPty(
   args: readonly string[],
-  options: { cwd: string; stateHome: string },
+  options: { cwd: string; stateHome: string; env?: NodeJS.ProcessEnv },
 ): CliResult {
   const result = spawnSync(
     'python3',
@@ -140,7 +140,7 @@ function runCliInPty(
       ...args,
     ],
     {
-      env: environment(options.stateHome),
+      env: environment(options.stateHome, options.env),
       encoding: 'utf8',
       timeout: 10_000,
     },
@@ -150,6 +150,46 @@ function runCliInPty(
 
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
+
+test('human help groups and aligns real commands, with color only in capable terminals', () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'marionette-v1-help-')));
+  const stateHome = join(root, 'state');
+
+  try {
+    const tty = runCliInPty(['--help'], {
+      cwd: root,
+      stateHome,
+      env: { TERM: 'xterm-256color', NO_COLOR: undefined },
+    });
+
+    assert.equal(tty.status, 0, tty.stderr);
+    const visible = tty.stdout.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '');
+    assert.match(visible, /Usage:\r?\n  marionette \[command\] \[flags\]/);
+    assert.match(visible, /Work:\r?\n/);
+    assert.match(visible, /Discussion:\r?\n/);
+    assert.ok(tty.stdout.includes('\u001b[36mboard create'));
+    assert.match(visible, /board create\s+Create an idempotent discussion thread\./);
+    assert.match(tty.stdout, /Utilities:/);
+
+    const plain = runCliInPty(['help', 'board', 'create'], {
+      cwd: root,
+      stateHome,
+      env: { TERM: 'xterm-256color', NO_COLOR: '1' },
+    });
+
+    assert.equal(plain.status, 0, plain.stderr);
+    assert.match(plain.stdout, /marionette board create\r?\nCreate an idempotent discussion thread\./);
+    assert.match(plain.stdout, /Request flags:/);
+    assert.equal(plain.stdout.includes('\u001b'), false);
+
+    const machine = runCli(['--help', '--output', 'json'], { cwd: root, stateHome });
+    assert.equal(machine.status, 0, machine.stderr);
+    const value = JSON.parse(machine.stdout);
+    assert.ok(value.commands.some((entry: { name: string }) => entry.name === 'board.create'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function git(cwd: string, args: readonly string[]): string {
   const result = spawnSync('git', ['-C', cwd, ...args], {
