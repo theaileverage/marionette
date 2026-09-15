@@ -25,7 +25,7 @@
     "boundaries:check": "node scripts/verify-boundaries.mjs"
   },
   "dependencies": {
-    "effect": "4.0.0-rc.112"
+    "effect": "4.0.0-rc.115"
   },
   "publishConfig": { "access": "public" },
   "license": "MIT",
