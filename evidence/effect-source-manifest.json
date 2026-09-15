@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "reviewedRevision": "release-binding-continuation-r1",
+  "reviewedRevision": "legacy-local-session-migration-r2",
   "reviewBaseCommit": "68ded44",
   "portSourceCommit": "0ddd61dcf87f0180b17c4a16dafcca83b14493a5",
   "files": [
@@ -74,7 +74,7 @@
     },
     {
       "path": "src/v1/context.ts",
-      "sha256": "1dd7b35c4278d6a7c5b81e01eb065625ccb24e5b81280bb84e53f2f9c3b581ee"
+      "sha256": "2f8f9672e0b308f0fc086cea625970bd64dbbbba9629a8139bac0ab3bb89c23f"
     },
     {
       "path": "src/v1/database.ts",
