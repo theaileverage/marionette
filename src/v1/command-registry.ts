@@ -1,14 +1,16 @@
-import { z } from 'zod';
-import { operationSchema, type Operation } from './operations.js';
+import { Predicate, SchemaAST } from 'effect';
+import { operationSchemas, type Operation } from './operations.js';
 import { VERSION } from './version.js';
 
 export type CommandName = Operation['operation'];
-type Metadata = {
-  summary: string;
-  effect: 'read' | 'local-write' | 'native' | 'destructive';
-  controller?: boolean;
-  watcher?: boolean;
+
+export type CommandMetadata = {
+  readonly summary: string;
+  readonly effect: 'read' | 'local-write' | 'native' | 'destructive';
+  readonly controller?: boolean;
+  readonly watcher?: boolean;
 };
+
 export const commandMetadata = {
   context: {
     summary: 'Show the effective project and session without credentials.',
@@ -80,6 +82,10 @@ export const commandMetadata = {
     effect: 'local-write',
   },
   'result.get': { summary: 'Read a durable result.', effect: 'read' },
+  'result.discover': {
+    summary: 'Discover whether an attempt has recorded a durable result.',
+    effect: 'read',
+  },
   'result.record': {
     summary: 'Record an active attempt result and verified evidence.',
     effect: 'local-write',
@@ -147,6 +153,11 @@ export const commandMetadata = {
     effect: 'native',
     controller: true,
   },
+  'attempt.retained-work': {
+    summary: 'Refresh native identity and inspect references, bounded history, and retained work.',
+    effect: 'native',
+    controller: true,
+  },
   'attempt.reconcile': {
     summary: 'Reconcile native state while retaining uncertain reservations.',
     effect: 'native',
@@ -157,40 +168,91 @@ export const commandMetadata = {
     effect: 'local-write',
     watcher: true,
   },
-} satisfies Record<CommandName, Metadata>;
+} satisfies Record<CommandName, CommandMetadata>;
 
-export type FieldFlag = { field: string; name: string; type: 'string' | 'number' | 'boolean' };
-function flagType(schema: z.ZodTypeAny): FieldFlag['type'] | undefined {
-  if (
-    schema instanceof z.ZodOptional ||
-    schema instanceof z.ZodNullable ||
-    schema instanceof z.ZodBranded
-  )
-    return flagType(schema.unwrap());
-  if (schema instanceof z.ZodDefault) return flagType(schema.removeDefault());
-  if (schema instanceof z.ZodEffects) return flagType(schema.innerType());
-  if (schema instanceof z.ZodString || schema instanceof z.ZodEnum) return 'string';
-  if (schema instanceof z.ZodNumber) return 'number';
-  if (schema instanceof z.ZodBoolean) return 'boolean';
+export type FieldFlag = {
+  readonly field: string;
+  readonly name: string;
+  readonly type: 'string' | 'number' | 'boolean';
+};
+
+function flagType(ast: SchemaAST.AST): FieldFlag['type'] | undefined {
+  if (Predicate.isTagged('String')(ast)) return 'string';
+
+  if (Predicate.isTagged('Number')(ast)) return 'number';
+
+  if (Predicate.isTagged('Boolean')(ast)) return 'boolean';
+
+  if (Predicate.isTagged('Union')(ast)) {
+    const types = ast.types.filter((type) => !Predicate.isTagged('Undefined')(type));
+
+    if (types.length === 1) return flagType(types[0]);
+
+    if (types.every((type) => Predicate.isTagged('Literal')(type) && Predicate.isString(type.literal)))
+      return 'string';
+  }
+
+  if (Predicate.isTagged('Suspend')(ast)) return flagType(ast.thunk());
+
   return undefined;
 }
-export const commands = operationSchema.options.map((schema) => {
-  const name = schema.shape.operation.value;
+
+function operationName(ast: SchemaAST.AST): CommandName {
+  if (!Predicate.isTagged('Objects')(ast)) throw new Error('Operation schema must be an object');
+  const field = ast.propertySignatures.find((property) => property.name === 'operation');
+
+  if (
+    !field ||
+      !Predicate.isTagged('Literal')(field.type) ||
+    !Predicate.isString(field.type.literal) ||
+    !isCommandName(field.type.literal)
+  ) {
+    throw new Error('Operation schema has an unknown operation name');
+  }
+
+  return field.type.literal;
+}
+
+function isCommandName(value: string): value is CommandName {
+  return Object.hasOwn(commandMetadata, value);
+}
+
+export const commands = operationSchemas.map((schema) => {
+  const name = operationName(schema.ast);
+
+  if (!Predicate.isTagged('Objects')(schema.ast)) throw new Error('Operation schema must be an object');
   const flags: FieldFlag[] = [];
-  for (const [field, definition] of Object.entries(schema.shape)) {
-    const type = flagType(definition);
-    if (field !== 'operation' && type)
+
+  for (const property of schema.ast.propertySignatures) {
+    const type = flagType(property.type);
+
+    if (property.name !== 'operation' && Predicate.isString(property.name) && type) {
       flags.push({
-        field,
-        name: field.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`),
+        field: property.name,
+        name: property.name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`),
         type,
       });
+    }
   }
-  const metadata: Metadata = commandMetadata[name];
-  return { name, schema, flags, ...metadata, stability: 'alpha' as const };
+
+  const metadata: CommandMetadata = commandMetadata[name];
+
+  return {
+    name,
+    schema,
+    flags,
+    summary: metadata.summary,
+    effect: metadata.effect,
+    controller: metadata.controller ?? false,
+    watcher: metadata.watcher ?? false,
+    stability: 'alpha' as const,
+  };
 });
+
 export const contractVersion = 1;
+
 export const cliVersion = VERSION;
+
 export const globalOptions = {
   help: { type: 'boolean', short: 'h' },
   version: { type: 'boolean' },
@@ -202,6 +264,7 @@ export const globalOptions = {
   'no-watch': { type: 'boolean' },
   'dry-run': { type: 'boolean' },
 } as const;
+
 export const environmentContract = [
   {
     name: 'MARIONETTE_CONTEXT',
@@ -220,7 +283,9 @@ export const environmentContract = [
     secret: false,
   },
 ];
+
 export const exitCodes = { success: 0, operationFailed: 1, invalidInput: 2 };
+
 export function findCommand(name: string) {
   return commands.find((command) => command.name === name);
 }

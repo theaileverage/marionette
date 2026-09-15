@@ -1,16 +1,17 @@
 #!/usr/bin/env -S node --disable-warning=ExperimentalWarning
 import { resolve } from 'node:path';
+import { Effect, Schema } from 'effect';
 import {
   CliError,
+  operationInput,
   parseCommand,
-  requestedOutput,
   positiveInteger,
+  requestedOutput,
   stringOption,
   validateOptions,
-  operationInput,
 } from './arguments.js';
 import { Marionette } from './client.js';
-import { execute, operationSchema } from './operations.js';
+import { decodeOperation, executeEffect } from './operations.js';
 import { describeSchema, operationDescriptions } from './schema.js';
 import {
   operationOutputSchemas,
@@ -19,8 +20,8 @@ import {
 } from './output-contracts.js';
 import {
   cliVersion,
-  contractVersion,
   commands,
+  contractVersion,
   environmentContract,
   exitCodes,
   findCommand,
@@ -30,13 +31,19 @@ import { defaultOutput, outputModeSchema, writeError, writeOutput } from './outp
 import { installProjectSkill } from './onboarding.js';
 
 let output = requestedOutput(process.argv.slice(2)) ?? defaultOutput();
+
 let activeCommand: string | undefined;
+
 let mutationStarted = false;
+
 const basic = ['help', 'version', 'output', 'no-input'];
+
 function help(name?: string) {
   const command = name ? findCommand(name) : undefined;
+
   if (name && !command)
     throw new CliError('unknown-command', 'Unknown command.', 'marionette --help');
+
   const value = command
     ? {
         version: cliVersion,
@@ -51,7 +58,10 @@ function help(name?: string) {
     : {
         version: cliVersion,
         usage: 'marionette <group> <action> [FLAGS | --input FILE | --json JSON_OR_FILE]',
-        commands: commands.map(({ name, summary }) => ({ name, summary })),
+        commands: commands.map(({ name: commandName, summary }) => ({
+          name: commandName,
+          summary,
+        })),
         utilities: [
           'init [--project PATH] [--state-home PATH]',
           'schema [OPERATION]',
@@ -68,6 +78,7 @@ function help(name?: string) {
           'marionette workspace retire --workspace-id WORKSPACE_ID --idempotency-key retire --dry-run',
         ],
       };
+
   if (output === 'human') {
     if (command)
       process.stdout.write(
@@ -79,13 +90,17 @@ function help(name?: string) {
       );
   } else writeOutput(value, output);
 }
+
 async function main() {
   const { values, positionals } = parseCommand(process.argv.slice(2));
   const chosenOutput = stringOption(values, 'output');
-  if (chosenOutput !== undefined) output = outputModeSchema.parse(chosenOutput);
+
+  if (chosenOutput !== undefined) output = Schema.decodeUnknownSync(outputModeSchema)(chosenOutput);
   const [command, action, extra] = positionals;
+
   if (command === 'help') {
     const name = action ? (extra ? `${action}.${extra}` : action) : undefined;
+
     if (positionals.length > 3)
       throw new CliError(
         'extra-arguments',
@@ -94,28 +109,37 @@ async function main() {
       );
     validateOptions(values, basic, 'marionette --help');
     help(name);
+
     return;
   }
+
   if (!command || command === 'version' || values.version) {
     validateOptions(values, basic, 'marionette --help');
+
     if (
       (values.version && positionals.length > 0 && command !== 'version') ||
       (command === 'version' && positionals.length > 1)
-    )
+    ) {
       throw new CliError(
         'extra-arguments',
         'Version does not accept positional arguments.',
         'marionette --version',
       );
+    }
+
     if (command === 'version' || values.version) writeOutput({ version: cliVersion }, output);
     else help();
+
     return;
   }
+
   if (extra !== undefined)
     throw new CliError('extra-arguments', 'Unexpected positional arguments.', 'marionette --help');
+
   if (command === 'schema' || command === 'describe') {
     validateOptions(values, basic, 'marionette schema [OPERATION]');
     const selected = operationDescriptions().filter((item) => !action || item.operation === action);
+
     if (!selected.length)
       throw new CliError('unknown-command', 'Unknown operation.', 'marionette schema');
     writeOutput(
@@ -148,6 +172,7 @@ async function main() {
         },
         operations: selected.map((description) => {
           const metadata = findCommand(description.operation);
+
           return {
             ...description,
             outputSchema: metadata
@@ -171,16 +196,20 @@ async function main() {
       },
       output,
     );
+
     return;
   }
+
   if (command === 'init') {
     validateOptions(values, [...basic, 'project', 'state-home'], 'marionette init --help');
+
     if (action)
       throw new CliError(
         'extra-arguments',
         'Init does not accept positional arguments.',
         'marionette init --project PATH',
       );
+
     if (values.help) {
       writeOutput(
         {
@@ -191,13 +220,17 @@ async function main() {
         },
         output,
       );
+
       return;
     }
+
     mutationStarted = true;
+
     const client = Marionette.init({
       repositoryRoot: resolve(stringOption(values, 'project') ?? process.cwd()),
       stateHome: stringOption(values, 'state-home'),
     });
+
     try {
       const context = client.context();
       writeOutput(
@@ -214,20 +247,24 @@ async function main() {
     } finally {
       client.close();
     }
+
     return;
   }
+
   if (command === 'watch') {
     validateOptions(
       values,
       [...basic, 'project', 'stop-after', 'foreground'],
       'marionette watch --help',
     );
+
     if (action)
       throw new CliError(
         'extra-arguments',
         'Watch does not accept positional arguments.',
         'marionette watch --stop-after 5000',
       );
+
     if (values.help) {
       writeOutput(
         {
@@ -238,8 +275,10 @@ async function main() {
         },
         output,
       );
+
       return;
     }
+
     const timeout = stringOption(values, 'stop-after');
     const duration = timeout === undefined ? undefined : positiveInteger(timeout, 30000);
     const client = Marionette.connect({ bindingPath: stringOption(values, 'project') });
@@ -248,19 +287,23 @@ async function main() {
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
     const deadline = duration === undefined ? undefined : setTimeout(stop, duration);
+
     try {
       mutationStarted = true;
-      writeOutput(await client.watch({ signal: abort.signal }), output);
+      writeOutput(await Effect.runPromise(client.watchEffect({ signal: abort.signal })), output);
     } finally {
       if (deadline) clearTimeout(deadline);
       process.removeListener('SIGINT', stop);
       process.removeListener('SIGTERM', stop);
       client.close();
     }
+
     return;
   }
+
   const name = action ? `${command}.${action}` : command;
   activeCommand = name;
+
   if (values.help) {
     validateOptions(
       values,
@@ -268,38 +311,46 @@ async function main() {
       'marionette --help',
     );
     help(name);
+
     return;
   }
-  const operation = operationSchema.parse(operationInput(name, values));
+
+  const operation = decodeOperation(operationInput(name, values));
   activeCommand = operation.operation;
   const metadata = findCommand(operation.operation);
+
   if (values['dry-run'] && operation.operation !== 'workspace.retire')
     throw new CliError(
       'unsupported-preview',
       'Dry run is supported for workspace.retire.',
       'marionette workspace retire --help',
     );
+
   if (values['no-watch'] && !metadata?.watcher)
     throw new CliError(
       'irrelevant-option',
       '--no-watch applies only to commands that can start the watcher.',
       `marionette ${name.replace('.', ' ')} --help`,
     );
+
   if (values['dry-run'] && operation.operation === 'workspace.retire') {
     writeOutput(
       Marionette.previewRetirement({ bindingPath: stringOption(values, 'project') }, operation),
       output,
     );
+
     return;
   }
+
   const client = Marionette.connect({ bindingPath: stringOption(values, 'project') });
+
   try {
     mutationStarted = metadata?.effect !== 'read';
-    const result = await execute(client, operation);
-    writeOutput(result, output);
+    writeOutput(await Effect.runPromise(executeEffect(client, operation)), output);
+
     if (metadata?.watcher && !values['no-watch']) {
       try {
-        await client.ensureWatcher();
+        await Effect.runPromise(client.ensureWatcherEffect());
       } catch {
         if (output === 'human')
           process.stderr.write(
@@ -321,6 +372,7 @@ async function main() {
     client.close();
   }
 }
+
 main().catch((error) => {
   process.exitCode = writeError(error, output, activeCommand, mutationStarted);
 });

@@ -1,9 +1,0 @@
-
-> @theaileverage/marionette@1.0.0-alpha.1 check
-> tsc --noEmit -p tsconfig.v1.json && tsc --noEmit -p tsconfig.tests.json && npm run lint
-
-
-> @theaileverage/marionette@1.0.0-alpha.1 lint
-> oxlint src/v1 src/herdr-sdk.ts src/herdr-streams.ts src/herdr-transport.ts tests/v1 scripts/bundle.mjs scripts/package-smoke-v1.mjs scripts/release.mjs
-
-src/v1/output.ts:11:7: warning eslint(no-control-regex): Unexpected control characters help: Avoid matching control characters in regular expressions. If intentional, disable this rule for the expression.

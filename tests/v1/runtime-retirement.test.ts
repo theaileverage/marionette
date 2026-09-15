@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
+import { Schema } from 'effect';
 
 import {
   AgentSessionIdSchema,
@@ -24,14 +25,18 @@ import {
   type NativeObservation,
 } from '../../src/v1/native.js';
 import { nativeLocatorForRetirement } from '../../src/v1/retirement.js';
-import { RuntimeRetirementError, retireRuntimeWorkspace } from '../../src/v1/runtime-retirement.js';
+import {
+  RuntimeRetirementError,
+  previewRuntimeWorkspaceRetirement,
+  retireRuntimeWorkspace,
+} from '../../src/v1/runtime-retirement.js';
 import { Store, type SessionIdentity } from '../../src/v1/store.js';
 
 type Fixture = {
   root: string;
   repositoryRoot: string;
   workspacePath: string;
-  workspaceId: ReturnType<typeof WorkspaceIdSchema.parse>;
+  workspaceId: typeof WorkspaceIdSchema.Type;
   actor: SessionIdentity;
   identity: NativeIdentity;
   attemptId: string;
@@ -43,7 +48,9 @@ function git(cwd: string, args: readonly string[]): string {
     encoding: 'utf8',
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
   });
+
   assert.equal(result.status, 0, result.stderr);
+
   return result.stdout.trim();
 }
 
@@ -70,18 +77,20 @@ function createFixture(): Fixture {
 
   const store = Store.open({
     databasePath: join(root, 'state.sqlite'),
-    project: ProjectBindingSchema.parse({
-      id: ProjectIdSchema.parse('project_runtime_retirement'),
-      hostId: HostIdSchema.parse('host_runtime_retirement'),
+    project: Schema.decodeUnknownSync(ProjectBindingSchema)({
+      id: Schema.decodeUnknownSync(ProjectIdSchema)('project_runtime_retirement'),
+      hostId: Schema.decodeUnknownSync(HostIdSchema)('host_runtime_retirement'),
       repositoryRoot,
       stateDirectory: join(root, 'state'),
     }),
     clock: () => new Date('2026-09-11T00:00:00.000Z'),
   });
+
   const actor = {
-    id: AgentSessionIdSchema.parse('session_actor'),
-    generation: SessionGenerationSchema.parse(1),
+    id: Schema.decodeUnknownSync(AgentSessionIdSchema)('session_actor'),
+    generation: Schema.decodeUnknownSync(SessionGenerationSchema)(1),
   };
+
   store.registerSession({
     ...actor,
     workspaceId: null,
@@ -94,7 +103,7 @@ function createFixture(): Fixture {
     nativeServerGeneration: null,
     nativeLocator: null,
   });
-  const workspaceId = WorkspaceIdSchema.parse('workspace_runtime_retirement');
+  const workspaceId = Schema.decodeUnknownSync(WorkspaceIdSchema)('workspace_runtime_retirement');
   store.registerWorkspace({
     actor,
     id: workspaceId,
@@ -106,12 +115,13 @@ function createFixture(): Fixture {
     writes: [],
     idempotencyKey: 'workspace',
   });
+
   const job = store.createJob({
     actor,
     stableKey: 'runtime-retirement',
     request: {
       text: 'Retire a settled runtime workspace',
-      digest: DigestSchema.parse(createHash('sha256').update('runtime retirement').digest('hex')),
+      digest: Schema.decodeUnknownSync(DigestSchema)(createHash('sha256').update('runtime retirement').digest('hex')),
       inputSnapshots: [],
     },
     brief: {
@@ -128,6 +138,7 @@ function createFixture(): Fixture {
     dependencies: [],
     idempotencyKey: 'job',
   });
+
   const identity: NativeIdentity = {
     binding: {
       hostId: store.project.hostId,
@@ -150,10 +161,12 @@ function createFixture(): Fixture {
     identityRevision: 1,
     ownedTabId: 'tab-1',
   };
+
   const session = {
-    id: AgentSessionIdSchema.parse('session_worker'),
-    generation: SessionGenerationSchema.parse(1),
+    id: Schema.decodeUnknownSync(AgentSessionIdSchema)('session_worker'),
+    generation: Schema.decodeUnknownSync(SessionGenerationSchema)(1),
   };
+
   store.registerSession({
     ...session,
     workspaceId,
@@ -166,6 +179,7 @@ function createFixture(): Fixture {
     nativeServerGeneration: identity.binding.endpoint.serverStartToken,
     nativeLocator: nativeLocatorForRetirement(identity),
   });
+
   const admitted = store.admitAttempt({
     actor,
     jobId: job.id,
@@ -176,6 +190,7 @@ function createFixture(): Fixture {
     workflow: { kind: 'direct' },
     idempotencyKey: 'attempt',
   });
+
   store.settleAttempt({
     actor,
     attemptId: admitted.attempt.id,
@@ -222,6 +237,7 @@ function createFixture(): Fixture {
         '2026-09-11T00:00:00.000Z',
       );
   });
+
   return {
     root,
     repositoryRoot,
@@ -253,16 +269,20 @@ class FixtureAdapter extends HerdrNativeAdapter {
   override async cleanup(identity: NativeIdentity, authorized: boolean): Promise<CleanupResult> {
     assert.equal(authorized, true);
     const prepared = await this.effects.prepare({ kind: 'cleanup', tabId: identity.ownedTabId });
+
     if (prepared.kind === 'rejected') return { kind: 'unsupported', reason: prepared.reason };
     this.cleanupCalls += 1;
+
     return { kind: 'cleaned', operationId: prepared.operationId };
   }
 }
 
 test('runtime retirement cleans only its persisted identity with a settled attempt', async () => {
   const fixture = createFixture();
+
   try {
     let adapter: FixtureAdapter | undefined;
+
     const retired = await retireRuntimeWorkspace({
       store: fixture.store,
       actor: fixture.actor,
@@ -270,6 +290,7 @@ test('runtime retirement cleans only its persisted identity with a settled attem
       idempotencyKey: 'retire-runtime',
       adapterFor: (journal) => composeHerdrAdapter((adapter = new FixtureAdapter(journal))),
     });
+
     assert.equal(retired.kind, 'completed');
     assert.equal(adapter?.cleanupCalls, 1);
     assert.equal(
@@ -291,6 +312,7 @@ test('runtime retirement cleans only its persisted identity with a settled attem
 
 test('runtime retirement does not resend a cleanup already claimed before its outcome', async () => {
   const fixture = createFixture();
+
   try {
     fixture.store.transaction((database) => {
       database
@@ -307,6 +329,7 @@ test('runtime retirement does not resend a cleanup already claimed before its ou
         );
     });
     let adapter: FixtureAdapter | undefined;
+
     const retired = await retireRuntimeWorkspace({
       store: fixture.store,
       actor: fixture.actor,
@@ -314,6 +337,7 @@ test('runtime retirement does not resend a cleanup already claimed before its ou
       idempotencyKey: 'retire-preclaimed-cleanup',
       adapterFor: (journal) => composeHerdrAdapter((adapter = new FixtureAdapter(journal))),
     });
+
     assert.equal(retired.kind, 'blocked');
     assert.match(retired.reason, /already claimed/);
     assert.equal(adapter?.cleanupCalls, 0);
@@ -325,6 +349,7 @@ test('runtime retirement does not resend a cleanup already claimed before its ou
 
 test('runtime retirement rejects a native identity whose session binding changed', async () => {
   const fixture = createFixture();
+
   try {
     fixture.store.transaction((database) => {
       database
@@ -348,3 +373,146 @@ test('runtime retirement rejects a native identity whose session binding changed
     dispose(fixture);
   }
 });
+
+test('runtime retirement ignores a stale native binding after its session settles', async () => {
+  const fixture = createFixture();
+
+  try {
+    fixture.store.transaction((database) => {
+      database
+        .prepare(
+          `UPDATE agent_sessions
+           SET state = 'settled', settled_at = ?, native_locator = ?
+           WHERE project_id = ? AND id = 'session_worker' AND generation = 1`,
+        )
+        .run('2026-09-11T00:00:00.000Z', '{}', fixture.store.project.id);
+    });
+
+    const preview = previewRuntimeWorkspaceRetirement({
+      store: fixture.store,
+      actor: fixture.actor,
+      workspaceId: fixture.workspaceId,
+      idempotencyKey: 'preview-settled-stale-binding',
+    });
+
+    assert.equal(preview.kind, 'ready');
+    assert.deepEqual(preview.nativeTargets, []);
+
+    const retired = await retireRuntimeWorkspace({
+      store: fixture.store,
+      actor: fixture.actor,
+      workspaceId: fixture.workspaceId,
+      idempotencyKey: 'retire-settled-stale-binding',
+      adapterFor: () => {
+        throw new Error('Settled native sessions must not request cleanup');
+      },
+    });
+
+    assert.equal(retired.kind, 'completed');
+    assert.equal(fixture.store.getWorkspace(fixture.workspaceId).retiredAt === null, false);
+    assert.equal(
+      fixture.store.read((database) =>
+        database
+          .prepare(
+            `SELECT COUNT(*) AS count FROM native_effects
+             WHERE project_id = ? AND attempt_id = ? AND effect_kind = 'cleanup'`,
+          )
+          .get(fixture.store.project.id, fixture.attemptId)?.count,
+      ),
+      0,
+    );
+  } finally {
+    dispose(fixture);
+  }
+});
+
+test('runtime retirement does not claim cleanup if the native session settles before preparation', async () => {
+  const fixture = createFixture();
+
+  try {
+    let adapter: FixtureAdapter | undefined;
+
+    const retired = await retireRuntimeWorkspace({
+      store: fixture.store,
+      actor: fixture.actor,
+      workspaceId: fixture.workspaceId,
+      idempotencyKey: 'retire-session-settled-before-preparation',
+      adapterFor: (journal) =>
+        composeHerdrAdapter(
+          (adapter = new (class extends FixtureAdapter {
+            override async observe(identity: NativeIdentity): Promise<NativeObservation> {
+              fixture.store.transaction((database) => {
+                database
+                  .prepare(
+                    `UPDATE agent_sessions SET state = 'settled', settled_at = ?
+                     WHERE project_id = ? AND id = 'session_worker' AND generation = 1`,
+                  )
+                  .run('2026-09-11T00:00:00.000Z', fixture.store.project.id);
+              });
+
+              return super.observe(identity);
+            }
+          })(journal)),
+        ),
+    });
+
+    assert.equal(retired.kind, 'blocked');
+    assert.match(retired.reason, /changed before cleanup/);
+    assert.equal(adapter?.cleanupCalls, 0);
+    assert.equal(fixture.store.getWorkspace(fixture.workspaceId).retiredAt, null);
+    assert.equal(
+      fixture.store.read((database) =>
+        database
+          .prepare(
+            `SELECT COUNT(*) AS count FROM native_effects
+             WHERE project_id = ? AND attempt_id = ? AND effect_kind = 'cleanup'`,
+          )
+          .get(fixture.store.project.id, fixture.attemptId)?.count,
+      ),
+      0,
+    );
+  } finally {
+    dispose(fixture);
+  }
+});
+
+for (const state of ['active', 'unconfirmed'] as const) {
+  test(`runtime retirement blocks a stale native binding while its session is ${state}`, async () => {
+    const fixture = createFixture();
+
+    try {
+      fixture.store.transaction((database) => {
+        database
+          .prepare(
+            `UPDATE agent_sessions SET state = ?, native_locator = ?
+             WHERE project_id = ? AND id = 'session_worker' AND generation = 1`,
+          )
+          .run(state, '{}', fixture.store.project.id);
+      });
+
+      const preview = previewRuntimeWorkspaceRetirement({
+        store: fixture.store,
+        actor: fixture.actor,
+        workspaceId: fixture.workspaceId,
+        idempotencyKey: `preview-${state}-stale-binding`,
+      });
+
+      if (preview.kind !== 'blocked') throw new Error('Expected a stale active session to block retirement');
+
+      assert.match(preview.reason ?? '', /does not match its persisted session binding/);
+
+      await assert.rejects(
+        retireRuntimeWorkspace({
+          store: fixture.store,
+          actor: fixture.actor,
+          workspaceId: fixture.workspaceId,
+          idempotencyKey: `retire-${state}-stale-binding`,
+        }),
+        RuntimeRetirementError,
+      );
+      assert.equal(fixture.store.getWorkspace(fixture.workspaceId).retiredAt, null);
+    } finally {
+      dispose(fixture);
+    }
+  });
+}

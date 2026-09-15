@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { isMainThread, parentPort, Worker, workerData } from 'node:worker_threads';
+import { Schema } from 'effect';
 
 import { z } from 'zod';
 
@@ -17,13 +18,15 @@ import {
 } from '../../src/v1/database.js';
 import { ProjectIdSchema } from '../../src/v1/model.js';
 import { migrations } from '../../src/v1/migrations/index.js';
+import { nativeSessionReferencesSql } from '../../src/v1/migrations/007_native_session_references.js';
 
-const projectId = ProjectIdSchema.parse('project_migrations');
+const projectId = Schema.decodeUnknownSync(ProjectIdSchema)('project_migrations');
 
 type MigrationFixture = { directory: string; databasePath: string };
 
 function fixture(): MigrationFixture {
   const directory = mkdtempSync(join(tmpdir(), 'marionette-v1-migrations-'));
+
   return { directory, databasePath: join(directory, 'state.sqlite') };
 }
 
@@ -39,6 +42,7 @@ function waitForWorker(worker: Worker): Promise<void> {
   return new Promise((resolve, reject) => {
     worker.once('message', (message) => {
       const parsed = z.literal('opened').safeParse(message);
+
       if (parsed.success) resolve();
       else reject(new Error(`Unexpected worker result ${String(message)}`));
     });
@@ -53,11 +57,13 @@ if (!isMainThread) {
   const input = z.object({ databasePath: z.string() }).parse(workerData);
   const database = openDatabase({ path: input.databasePath, projectId });
   database.close();
+
   if (parentPort === null) throw new Error('Migration worker has no parent port');
   parentPort.postMessage('opened');
 } else {
   test('read-only opens reject pending migrations and cannot write current state', () => {
     const { directory, databasePath } = fixture();
+
     try {
       openDatabase({
         path: databasePath,
@@ -73,12 +79,14 @@ if (!isMainThread) {
       openDatabase({ path: databasePath, projectId }).close();
       const current = readFileSync(databasePath);
       const preview = openDatabase({ path: databasePath, projectId, readOnly: true });
+
       try {
         assert.equal(schemaVersion(preview), migrations.length);
         assert.throws(() => preview.exec('CREATE TABLE forbidden (id TEXT)'), /readonly/i);
       } finally {
         preview.close();
       }
+
       assert.deepEqual(readFileSync(databasePath), current);
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -86,6 +94,7 @@ if (!isMainThread) {
   });
   test('applies numbered migrations once on a real database file', () => {
     const { directory, databasePath } = fixture();
+
     try {
       const first = openDatabase({ path: databasePath, projectId });
       assert.equal(schemaVersion(first), migrations.length);
@@ -101,6 +110,7 @@ if (!isMainThread) {
           [4, '004_native_runtime'],
           [5, '005_artifact_media_type'],
           [6, '006_board_inbox'],
+          [7, '007_native_session_references'],
         ],
       );
       first.close();
@@ -119,12 +129,14 @@ if (!isMainThread) {
 
   test('adds artifact media type without rewriting existing artifact records', () => {
     const { directory, databasePath } = fixture();
+
     try {
       const previous = openDatabase({
         path: databasePath,
         projectId,
         migrationSet: migrations.slice(0, 4),
       });
+
       previous.prepare('INSERT INTO hosts VALUES (?,?)').run('host', 'now');
       previous
         .prepare('INSERT INTO projects VALUES (?,?,?,?,?)')
@@ -134,10 +146,12 @@ if (!isMainThread) {
         .run('artifact', projectId, 'host', 'a'.repeat(64), '/durable/path', 7, 'now');
       previous.close();
       const current = openDatabase({ path: databasePath, projectId });
+
       try {
         const artifact = current
           .prepare('SELECT digest,path,byte_length,media_type FROM artifacts WHERE id=?')
           .get('artifact');
+
         assert.equal(artifact?.digest, 'a'.repeat(64));
         assert.equal(artifact?.path, '/durable/path');
         assert.equal(artifact?.byte_length, 7);
@@ -152,12 +166,14 @@ if (!isMainThread) {
 
   test('retains legacy notification history while seeding coalesced inbox state', () => {
     const { directory, databasePath } = fixture();
+
     try {
       const legacy = openDatabase({
         path: databasePath,
         projectId,
         migrationSet: migrations.slice(0, 5),
       });
+
       const timestamp = '2026-09-14T00:00:00.000Z';
       legacy.prepare('INSERT INTO hosts VALUES (?,?)').run('host', timestamp);
       legacy
@@ -230,6 +246,7 @@ if (!isMainThread) {
           'pending',
           '{}',
         );
+
       for (const [suffix, recipientId, state] of [
         ['6', 'claimed-recipient', 'claimed'],
         ['7', 'unconfirmed-recipient', 'unconfirmed'],
@@ -275,9 +292,11 @@ if (!isMainThread) {
             '{}',
           );
       }
+
       legacy.close();
 
       const current = openDatabase({ path: databasePath, projectId });
+
       try {
         assert.equal(
           current.prepare('SELECT COUNT(*) AS count FROM notification_events').get()?.count,
@@ -287,9 +306,11 @@ if (!isMainThread) {
           current.prepare('SELECT COUNT(*) AS count FROM notification_deliveries').get()?.count,
           4,
         );
+
         const wake = current
           .prepare('SELECT state,wake_revision FROM board_subscription_wakes')
           .get();
+
         assert.equal(wake?.state, 'pending');
         assert.equal(wake?.wake_revision, 1);
         assert.deepEqual(
@@ -313,8 +334,65 @@ if (!isMainThread) {
     }
   });
 
+  test('migration 007 preserves legacy nativeSession bytes without inventing provenance', () => {
+    const database = new DatabaseSync(':memory:', { enableForeignKeyConstraints: true });
+
+    try {
+      database.exec(`
+        CREATE TABLE projects(id TEXT PRIMARY KEY) STRICT;
+        CREATE TABLE hosts(id TEXT PRIMARY KEY) STRICT;
+        CREATE TABLE agent_sessions(id TEXT NOT NULL,generation INTEGER NOT NULL,PRIMARY KEY(id,generation)) STRICT;
+        CREATE TABLE attempts(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,session_id TEXT NOT NULL,session_generation INTEGER NOT NULL,host_id TEXT NOT NULL,native_kind TEXT,native_server_generation TEXT,FOREIGN KEY(project_id) REFERENCES projects(id),FOREIGN KEY(host_id) REFERENCES hosts(id),FOREIGN KEY(session_id,session_generation) REFERENCES agent_sessions(id,generation)) STRICT;
+        CREATE TABLE native_attempts(project_id TEXT NOT NULL,attempt_id TEXT NOT NULL,identity_json TEXT,updated_at TEXT NOT NULL) STRICT;
+      `);
+      database.prepare('INSERT INTO projects VALUES (?)').run('project');
+      database.prepare('INSERT INTO hosts VALUES (?)').run('host');
+      database.prepare('INSERT INTO agent_sessions VALUES (?,?)').run('session', 1);
+      database
+        .prepare('INSERT INTO attempts VALUES (?,?,?,?,?,?,?)')
+        .run('attempt', 'project', 'session', 1, 'host', 'agy', 'server');
+      database
+        .prepare('INSERT INTO native_attempts VALUES (?,?,?,?)')
+        .run(
+          'project',
+          'attempt',
+          JSON.stringify({
+            binding: { workspaceId: 'native-workspace' },
+            tabId: 'tab',
+            paneId: 'pane',
+            terminalId: 'terminal',
+            identityRevision: 3,
+            nativeSession: '/exact/legacy/bytes',
+          }),
+          '2026-09-13T00:00:00.000Z',
+        );
+      database.exec(nativeSessionReferencesSql);
+      assert.deepEqual(
+        Object.fromEntries(
+          Object.entries(
+            database
+              .prepare(
+                'SELECT harness,reference_kind,reference_value,source,status FROM native_session_reference_observations',
+              )
+              .get() ?? {},
+          ),
+        ),
+        {
+          harness: 'unknown',
+          reference_kind: 'legacy',
+          reference_value: '/exact/legacy/bytes',
+          source: 'legacy-nativeSession',
+          status: 'legacy-untyped',
+        },
+      );
+    } finally {
+      database.close();
+    }
+  });
+
   test('refuses a database created by a newer schema', () => {
     const { directory, databasePath } = fixture();
+
     try {
       const database = new DatabaseSync(databasePath);
       database.exec(`PRAGMA user_version = ${migrations.length + 1}`);
@@ -331,6 +409,7 @@ if (!isMainThread) {
 
   test('refuses checksum drift in an applied migration', () => {
     const { directory, databasePath } = fixture();
+
     try {
       const database = openDatabase({ path: databasePath, projectId });
       database
@@ -349,8 +428,10 @@ if (!isMainThread) {
 
   test('rolls back a failed migration without advancing its journal', () => {
     const { directory, databasePath } = fixture();
+
     try {
       const database = openDatabase({ path: databasePath, projectId });
+
       const brokenMigrations = [
         ...migrations,
         {
@@ -359,6 +440,7 @@ if (!isMainThread) {
           sql: 'CREATE TABLE should_rollback (id TEXT PRIMARY KEY) STRICT; SELECT * FROM missing_table;',
         },
       ];
+
       assert.throws(
         () => applyMigrations(database, brokenMigrations),
         (error) => error instanceof MigrationError && error.code === 'migration-failed',
@@ -382,11 +464,13 @@ if (!isMainThread) {
 
   test('serializes concurrent first opens and records each migration once', async () => {
     const { directory, databasePath } = fixture();
+
     try {
       const workers = [
         new Worker(new URL(import.meta.url), { workerData: { databasePath } }),
         new Worker(new URL(import.meta.url), { workerData: { databasePath } }),
       ];
+
       await Promise.all(workers.map(waitForWorker));
 
       const database = openDatabase({ path: databasePath, projectId });

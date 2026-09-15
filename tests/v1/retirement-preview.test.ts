@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
+import { Schema } from 'effect';
 
 import {
   AgentSessionIdSchema,
@@ -22,7 +23,7 @@ type Fixture = {
   root: string;
   repositoryRoot: string;
   workspacePath: string;
-  workspaceId: ReturnType<typeof WorkspaceIdSchema.parse>;
+  workspaceId: typeof WorkspaceIdSchema.Type;
   actor: SessionIdentity;
   store: Store;
 };
@@ -32,7 +33,9 @@ function git(cwd: string, args: readonly string[]): string {
     encoding: 'utf8',
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
   });
+
   assert.equal(result.status, 0, result.stderr);
+
   return result.stdout.trim();
 }
 
@@ -49,21 +52,24 @@ function createFixture(): Fixture {
   git(repositoryRoot, ['add', 'tracked.txt']);
   git(repositoryRoot, ['commit', '-qm', 'base']);
   git(repositoryRoot, ['worktree', 'add', '-q', '-b', 'fixture-preview', workspacePath, 'HEAD']);
+
   const store = Store.open({
     databasePath: join(root, 'state.sqlite'),
-    project: ProjectBindingSchema.parse({
-      id: ProjectIdSchema.parse('project_retirement_preview'),
-      hostId: HostIdSchema.parse('host_retirement_preview'),
+    project: Schema.decodeUnknownSync(ProjectBindingSchema)({
+      id: Schema.decodeUnknownSync(ProjectIdSchema)('project_retirement_preview'),
+      hostId: Schema.decodeUnknownSync(HostIdSchema)('host_retirement_preview'),
       repositoryRoot,
       stateDirectory,
     }),
     clock: () => new Date('2026-09-11T00:00:00.000Z'),
     idFactory: (kind) => `${kind}_fixture`,
   });
+
   const actor = {
-    id: AgentSessionIdSchema.parse('session_preview_actor'),
-    generation: SessionGenerationSchema.parse(1),
+    id: Schema.decodeUnknownSync(AgentSessionIdSchema)('session_preview_actor'),
+    generation: Schema.decodeUnknownSync(SessionGenerationSchema)(1),
   };
+
   store.registerSession({
     ...actor,
     workspaceId: null,
@@ -76,7 +82,7 @@ function createFixture(): Fixture {
     nativeServerGeneration: null,
     nativeLocator: null,
   });
-  const workspaceId = WorkspaceIdSchema.parse('workspace_retirement_preview');
+  const workspaceId = Schema.decodeUnknownSync(WorkspaceIdSchema)('workspace_retirement_preview');
   store.registerWorkspace({
     actor,
     id: workspaceId,
@@ -88,6 +94,7 @@ function createFixture(): Fixture {
     writes: [],
     idempotencyKey: 'register-preview-workspace',
   });
+
   return { root, repositoryRoot, workspacePath, workspaceId, actor, store };
 }
 
@@ -106,6 +113,7 @@ function retirementCount(fixture: Fixture): number {
 
 test('plans a clean worktree retirement without recording an intent or removing its worktree', () => {
   const fixture = createFixture();
+
   try {
     const preview = previewWorkspaceRetirement({
       store: fixture.store,
@@ -134,11 +142,13 @@ test('plans a clean worktree retirement without recording an intent or removing 
 
 test('reports planned native cleanup without observing, claiming, or settling the session', () => {
   const fixture = createFixture();
+
   try {
     const session = {
-      id: AgentSessionIdSchema.parse('session_preview_native'),
-      generation: SessionGenerationSchema.parse(1),
+      id: Schema.decodeUnknownSync(AgentSessionIdSchema)('session_preview_native'),
+      generation: Schema.decodeUnknownSync(SessionGenerationSchema)(1),
     };
+
     const identity: NativeIdentity = {
       binding: {
         hostId: fixture.store.project.hostId,
@@ -161,6 +171,7 @@ test('reports planned native cleanup without observing, claiming, or settling th
       identityRevision: 1,
       ownedTabId: 'tab-preview',
     };
+
     fixture.store.registerSession({
       ...session,
       workspaceId: fixture.workspaceId,
@@ -207,10 +218,11 @@ test('reports planned native cleanup without observing, claiming, or settling th
 
 test('blocks on an active workspace consumer without recording retirement state', () => {
   const fixture = createFixture();
+
   try {
     fixture.store.registerSession({
-      id: AgentSessionIdSchema.parse('session_preview_consumer'),
-      generation: SessionGenerationSchema.parse(1),
+      id: Schema.decodeUnknownSync(AgentSessionIdSchema)('session_preview_consumer'),
+      generation: Schema.decodeUnknownSync(SessionGenerationSchema)(1),
       workspaceId: fixture.workspaceId,
       role: 'worker',
       executionRole: 'implementer',
@@ -242,6 +254,7 @@ test('blocks on an active workspace consumer without recording retirement state'
 
 test('runtime preview uses only its persisted target lookup and returns the same clean plan', () => {
   const fixture = createFixture();
+
   try {
     const preview = previewRuntimeWorkspaceRetirement({
       store: fixture.store,

@@ -44,6 +44,8 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: npm run check
       - run: npm run test
+      - run: npm run boundaries:check
+      - run: npm run package:smoke
       - run: npm run format:check
       - name: Build and test release artifact
         run: |

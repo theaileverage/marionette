@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import test from 'node:test';
 import { z } from 'zod';
+import { Effect, Schema, SchemaGetter } from 'effect';
 import {
   AdapterError,
   AdapterRegistry,
@@ -16,27 +17,31 @@ const runProcess = promisify(execFile);
 
 function fixtureAdapter() {
   const requests: string[] = [];
+
   const state = {
     observe: defineCapability({
-      input: z.object({ sessionId: z.string().min(1) }).strict(),
-      output: z.object({ kind: z.literal('idle') }).strict(),
+      input: Schema.Struct({ sessionId: Schema.String.check(Schema.isMinLength(1)) }),
+      output: Schema.Struct({ kind: Schema.Literal('idle') }),
       effect: 'read',
       summary: 'Read fixture session state.',
       execute: () => ({ kind: 'idle' as const }),
     }),
   };
+
   const messaging = {
     prompt: defineCapability({
-      input: z.object({ sessionId: z.string().min(1), text: z.string().min(1) }).strict(),
-      output: z.object({ kind: z.literal('submitted'), sequence: z.number().int() }).strict(),
+      input: Schema.Struct({ sessionId: Schema.String.check(Schema.isMinLength(1)), text: Schema.String.check(Schema.isMinLength(1)) }),
+      output: Schema.Struct({ kind: Schema.Literal('submitted'), sequence: Schema.Number.check(Schema.makeFilter(Number.isInteger)) }),
       effect: 'mutation',
       summary: 'Submit one fixture message.',
       execute: ({ text }) => {
         requests.push(text);
+
         return { kind: 'submitted' as const, sequence: requests.length };
       },
     }),
   };
+
   return {
     state,
     messaging,
@@ -59,18 +64,27 @@ test('composed capabilities retain their typed inputs, outputs, and offline desc
     ],
   );
   assert.equal(adapter.describe().apiVersion, 1);
-  assert.equal(adapter.describe().capabilities[0]?.input.type, 'object');
+
+  const describedInput = Schema.decodeUnknownSync(Schema.Struct({ type: Schema.String }))(
+    adapter.describe().capabilities[0]?.input,
+  );
+
+  assert.equal(describedInput.type, 'object');
+
   async function compileTimeContract() {
     // @ts-expect-error Capability names remain exact after composition.
     await adapter.invoke('launch', {});
     // @ts-expect-error Prompt requires text as well as the session identity.
     await adapter.invoke('prompt', { sessionId: 'session-1' });
+
     // @ts-expect-error Prompt result has a numeric sequence.
     const sequence: string = (
       await adapter.invoke('prompt', { sessionId: 'session-1', text: 'work' })
     ).sequence;
+
     return sequence;
   }
+
   void compileTimeContract;
 });
 
@@ -112,6 +126,7 @@ test('invalid input and pre-cancelled calls cannot reach a harness', async () =>
       assert.equal(error.phase, 'before-invocation');
       assert.ok(error.fields.includes('text'));
       assert.doesNotMatch(error.message, /SECRET_SENTINEL/);
+
       return true;
     },
   );
@@ -123,7 +138,9 @@ test('invalid input and pre-cancelled calls cannot reach a harness', async () =>
     adapter.invoke('prompt', { sessionId: 's', text: 'work' }, { signal: AbortSignal.abort() }),
     { code: 'aborted', phase: 'before-invocation' },
   );
+
   type CyclicFixture = { self?: CyclicFixture };
+
   const cycle: CyclicFixture = {};
   cycle.self = cycle;
   await assert.rejects(adapter.invoke('prompt', { sessionId: 's', text: 'work', ...cycle }), {
@@ -135,33 +152,37 @@ test('invalid input and pre-cancelled calls cannot reach a harness', async () =>
 
 test('validation and cancellation failures after invocation never retry a harness', async () => {
   let calls = 0;
+
   const malformed = composeAdapter(
     { id: 'malformed', version: 1 },
     {
       prompt: defineCapability({
-        input: z.object({}).strict(),
-        output: z.object({ status: z.string().min(1) }).strict(),
+        input: Schema.Struct({}),
+        output: Schema.Struct({ status: Schema.String.check(Schema.isMinLength(1)) }),
         effect: 'mutation',
         summary: 'Return a malformed fixture reply.',
         execute: () => {
           calls++;
+
           return { status: '' };
         },
       }),
     },
   );
+
   await assert.rejects(malformed.invoke('prompt', {}), {
     code: 'invalid-output',
     phase: 'after-invocation',
   });
   assert.equal(calls, 1);
   const started = Promise.withResolvers<void>();
+
   const cancelled = composeAdapter(
     { id: 'cancelled', version: 1 },
     {
       prompt: defineCapability({
-        input: z.object({}).strict(),
-        output: z.literal('submitted'),
+        input: Schema.Struct({}),
+        output: Schema.Literal('submitted'),
         effect: 'mutation',
         summary: 'Observe cancellation in a running fixture.',
         execute: async (_, { signal }) => {
@@ -172,11 +193,13 @@ test('validation and cancellation failures after invocation never retry a harnes
               once: true,
             }),
           );
+
           return 'submitted' as const;
         },
       }),
     },
   );
+
   const controller = new AbortController();
   const pending = cancelled.invoke('prompt', {}, { signal: controller.signal });
   await started.promise;
@@ -185,6 +208,7 @@ test('validation and cancellation failures after invocation never retry a harnes
     assert.ok(error instanceof AdapterError);
     assert.equal(error.phase, 'after-invocation');
     assert.doesNotMatch(error.message, /SECRET_BACKEND_ERROR/);
+
     return true;
   });
   assert.equal(calls, 2);
@@ -193,24 +217,30 @@ test('validation and cancellation failures after invocation never retry a harnes
 test('async input validation is described offline and fails before harness execution', async () => {
   let validations = 0;
   let executions = 0;
+
   const adapter = composeAdapter(
     { id: 'validated', version: 1 },
     {
       prompt: defineCapability({
-        input: z.string().refine(async () => {
-          validations++;
-          throw new Error('SECRET_VALIDATOR_INPUT');
-        }),
-        output: z.string(),
+        input: Schema.String.pipe(Schema.decodeTo(Schema.String, {
+          decode: SchemaGetter.checkEffect(() => Effect.sync(() => {
+            validations++;
+            throw new Error('SECRET_VALIDATOR_INPUT');
+          })),
+          encode: SchemaGetter.transform((value) => value),
+        })),
+        output: Schema.String,
         effect: 'mutation',
         summary: 'Exercise a failing async validator.',
         execute: (input) => {
           executions++;
+
           return input;
         },
       }),
     },
   );
+
   assert.equal(adapter.describe().capabilities.length, 1);
   assert.equal(validations, 0);
   await assert.rejects(adapter.invoke('prompt', 'message'), (error: Error) => {
@@ -218,6 +248,7 @@ test('async input validation is described offline and fails before harness execu
     assert.equal(error.phase, 'before-invocation');
     assert.equal(error.code, 'invalid-input');
     assert.doesNotMatch(error.message, /SECRET_VALIDATOR_INPUT/);
+
     return true;
   });
   assert.equal(validations, 1);
@@ -228,18 +259,20 @@ test('adapter outputs cannot lose a class prototype while retaining a class retu
   class Result {
     value = 'result';
   }
+
   const adapter = composeAdapter(
     { id: 'class-result', version: 1 },
     {
       run: defineCapability({
-        input: z.object({}).strict(),
-        output: z.object({}).transform(() => new Result()),
+        input: Schema.Struct({}),
+        output: Schema.instanceOf(Result),
         effect: 'read',
         summary: 'Produce a non-JSON fixture.',
-        execute: () => ({}),
+        execute: () => new Result(),
       }),
     },
   );
+
   await assert.rejects(adapter.invoke('run', {}), {
     code: 'invalid-output',
     phase: 'after-invocation',
@@ -251,14 +284,12 @@ test('a composed local-process harness works without Herdr identity fields', asy
     { id: 'local-process-fixture', version: 1 },
     {
       run: defineCapability({
-        input: z.object({ text: z.string().max(100) }).strict(),
-        output: z
-          .object({
-            text: z.string(),
-            pid: z.number().int().positive(),
-            optional: z.string().optional(),
-          })
-          .strict(),
+        input: Schema.Struct({ text: Schema.String.check(Schema.isMaxLength(100)) }),
+        output: Schema.Struct({
+          text: Schema.String,
+          pid: Schema.Number.check(Schema.makeFilter((value) => Number.isInteger(value) && value > 0)),
+          optional: Schema.optionalKey(Schema.String),
+        }),
         effect: 'mutation',
         summary: 'Run a disposable Node process.',
         execute: async ({ text }, { signal }) => {
@@ -271,14 +302,17 @@ test('a composed local-process harness works without Herdr identity fields', asy
             ],
             { signal, timeout: 5000, maxBuffer: 4096 },
           );
+
           const parsed = z
             .object({ text: z.string(), pid: z.number() })
             .parse(JSON.parse(result.stdout));
-          return { ...parsed, optional: undefined };
+
+          return parsed;
         },
       }),
     },
   );
+
   const result = await adapter.invoke('run', { text: 'adapter process proof' });
   assert.equal(result.text, 'adapter process proof');
   assert.notEqual(result.pid, process.pid);
@@ -287,16 +321,21 @@ test('a composed local-process harness works without Herdr identity fields', asy
 
 test('Codex app-server composes only messaging and retains its expected-turn checks', async () => {
   const calls: AppServerRequest[] = [];
+
   const transport: JsonRpcTransport = {
     notify() {},
     close() {},
     async request(request) {
       calls.push(request);
-      if (request.method === 'thread/read') return { kind: 'thread-read', status: 'active' };
+
+      if (request.method === 'thread/read')
+        return { kind: 'thread-read', threadId: 't', status: 'active', turns: [] };
+
       if (request.method === 'turn/steer') return { kind: 'turn-steered', turnId: 'turn-1' };
       throw new Error('Unexpected fixture request');
     },
   };
+
   const adapter = createCodexAppServerAdapter({
     binding: {
       projectId: 'p',
@@ -312,17 +351,20 @@ test('Codex app-server composes only messaging and retains its expected-turn che
     },
     transport,
   });
+
   assert.deepEqual(
     adapter.describe().capabilities.map(({ name }) => name),
-    ['deliver'],
+    ['inspect', 'deliver'],
   );
   assert.doesNotMatch(JSON.stringify(adapter.describe()), /SECRET_CREDENTIAL/);
+
   const result = await adapter.invoke('deliver', {
     deliveryId: 'd',
     project: 'p',
     recipient: { kind: 'codex-desktop', id: 't', generation: '1' },
     message: 'result ready',
   });
+
   assert.deepEqual(result, { kind: 'submitted', turnId: 'turn-1' });
   assert.deepEqual(
     calls.map(({ method }) => method),
@@ -330,6 +372,7 @@ test('Codex app-server composes only messaging and retains its expected-turn che
   );
   const steer = calls[1];
   assert.equal(steer?.method, 'turn/steer');
+
   if (steer?.method === 'turn/steer') assert.equal(steer.params.expectedTurnId, 'turn-1');
   await assert.rejects(adapter.dispatch('launch', {}), { code: 'unsupported-capability' });
   assert.equal(calls.length, 2);

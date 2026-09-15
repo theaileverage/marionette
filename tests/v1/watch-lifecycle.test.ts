@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
-import { z } from 'zod';
+import { Effect, Schema } from 'effect';
 import { composeHerdrAdapter } from '../../src/v1/adapters/herdr.js';
 import { Board } from '../../src/v1/board.js';
 import { Marionette } from '../../src/v1/client.js';
@@ -31,12 +31,19 @@ import { Settings, profileSchema } from '../../src/v1/settings.js';
 import { Store } from '../../src/v1/store.js';
 import { WakeListener, pokeWatcher, wakeSocketPath } from '../../src/v1/wake.js';
 
+const decode = <S extends Schema.ConstraintDecoder<unknown, never>, Value>(
+  schema: S,
+  value: Value,
+): S['Type'] => Schema.decodeUnknownSync(schema)(value);
+
 /**
  * These tests own a project of their own, so an inherited managed context would
  * only bind them to somebody else's. Detach it for the whole file.
  */
 const inheritedContext = process.env.MARIONETTE_CONTEXT;
+
 delete process.env.MARIONETTE_CONTEXT;
+
 test.after(() => {
   if (inheritedContext !== undefined) process.env.MARIONETTE_CONTEXT = inheritedContext;
 });
@@ -49,6 +56,7 @@ function project(t: TestContext) {
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const client = Marionette.init({ repositoryRoot, stateHome });
   t.after(() => client.close());
+
   return { root, repositoryRoot, stateHome, client, context: client.context() };
 }
 
@@ -56,9 +64,11 @@ function project(t: TestContext) {
 function observer(t: TestContext, context: ReturnType<Marionette['context']>) {
   const store = Store.open({
     databasePath: join(context.project.stateDirectory, 'project.sqlite'),
-    project: ProjectBindingSchema.parse(context.project),
+    project: decode(ProjectBindingSchema, context.project),
   });
+
   t.after(() => store.close());
+
   return { store, board: Board.create({ store }) };
 }
 
@@ -68,15 +78,18 @@ function deliveryState(store: Store, projectId: string): string | undefined {
       .prepare('SELECT state FROM board_subscription_wakes WHERE project_id=? LIMIT 1')
       .get(projectId),
   );
-  return row === undefined ? undefined : z.object({ state: z.string() }).parse(row).state;
+
+  return row === undefined ? undefined : decode(Schema.Struct({ state: Schema.String }), row).state;
 }
 
 async function until(predicate: () => boolean, deadlineMs: number): Promise<number> {
   const started = Date.now();
+
   while (Date.now() - started < deadlineMs) {
     if (predicate()) return Date.now() - started;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
+
   throw new Error(`condition did not hold within ${deadlineMs}ms`);
 }
 
@@ -90,13 +103,16 @@ async function until(predicate: () => boolean, deadlineMs: number): Promise<numb
  */
 function passCounter() {
   let passes = 0;
+
   return {
     passes: () => passes,
     port: {
-      hasPendingWork: async () => {
-        passes += 1;
-        return false;
-      },
+      hasPendingWorkEffect: () =>
+        Effect.sync(() => {
+          passes += 1;
+
+          return false;
+        }),
     },
   };
 }
@@ -105,6 +121,7 @@ function passCounter() {
 function subscribedThread(client: Marionette, board: Board) {
   const thread = client.createThread({ title: 'Wake', idempotencyKey: 'wake-thread' });
   board.subscribe({ subscriber: { kind: 'desktop', id: 'lead' }, threadId: thread.id });
+
   return thread;
 }
 
@@ -116,18 +133,16 @@ test('a committed post wakes the watcher over its socket well inside the fallbac
   t.after(() => abort.abort());
   // A fallback this long cannot explain any wake: only the poke can.
   const fallbackIntervalMs = 60_000;
+  const counter = passCounter();
+
   const running = fixture.client.watch({
     signal: abort.signal,
     idleTimeoutMs: 60_000,
     fallbackIntervalMs,
+    pendingWork: counter.port,
   });
-  await until(
-    () =>
-      existsSync(
-        wakeSocketPath(fixture.context.project.stateDirectory, fixture.context.project.id),
-      ),
-    5_000,
-  );
+
+  await until(() => counter.passes() >= 1, 5_000);
 
   fixture.client.post({
     threadId: thread.id,
@@ -138,10 +153,12 @@ test('a committed post wakes the watcher over its socket well inside the fallbac
   assert.equal(deliveryState(watched.store, fixture.context.project.id), 'pending');
   const committed = Date.now();
   await fixture.client.ensureWatcher();
+
   const latencyMs = await until(
     () => deliveryState(watched.store, fixture.context.project.id) !== 'pending',
     5_000,
   );
+
   abort.abort();
   const stopped = await running;
   assert.ok(
@@ -167,11 +184,13 @@ test('a post whose poke is never sent still reaches the watcher on its fallback 
   const thread = subscribedThread(fixture.client, watched.board);
   const abort = new AbortController();
   t.after(() => abort.abort());
+
   const running = fixture.client.watch({
     signal: abort.signal,
     idleTimeoutMs: 60_000,
     fallbackIntervalMs: 150,
   });
+
   await until(
     () =>
       existsSync(
@@ -187,10 +206,12 @@ test('a post whose poke is never sent still reaches the watcher on its fallback 
     kind: 'question',
     idempotencyKey: 'p1',
   });
+
   const latencyMs = await until(
     () => deliveryState(watched.store, fixture.context.project.id) !== 'pending',
     5_000,
   );
+
   abort.abort();
   const stopped = await running;
   assert.equal(stopped.wakes, 0, 'no poke was ever delivered');
@@ -205,16 +226,19 @@ test('a burst of pokes collapses into a bounded number of passes', async (t) => 
   const abort = new AbortController();
   t.after(() => abort.abort());
   const counter = passCounter();
+
   const running = fixture.client.watch({
     signal: abort.signal,
     idleTimeoutMs: 60_000,
     fallbackIntervalMs: 60_000,
     pendingWork: counter.port,
   });
+
   // Let the watcher finish a pass and go to sleep before the burst arrives.
   await until(() => counter.passes() >= 1, 5_000);
   const settled = counter.passes();
   const burst = 50;
+
   const delivered = await Promise.all(
     Array.from({ length: burst }, () =>
       pokeWatcher({
@@ -223,6 +247,7 @@ test('a burst of pokes collapses into a bounded number of passes', async (t) => 
       }),
     ),
   );
+
   assert.equal(delivered.filter(Boolean).length, burst, 'every poke reached the listener');
   // Let the burst actually reach the loop before measuring what it cost.
   await until(() => counter.passes() > settled, 5_000);
@@ -246,11 +271,13 @@ test('an idle watcher does bounded work and observes nothing natively', async (t
   const fallbackIntervalMs = 100;
   const runFor = 600;
   setTimeout(() => abort.abort(), runFor);
+
   const stopped = await fixture.client.watch({
     signal: abort.signal,
     idleTimeoutMs: 60_000,
     fallbackIntervalMs,
   });
+
   assert.equal(stopped.reconciliations, 0, 'no attempts means no native observation');
   assert.equal(stopped.deliveries, 0);
   const bound = Math.ceil(runFor / fallbackIntervalMs) + 2;
@@ -266,16 +293,21 @@ test('an idle watcher does bounded work and observes nothing natively', async (t
 test('a slow delivery schedule does not hold up native reconciliation', async (t) => {
   const fixture = project(t);
   let deliveryPasses = 0;
+
   const pendingWork = {
-    hasPendingWork: async () => {
-      deliveryPasses += 1;
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      return true;
-    },
+    hasPendingWorkEffect: () =>
+      Effect.gen(function* () {
+        deliveryPasses += 1;
+        yield* Effect.sleep('300 millis');
+
+        return true;
+      }),
   };
+
   const abort = new AbortController();
   const runFor = 900;
   setTimeout(() => abort.abort(), runFor);
+
   const stopped = await fixture.client.watch({
     signal: abort.signal,
     idleTimeoutMs: 60_000,
@@ -283,6 +315,7 @@ test('a slow delivery schedule does not hold up native reconciliation', async (t
     reconcileIntervalMs: 30,
     pendingWork,
   });
+
   assert.ok(
     deliveryPasses <= 4,
     `delivery really was slow (${deliveryPasses} passes in ${runFor}ms)`,
@@ -307,14 +340,18 @@ test('an aborted watch releases its endpoint and settles its ownership', async (
   const stopped = await running;
   assert.equal(stopped.stopped, true);
   assert.equal(existsSync(path), false, 'scoped cleanup removed the endpoint');
+
   const owner = watched.store.read((db) =>
     db
       .prepare('SELECT generation,settled_at FROM watcher_owners WHERE project_id=?')
       .get(fixture.context.project.id),
   );
-  const parsed = z
-    .object({ generation: z.string(), settled_at: z.string().datetime() })
-    .parse(owner);
+
+  const parsed = decode(
+    Schema.Struct({ generation: Schema.String, settled_at: Schema.String }),
+    owner,
+  );
+
   assert.equal(parsed.generation, stopped.generation);
 });
 
@@ -323,11 +360,13 @@ test('a watcher that loses ownership fails closed instead of continuing to deliv
   const watched = observer(t, fixture.context);
   const abort = new AbortController();
   t.after(() => abort.abort());
+
   const running = fixture.client.watch({
     signal: abort.signal,
     idleTimeoutMs: 60_000,
     fallbackIntervalMs: 50,
   });
+
   await until(
     () =>
       existsSync(
@@ -350,7 +389,7 @@ test('a worker may poke an existing watcher but may never own or spawn one', asy
   const token = randomBytes(32).toString('hex');
   const sessionId = `worker-${randomUUID()}`;
   watched.store.registerSession({
-    id: AgentSessionIdSchema.parse(sessionId),
+    id: decode(AgentSessionIdSchema, sessionId),
     generation: 1,
     workspaceId: null,
     role: 'worker',
@@ -362,6 +401,7 @@ test('a worker may poke an existing watcher but may never own or spawn one', asy
     nativeServerGeneration: null,
     nativeLocator: null,
   });
+
   const contextPath = writeSessionContext({
     stateDirectory: fixture.context.project.stateDirectory,
     context: {
@@ -374,10 +414,12 @@ test('a worker may poke an existing watcher but may never own or spawn one', asy
       token,
     },
   });
+
   const worker = Marionette.connect({
     cwd: fixture.repositoryRoot,
     env: { MARIONETTE_STATE_HOME: fixture.stateHome, MARIONETTE_CONTEXT: contextPath },
   });
+
   t.after(() => worker.close());
   assert.equal(worker.context().session.role, 'worker');
 
@@ -386,6 +428,7 @@ test('a worker may poke an existing watcher but may never own or spawn one', asy
     stateDirectory: fixture.context.project.stateDirectory,
     projectId: fixture.context.project.id,
   });
+
   t.after(() => listener.close());
   await worker.ensureWatcher();
   assert.equal(listener.accepted, 1, 'the worker woke the existing watcher');
@@ -413,20 +456,26 @@ test('the idle timer defers to the watcher pending-work predicate', async (t) =>
   // The shape Watcher.hasPendingWork() fills: a cheap, side-effect-free boolean.
   let queued = true;
   let asked = 0;
+
   const pendingWork = {
-    hasPendingWork: async () => {
-      asked += 1;
-      return queued;
-    },
+    hasPendingWorkEffect: () =>
+      Effect.sync(() => {
+        asked += 1;
+
+        return queued;
+      }),
   };
+
   const abort = new AbortController();
   t.after(() => abort.abort());
+
   const running = fixture.client.watch({
     signal: abort.signal,
     idleTimeoutMs: 60,
     fallbackIntervalMs: 20,
     pendingWork,
   });
+
   // While the predicate reports work, the watcher must not idle out.
   await until(() => asked > 1, 5_000);
   assert.equal(
@@ -446,21 +495,24 @@ function countingRuntime(t: TestContext) {
   mkdirSync(repo);
   const context = createBinding({ repositoryRoot: repo, stateRoot: join(root, 'state') });
   const local = localSessionContext(context);
+
   const store = Store.open({
     databasePath: context.binding.databasePath,
-    project: ProjectBindingSchema.parse({
+    project: decode(ProjectBindingSchema, {
       id: context.binding.projectId,
       hostId: context.binding.hostId,
       repositoryRoot: repo,
       stateDirectory: context.binding.stateDirectory,
     }),
   });
+
   t.after(() => {
     store.close();
     rmSync(root, { recursive: true, force: true });
   });
+
   const actor = store.registerSession({
-    id: AgentSessionIdSchema.parse(local.sessionId),
+    id: decode(AgentSessionIdSchema, local.sessionId),
     generation: local.generation,
     workspaceId: null,
     role: 'user',
@@ -472,9 +524,10 @@ function countingRuntime(t: TestContext) {
     nativeServerGeneration: null,
     nativeLocator: null,
   });
+
   const workspace = store.registerWorkspace({
     actor,
-    id: WorkspaceIdSchema.parse('workspace-test'),
+    id: decode(WorkspaceIdSchema, 'workspace-test'),
     kind: 'existing',
     path: repo,
     repositoryRoot: repo,
@@ -483,13 +536,15 @@ function countingRuntime(t: TestContext) {
     writes: [],
     idempotencyKey: 'workspace',
   });
+
   const text = 'Read-only check';
+
   const job = store.createJob({
     actor,
     stableKey: 'job',
     request: {
       text,
-      digest: DigestSchema.parse(createHash('sha256').update(text).digest('hex')),
+      digest: decode(DigestSchema, createHash('sha256').update(text).digest('hex')),
       inputSnapshots: [],
     },
     brief: {
@@ -506,6 +561,7 @@ function countingRuntime(t: TestContext) {
     dependencies: [],
     idempotencyKey: 'job',
   });
+
   const settings = new Settings(store, actor);
   settings.set({
     key: 'profile/test',
@@ -514,12 +570,14 @@ function countingRuntime(t: TestContext) {
     expectedRevision: 0,
     idempotencyKey: 'profile',
   });
+
   const binding: NativeBinding = {
     hostId: store.project.hostId,
     socketPath: '/fixture/herdr.sock',
     workspaceId: 'w1',
     endpoint: { device: 1, inode: 2, birthtimeMs: 3, serverStartToken: 'server', protocol: 22 },
   };
+
   settings.set({
     key: 'native/w1',
     value: binding,
@@ -528,6 +586,7 @@ function countingRuntime(t: TestContext) {
     idempotencyKey: 'native',
   });
   let observations = 0;
+
   class Adapter extends HerdrNativeAdapter {
     constructor(private readonly effects: NativeJournal) {
       super(effects);
@@ -535,6 +594,7 @@ function countingRuntime(t: TestContext) {
     override async launch(_binding: NativeBinding, _request: LaunchRequest): Promise<LaunchResult> {
       const prepared = await this.effects.prepare({ kind: 'create-tab', workspaceId: 'w1' });
       assert.equal(prepared.kind, 'prepared');
+
       return {
         kind: 'launched',
         identity: {
@@ -556,17 +616,22 @@ function countingRuntime(t: TestContext) {
         paneId: identity.paneId,
         textDigest: createHash('sha256').update(text).digest('hex'),
       });
+
       if (prepared.kind === 'rejected') throw new Error(prepared.reason);
+
       return { kind: 'submitted', operationId: prepared.operationId };
     }
     override async observe(identity: NativeIdentity): Promise<NativeObservation> {
       observations += 1;
+
       return { kind: 'working', identity };
     }
   }
+
   const runtime = new Runtime(store, actor, context, (journal) =>
     composeHerdrAdapter(new Adapter(journal)),
   );
+
   return {
     runtime,
     observations: () => observations,
@@ -622,6 +687,7 @@ test('a running attempt costs one native observation per pass instead of two', a
 
   // The pass it runs now.
   fixture.reset();
+
   if (fixture.runtime.needsStartProgress(id)) await fixture.runtime.start(id);
   await fixture.runtime.reconcile(id);
   const after = fixture.observations();

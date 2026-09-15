@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { z } from 'zod';
+import { Schema } from 'effect';
 
 import {
   ArtifactFiles,
@@ -29,10 +30,12 @@ import {
 } from '../../src/v1/model.js';
 import { Store, type AgentSession, type SessionIdentity } from '../../src/v1/store.js';
 
-const inputDigest = DigestSchema.parse('0'.repeat(64));
+const inputDigest = Schema.decodeUnknownSync(DigestSchema)('0'.repeat(64));
+
 const reservationStateSchema = z.enum(['held', 'released', 'unconfirmed']);
-const completedCheckSchema = z.object({
-  kind: z.enum(['passed', 'failed']),
+
+const completedCheckSchema = Schema.Struct({
+  kind: Schema.Literals(['passed', 'failed']),
   target: gitStateSchema,
   log: artifactSchema,
 });
@@ -57,14 +60,16 @@ function git(cwd: string, args: readonly string[]): string {
     encoding: 'utf8',
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
   });
+
   assert.equal(result.status, 0, result.stderr);
+
   return result.stdout.trim();
 }
 
 function registerWorker(store: Store, id: string, workspaceId: WorkspaceId): AgentSession {
   return store.registerSession({
-    id: AgentSessionIdSchema.parse(id),
-    generation: SessionGenerationSchema.parse(1),
+    id: Schema.decodeUnknownSync(AgentSessionIdSchema)(id),
+    generation: Schema.decodeUnknownSync(SessionGenerationSchema)(1),
     workspaceId,
     role: 'worker',
     executionRole: 'implementation',
@@ -107,6 +112,7 @@ function runningAttempt(options: {
     dependencies: [],
     idempotencyKey: `create-${options.name}-job`,
   });
+
   const admitted = options.store.admitAttempt({
     actor: options.controller,
     jobId: job.id,
@@ -117,6 +123,7 @@ function runningAttempt(options: {
     workflow: { kind: 'direct' },
     idempotencyKey: `admit-${options.name}-attempt`,
   });
+
   options.store.claimAttemptLaunch({
     actor: options.controller,
     attemptId: admitted.attempt.id,
@@ -132,6 +139,7 @@ function runningAttempt(options: {
     nativeLocator: `${options.name}-locator`,
     idempotencyKey: `observe-${options.name}-running`,
   });
+
   return { job, attempt: options.store.getAttempt(admitted.attempt.id) };
 }
 
@@ -153,28 +161,33 @@ function createFixture(t: TestContext): Fixture {
   git(sourcePath, ['add', 'tracked.txt']);
   git(sourcePath, ['commit', '-qm', 'source result']);
 
-  const project = ProjectBindingSchema.parse({
-    id: ProjectIdSchema.parse('project_handoff'),
-    hostId: HostIdSchema.parse('host_handoff'),
+  const project = Schema.decodeUnknownSync(ProjectBindingSchema)({
+    id: Schema.decodeUnknownSync(ProjectIdSchema)('project_handoff'),
+    hostId: Schema.decodeUnknownSync(HostIdSchema)('host_handoff'),
     repositoryRoot,
     stateDirectory,
   });
+
   let nextId = 0;
+
   const store = Store.open({
     databasePath: join(root, 'state.sqlite'),
     project,
     clock: () => new Date('2026-09-11T00:00:00.000Z'),
     idFactory: (kind) => `${kind}_${++nextId}`,
   });
+
   t.after(() => {
     store.close();
     rmSync(root, { recursive: true, force: true });
   });
   const artifacts = new ArtifactFiles(stateDirectory);
+
   const controller = {
-    id: AgentSessionIdSchema.parse('session_controller'),
-    generation: SessionGenerationSchema.parse(1),
+    id: Schema.decodeUnknownSync(AgentSessionIdSchema)('session_controller'),
+    generation: Schema.decodeUnknownSync(SessionGenerationSchema)(1),
   };
+
   store.registerSession({
     ...controller,
     workspaceId: null,
@@ -187,8 +200,8 @@ function createFixture(t: TestContext): Fixture {
     nativeServerGeneration: null,
     nativeLocator: null,
   });
-  const sourceWorkspaceId = WorkspaceIdSchema.parse('workspace_source');
-  const targetWorkspaceId = WorkspaceIdSchema.parse('workspace_target');
+  const sourceWorkspaceId = Schema.decodeUnknownSync(WorkspaceIdSchema)('workspace_source');
+  const targetWorkspaceId = Schema.decodeUnknownSync(WorkspaceIdSchema)('workspace_target');
   store.registerWorkspace({
     actor: controller,
     id: sourceWorkspaceId,
@@ -213,6 +226,7 @@ function createFixture(t: TestContext): Fixture {
   });
   const sourceWorker = registerWorker(store, 'session_source', sourceWorkspaceId);
   const targetWorker = registerWorker(store, 'session_target', targetWorkspaceId);
+
   const source = runningAttempt({
     store,
     controller,
@@ -221,6 +235,7 @@ function createFixture(t: TestContext): Fixture {
     name: 'source',
     delivery: 'commit',
   });
+
   const target = runningAttempt({
     store,
     controller,
@@ -229,13 +244,16 @@ function createFixture(t: TestContext): Fixture {
     name: 'target',
     delivery: 'report',
   });
+
   const exported = exportCommit({
     workspacePath: sourcePath,
     base: expectedTarget.head,
     commit: git(sourcePath, ['rev-parse', 'HEAD']),
     artifacts,
   });
+
   registerArtifact(store, artifacts, exported.patch);
+
   const result = store.recordResult({
     actor: sourceWorker,
     attemptId: source.attempt.id,
@@ -246,10 +264,10 @@ function createFixture(t: TestContext): Fixture {
       resultingTree: exported.tree,
       resultingCommit: exported.commit,
       changedPaths: exported.changedPaths,
-      artifactDigests: [DigestSchema.parse(exported.patch.digest)],
+      artifactDigests: [Schema.decodeUnknownSync(DigestSchema)(exported.patch.digest)],
     },
     inputDigest,
-    workspaceDigest: DigestSchema.parse(exported.tree.padEnd(64, '0')),
+    workspaceDigest: Schema.decodeUnknownSync(DigestSchema)(exported.tree.padEnd(64, '0')),
     evidenceClaims: ['source-commit'],
     evidence: [
       {
@@ -263,6 +281,7 @@ function createFixture(t: TestContext): Fixture {
     upstreamResultIds: [],
     idempotencyKey: 'record-source-result',
   });
+
   return {
     repositoryRoot,
     sourcePath,
@@ -315,6 +334,7 @@ function supersedeSourceBrief(fixture: Fixture): () => void {
       .prepare('UPDATE jobs SET current_brief_id = ?, current_brief_revision = 2 WHERE id = ?')
       .run(supersedingBriefId, sourceResult.jobId);
   });
+
   return () => {
     fixture.store.transaction((database) => {
       database
@@ -414,12 +434,14 @@ test('claims only an accepted current result through an attempt on the target wr
       .prepare('UPDATE workspaces SET retired_at = NULL WHERE id = ?')
       .run(fixture.targetWorkspaceId);
   });
+
   const claimed = fixture.handoffs.claim({
     handoffId: handoff.id,
     attemptId: fixture.targetAttemptId,
     expectedClaimRevision: 0,
     idempotencyKey: 'claim-target-workspace',
   });
+
   assert.equal(claimed.state, 'integrating');
   assert.equal(claimed.claim_revision, 1);
   assert.equal(claimed.claimed_attempt_id, fixture.targetAttemptId);
@@ -436,6 +458,7 @@ test('completes only after the accepted source patch is present in the checked t
     expectedClaimRevision: 0,
     idempotencyKey: 'claim-source-content',
   });
+
   const checkedWithoutResult = fixture.handoffs.check({
     handoffId: handoff.id,
     attemptId: fixture.targetAttemptId,
@@ -444,9 +467,11 @@ test('completes only after the accepted source patch is present in the checked t
     timeoutMs: 30_000,
     idempotencyKey: 'check-without-source-content',
   });
-  const emptyTargetCheck = completedCheckSchema.parse(
+
+  const emptyTargetCheck = Schema.decodeUnknownSync(completedCheckSchema)(
     JSON.parse(checkedWithoutResult.checks_json ?? 'null'),
   );
+
   assert.equal(emptyTargetCheck.kind, 'passed');
   assert.deepEqual(emptyTargetCheck.target, fixture.expectedTarget);
   assert.throws(
@@ -466,6 +491,7 @@ test('completes only after the accepted source patch is present in the checked t
 
   git(fixture.repositoryRoot, ['cherry-pick', git(fixture.sourcePath, ['rev-parse', 'HEAD'])]);
   const integratedTarget = captureGitState(fixture.repositoryRoot);
+
   const checkedWithResult = fixture.handoffs.check({
     handoffId: handoff.id,
     attemptId: fixture.targetAttemptId,
@@ -474,9 +500,11 @@ test('completes only after the accepted source patch is present in the checked t
     timeoutMs: 30_000,
     idempotencyKey: 'check-with-source-content',
   });
-  const integratedCheck = completedCheckSchema.parse(
+
+  const integratedCheck = Schema.decodeUnknownSync(completedCheckSchema)(
     JSON.parse(checkedWithResult.checks_json ?? 'null'),
   );
+
   assert.equal(integratedCheck.kind, 'passed');
   assert.deepEqual(integratedCheck.target, integratedTarget);
 
@@ -494,6 +522,7 @@ test('completes only after the accepted source patch is present in the checked t
     /accepted for the current brief/,
   );
   restoreSourceBrief();
+
   const completed = fixture.handoffs.complete({
     handoffId: handoff.id,
     attemptId: fixture.targetAttemptId,
@@ -502,6 +531,7 @@ test('completes only after the accepted source patch is present in the checked t
     reason: 'Accepted source patch is present and target checks passed',
     idempotencyKey: 'complete-with-source-content',
   });
+
   assert.equal(completed.state, 'integrated');
   assert.deepEqual(JSON.parse(completed.actual_target_state_json ?? 'null'), integratedTarget);
   assert.equal(reservationState(fixture, handoff.id), 'released');
@@ -556,7 +586,8 @@ test('runs checks on the integrated target and rejects drift during or after a p
     timeoutMs: 30_000,
     idempotencyKey: 'check-that-mutates-target',
   });
-  const failedCheck = completedCheckSchema.parse(JSON.parse(failed.checks_json ?? 'null'));
+
+  const failedCheck = Schema.decodeUnknownSync(completedCheckSchema)(JSON.parse(failed.checks_json ?? 'null'));
   assert.equal(failedCheck.kind, 'failed');
   assert.deepEqual(failedCheck.target, integratedTarget);
   assert.match(fixture.artifacts.read(failedCheck.log).toString(), /mutated/);
@@ -570,7 +601,8 @@ test('runs checks on the integrated target and rejects drift during or after a p
     timeoutMs: 30_000,
     idempotencyKey: 'check-integrated-target',
   });
-  const passedCheck = completedCheckSchema.parse(JSON.parse(checked.checks_json ?? 'null'));
+
+  const passedCheck = Schema.decodeUnknownSync(completedCheckSchema)(JSON.parse(checked.checks_json ?? 'null'));
   assert.equal(passedCheck.kind, 'passed');
   assert.deepEqual(passedCheck.target, integratedTarget);
   assert.match(fixture.artifacts.read(passedCheck.log).toString(), /target check passed/);
@@ -613,6 +645,7 @@ test('runs checks on the integrated target and rejects drift during or after a p
     /Target Git state changed/,
   );
   rmSync(unrelated);
+
   const completed = fixture.handoffs.complete({
     handoffId: handoff.id,
     attemptId: fixture.targetAttemptId,
@@ -621,6 +654,7 @@ test('runs checks on the integrated target and rejects drift during or after a p
     reason: 'Integrated result passed target checks',
     idempotencyKey: 'complete-integrated-handoff',
   });
+
   assert.equal(completed.state, 'integrated');
   assert.deepEqual(JSON.parse(completed.actual_target_state_json ?? 'null'), integratedTarget);
   assert.equal(reservationState(fixture, handoff.id), 'released');
@@ -644,6 +678,7 @@ test('retains an unconfirmed claim until settlement and replans without losing a
     expectedClaimRevision: 0,
     idempotencyKey: 'claim-before-uncertainty',
   });
+
   const uncertain = fixture.handoffs.complete({
     handoffId: handoff.id,
     attemptId: fixture.targetAttemptId,
@@ -652,9 +687,11 @@ test('retains an unconfirmed claim until settlement and replans without losing a
     reason: 'Backend disconnected after Git may have changed',
     idempotencyKey: 'mark-handoff-unconfirmed',
   });
+
   assert.equal(uncertain.state, 'unconfirmed');
   assert.equal(reservationState(fixture, handoff.id), 'unconfirmed');
   const currentTarget = captureGitState(fixture.repositoryRoot);
+
   const replan = () =>
     fixture.handoffs.replan({
       handoffId: handoff.id,
@@ -663,6 +700,7 @@ test('retains an unconfirmed claim until settlement and replans without losing a
       reason: 'Inspected target after native settlement',
       idempotencyKey: 'replan-after-settlement',
     });
+
   assert.throws(replan, /Prior integrator settlement is unconfirmed/);
   assert.equal(reservationState(fixture, handoff.id), 'unconfirmed');
   fixture.store.settleAttempt({

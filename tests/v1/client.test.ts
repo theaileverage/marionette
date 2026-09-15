@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { Marionette } from '../../src/v1/client.js';
 import { execute, operationSchema } from '../../src/v1/operations.js';
 import { contextSchema } from '../../src/v1/context.js';
+import { Schema } from 'effect';
 
 test('SDK and parsed operations share durable state and derive the author from the session', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'marionette-v1-client-'));
@@ -17,6 +18,7 @@ test('SDK and parsed operations share durable state and derive the author from t
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const first = Marionette.init({ repositoryRoot: repo, stateHome });
   const thread = first.createThread({ title: 'Client parity', idempotencyKey: 'thread' });
+
   const original = await execute(first, {
     operation: 'board.post',
     threadId: thread.id,
@@ -24,15 +26,18 @@ test('SDK and parsed operations share durable state and derive the author from t
     kind: 'result',
     idempotencyKey: 'post',
   });
+
   first.close();
   const second = Marionette.connect({ cwd: repo, env: { MARIONETTE_STATE_HOME: stateHome } });
   t.after(() => second.close());
+
   const replayed = second.post({
     threadId: thread.id,
     body: 'Durable result',
     kind: 'result',
     idempotencyKey: 'post',
   });
+
   assert.deepEqual(replayed, original);
   assert.equal(replayed.author.id, second.context().session.id);
   assert.equal(second.readThread({ threadId: thread.id }).entries.length, 1);
@@ -40,7 +45,7 @@ test('SDK and parsed operations share durable state and derive the author from t
     async () =>
       execute(
         second,
-        operationSchema.parse({
+        Schema.decodeUnknownSync(operationSchema)({
           operation: 'board.post',
           threadId: thread.id,
           body: 'Impersonated',
@@ -49,7 +54,13 @@ test('SDK and parsed operations share durable state and derive the author from t
           author: { kind: 'system', id: 'another' },
         }),
       ),
-    /Unrecognized key/,
+    (cause: unknown) => {
+      assert.ok(Schema.isSchemaError(cause));
+      assert.match(cause.message, /Expected no excess property/);
+      assert.match(cause.message, /\["author"\]/);
+
+      return true;
+    },
   );
   second.configureProfile({
     profile: {
@@ -87,9 +98,11 @@ test('managed SDK connection cannot promote a supplied context to a local user',
   const client = Marionette.init({ repositoryRoot: repo, stateHome });
   const context = client.context();
   client.close();
-  const local = contextSchema.parse(
+
+  const local = Schema.decodeUnknownSync(contextSchema)(
     JSON.parse(readFileSync(join(context.project.stateDirectory, 'local-user.json'), 'utf8')),
   );
+
   const forged = join(root, 'forged.json');
   writeFileSync(forged, JSON.stringify({ ...local, token: '0'.repeat(64) }));
   assert.throws(
@@ -102,6 +115,7 @@ test('managed SDK connection cannot promote a supplied context to a local user',
   );
   const inherited = process.env.MARIONETTE_CONTEXT;
   process.env.MARIONETTE_CONTEXT = forged;
+
   try {
     assert.throws(
       () => Marionette.connect({ cwd: repo, env: { MARIONETTE_STATE_HOME: stateHome } }),
@@ -124,12 +138,15 @@ test('the real watcher settles its ownership before closing on abort', async (t)
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const client = Marionette.init({ repositoryRoot: repo, stateHome: join(root, 'state') });
   const context = client.context();
+
   try {
     const stopped = await client.watch({ signal: AbortSignal.timeout(1100) });
     assert.equal(stopped.stopped, true);
+
     const db = new DatabaseSync(join(context.project.stateDirectory, 'project.sqlite'), {
       readOnly: true,
     });
+
     try {
       const owner = db.prepare('SELECT generation,settled_at FROM watcher_owners').get();
       assert.equal(owner?.generation, stopped.generation);

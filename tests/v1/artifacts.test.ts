@@ -7,6 +7,7 @@ import { ArtifactFiles } from '../../src/v1/artifacts.js';
 
 test('input snapshots survive source edits and detect damaged durable bytes', () => {
   const root = mkdtempSync(join(tmpdir(), 'marionette-v1-artifacts-'));
+
   try {
     const source = join(root, 'brief.md');
     writeFileSync(source, 'original instructions');

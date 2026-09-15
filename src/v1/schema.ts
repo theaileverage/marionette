@@ -1,15 +1,12 @@
-import { operationSchema } from './operations.js';
-import {
-  describeSchema,
-  registerStaticDefault,
-  type SchemaDescription,
-  type JsonValue,
-} from './schema-description.js';
+import { Predicate, SchemaAST } from 'effect';
+import { operationSchemas } from './operations.js';
+import { describeSchemaAst, type SchemaDescription } from './schema-description.js';
+
 export {
   describeSchema,
-  type SchemaDescription,
-  type JsonValue,
   type JsonPrimitive,
+  type JsonValue,
+  type SchemaDescription,
 } from './schema-description.js';
 
 export type OperationDescription = {
@@ -17,23 +14,26 @@ export type OperationDescription = {
   readonly fields: Readonly<Record<string, SchemaDescription>>;
 };
 
-function operationDefault(operation: string, field: string, value: JsonValue): void {
-  const option = operationSchema.options.find(
-    (candidate) => candidate.shape.operation.value === operation,
-  );
-  const entry = option && Object.entries(option.shape).find(([name]) => name === field);
-  if (!entry) throw new Error(`Missing default schema for ${operation}.${field}`);
-  registerStaticDefault(entry[1], value);
+function operationName(ast: SchemaAST.AST): string {
+  if (!Predicate.isTagged('Objects')(ast)) throw new Error('Operation schema must be an object');
+  const field = ast.propertySignatures.find((property) => property.name === 'operation');
+
+  if (!field || !Predicate.isTagged('Literal')(field.type) || !Predicate.isString(field.type.literal)) {
+    throw new Error('Operation schema requires a string literal operation field');
+  }
+
+  return field.type.literal;
 }
-operationDefault('job.create', 'dependencies', Object.freeze([]));
-operationDefault('workflow.create', 'boundary', 'all');
-operationDefault('attempt.admit', 'inputResultIds', Object.freeze([]));
 
 export function operationDescriptions(): readonly OperationDescription[] {
-  return operationSchema.options.map((option) => {
+  return operationSchemas.map((schema) => {
+    if (!Predicate.isTagged('Objects')(schema.ast)) throw new Error('Operation schema must be an object');
     const fields: Record<string, SchemaDescription> = {};
-    for (const [name, field] of Object.entries(option.shape)) fields[name] = describeSchema(field);
-    const operation: string = option.shape.operation.value;
-    return { operation, fields };
+
+    for (const property of schema.ast.propertySignatures) {
+      fields[String(property.name)] = describeSchemaAst(property.type);
+    }
+
+    return { operation: operationName(schema.ast), fields };
   });
 }

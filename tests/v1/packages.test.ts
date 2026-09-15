@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { Schema } from 'effect';
 import {
   importModelConfig,
   loadPackage,
@@ -15,7 +16,7 @@ import {
 const digest = (text: string) => createHash('sha256').update(text).digest('hex');
 
 const fixtureManifest = (text = 'source text', name = 'feature'): PackageManifest =>
-  packageManifestSchema.parse({
+  Schema.decodeUnknownSync(packageManifestSchema)({
     name,
     version: '1.0.0',
     source: {
@@ -80,6 +81,7 @@ const writeFixture = (manifest: PackageManifest) => {
   const directory = mkdtempSync(join(tmpdir(), 'marionette-package-'));
   const path = join(directory, 'manifest.json');
   writeFileSync(path, `${JSON.stringify(manifest)}\n`);
+
   return path;
 };
 
@@ -148,6 +150,7 @@ test('routing uses pstack precedence and keeps routine work direct', () => {
 test('bundled package names resolve after the caller changes directory', () => {
   const original = process.cwd();
   const otherDirectory = mkdtempSync(join(tmpdir(), 'marionette-cwd-'));
+
   try {
     process.chdir(otherDirectory);
     assert.equal(loadPackage('feature').name, 'feature');
@@ -165,6 +168,7 @@ test('reviewed custom manifests use their own name without joining the bundled r
 
 test('model imports retain source-line diagnostics without substituting a model', () => {
   const sourcePath = '/fixture/.cursor/rules/pstack-models.mdc';
+
   const result = importModelConfig(
     [
       '---',
@@ -180,6 +184,7 @@ test('model imports retain source-line diagnostics without substituting a model'
       availableModels: new Set(['gpt-5.6-sol:xhigh', 'gpt-5.6-terra:high']),
     },
   );
+
   assert.deepEqual(result.roles['architect runners'], ['gpt-5.6-sol:xhigh']);
   assert.deepEqual(result.diagnostics, [
     {
@@ -195,10 +200,12 @@ test('model imports retain source-line diagnostics without substituting a model'
       message: 'Model gpt-5.6-terraform:high is not available',
     },
   ]);
+
   const unavailable = importModelConfig('---\nname: pstack\n---\nfeature: gpt-5.6-terraform:high', {
     sourcePath,
     availableModels: new Set(),
   });
+
   assert.deepEqual(unavailable.diagnostics, [
     {
       code: 'model_unavailable',

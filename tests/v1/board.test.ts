@@ -6,32 +6,40 @@ import { test } from 'node:test';
 import { Board, type BoardAuthor, type BoardRecipient } from '../../src/v1/board.js';
 import { ProjectBindingSchema } from '../../src/v1/model.js';
 import { Store } from '../../src/v1/store.js';
+import { Schema } from 'effect';
 
 function fixture(projectId = 'project-a') {
   const root = mkdtempSync(join(tmpdir(), 'marionette-v1-board-'));
-  const project = ProjectBindingSchema.parse({
+
+  const project = Schema.decodeUnknownSync(ProjectBindingSchema)({
     id: projectId,
     hostId: 'host-a',
     repositoryRoot: root,
     stateDirectory: root,
   });
+
   const store = Store.open({ databasePath: join(root, 'project.sqlite'), project });
+
   return { root, store, board: Board.create({ store }) };
 }
 
 test('board posts are immutable, persist across restart, and atomically coalesce non-self wakes', () => {
   const f = fixture();
+
   try {
     const author = { kind: 'system', id: 'controller' } satisfies BoardAuthor;
     const recipient = { kind: 'desktop', id: 'lead' } satisfies BoardRecipient;
     const self = { kind: 'user', id: 'author' } satisfies BoardAuthor;
+
     const thread = f.board.createThread({
       title: 'Durable findings',
       author,
       idempotencyKey: 'durable-findings-thread',
     });
+
     f.board.subscribe({ subscriber: recipient, threadId: thread.id, eventKinds: ['finding'] });
     f.board.subscribe({ subscriber: self, threadId: thread.id });
+
     const post = f.board.post({
       threadId: thread.id,
       author: self,
@@ -40,6 +48,7 @@ test('board posts are immutable, persist across restart, and atomically coalesce
       idempotencyKey: 'finding-1',
       references: [{ kind: 'file', value: 'evidence.md' }],
     });
+
     assert.equal(post.sequence, 1);
     assert.equal(
       f.store.read((db) =>
@@ -57,6 +66,7 @@ test('board posts are immutable, persist across restart, and atomically coalesce
       ),
       1,
     );
+
     const retry = f.board.post({
       threadId: thread.id,
       author: self,
@@ -65,6 +75,7 @@ test('board posts are immutable, persist across restart, and atomically coalesce
       idempotencyKey: 'finding-1',
       references: [{ kind: 'file', value: 'evidence.md' }],
     });
+
     assert.equal(retry.id, post.id);
     assert.equal(
       f.board.createThread({
@@ -95,15 +106,17 @@ test('board posts are immutable, persist across restart, and atomically coalesce
       /idempotency key/,
     );
     f.store.close();
+
     const reopened = Store.open({
       databasePath: join(f.root, 'project.sqlite'),
-      project: ProjectBindingSchema.parse({
+      project: Schema.decodeUnknownSync(ProjectBindingSchema)({
         id: 'project-a',
         hostId: 'host-a',
         repositoryRoot: f.root,
         stateDirectory: f.root,
       }),
     });
+
     try {
       const persisted = Board.create({ store: reopened }).readThread({ threadId: thread.id });
       assert.deepEqual(
@@ -131,18 +144,22 @@ test('board posts are immutable, persist across restart, and atomically coalesce
 test('board cursors and writes cannot cross project scope', () => {
   const left = fixture('project-a');
   const right = fixture('project-b');
+
   try {
     const author = { kind: 'system', id: 'controller' } satisfies BoardAuthor;
+
     const leftThread = left.board.createThread({
       title: 'Left',
       author,
       idempotencyKey: 'left-thread',
     });
+
     const rightThread = right.board.createThread({
       title: 'Right',
       author,
       idempotencyKey: 'right-thread',
     });
+
     left.board.post({
       threadId: leftThread.id,
       author,
@@ -178,13 +195,16 @@ test('board cursors and writes cannot cross project scope', () => {
 
 test('default subscriptions notify questions, blockers, and results but leave progress on the board', () => {
   const f = fixture();
+
   try {
     const author = { kind: 'system', id: 'controller' } satisfies BoardAuthor;
+
     const thread = f.board.createThread({
       title: 'Notifications',
       author,
       idempotencyKey: 'notification-thread',
     });
+
     f.board.subscribe({ subscriber: { kind: 'desktop', id: 'lead' }, threadId: thread.id });
     f.board.post({
       threadId: thread.id,
@@ -218,12 +238,14 @@ test('default subscriptions notify questions, blockers, and results but leave pr
 
 test('inbox catches up, pages across threads, persists read cursors, and fences generations', () => {
   const f = fixture();
+
   try {
     const author = { kind: 'system', id: 'controller' } satisfies BoardAuthor;
     const readerOne = { kind: 'user', id: 'reader', generation: 1 } satisfies BoardRecipient;
     const readerTwo = { kind: 'user', id: 'reader', generation: 2 } satisfies BoardRecipient;
     const first = f.board.createThread({ title: 'First', author, idempotencyKey: 'first' });
     const second = f.board.createThread({ title: 'Second', author, idempotencyKey: 'second' });
+
     const firstPost = f.board.post({
       threadId: first.id,
       author,
@@ -231,6 +253,7 @@ test('inbox catches up, pages across threads, persists read cursors, and fences 
       kind: 'question',
       idempotencyKey: 'first-post',
     });
+
     const secondPost = f.board.post({
       threadId: second.id,
       author,
@@ -238,6 +261,7 @@ test('inbox catches up, pages across threads, persists read cursors, and fences 
       kind: 'question',
       idempotencyKey: 'second-post',
     });
+
     f.board.subscribe({ subscriber: readerOne, startPolicy: { kind: 'beginning' } });
     f.board.subscribe({ subscriber: readerTwo, startPolicy: { kind: 'latest' } });
 
@@ -261,15 +285,17 @@ test('inbox catches up, pages across threads, persists read cursors, and fences 
       [secondPost.id],
     );
     f.store.close();
+
     const reopened = Store.open({
       databasePath: join(f.root, 'project.sqlite'),
-      project: ProjectBindingSchema.parse({
+      project: Schema.decodeUnknownSync(ProjectBindingSchema)({
         id: 'project-a',
         hostId: 'host-a',
         repositoryRoot: f.root,
         stateDirectory: f.root,
       }),
     });
+
     try {
       const board = Board.create({ store: reopened });
       assert.deepEqual(
@@ -311,10 +337,12 @@ test('inbox catches up, pages across threads, persists read cursors, and fences 
 
 test('a burst of posts keeps one bounded wake row per subscription', () => {
   const f = fixture();
+
   try {
     const author = { kind: 'system', id: 'controller' } satisfies BoardAuthor;
     const thread = f.board.createThread({ title: 'Burst', author, idempotencyKey: 'burst-thread' });
     f.board.subscribe({ subscriber: { kind: 'desktop', id: 'lead' }, threadId: thread.id });
+
     for (let index = 0; index < 250; index += 1) {
       if (index === 125)
         f.board.post({
@@ -332,6 +360,7 @@ test('a burst of posts keeps one bounded wake row per subscription', () => {
         idempotencyKey: `burst-${index}`,
       });
     }
+
     const wake = f.store.read((db) =>
       db
         .prepare(
@@ -339,6 +368,7 @@ test('a burst of posts keeps one bounded wake row per subscription', () => {
         )
         .get(),
     );
+
     assert.equal(wake?.count, 1);
     assert.equal(wake?.revision, 251);
     assert.equal(
@@ -347,9 +377,11 @@ test('a burst of posts keeps one bounded wake row per subscription', () => {
       ),
       0,
     );
+
     const inboxView = f.store.read((db) =>
       db.prepare('SELECT unread_threads,unread_posts FROM public_board_inboxes').get(),
     );
+
     assert.equal(inboxView?.unread_threads, 1);
     assert.equal(inboxView?.unread_posts, 250);
   } finally {

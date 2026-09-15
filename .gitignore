@@ -1,5 +1,6 @@
-node_modules/
+.test-output/
 dist/
+node_modules/
 public/
 .marionette/
 .marionette-v1/

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { Schema } from 'effect';
 import {
   chmodSync,
   existsSync,
@@ -38,7 +39,7 @@ type Fixture = {
   repositoryRoot: string;
   workspacePath: string;
   stateDirectory: string;
-  workspaceId: ReturnType<typeof WorkspaceIdSchema.parse>;
+  workspaceId: typeof WorkspaceIdSchema.Type;
   actor: SessionIdentity;
   store: Store;
 };
@@ -48,7 +49,9 @@ function git(cwd: string, args: readonly string[]): string {
     encoding: 'utf8',
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
   });
+
   assert.equal(result.status, 0, result.stderr);
+
   return result.stdout.trim();
 }
 
@@ -66,23 +69,27 @@ function createFixture(): Fixture {
   git(repositoryRoot, ['commit', '-qm', 'base']);
   git(repositoryRoot, ['worktree', 'add', '-q', '-b', 'fixture-workspace', workspacePath, 'HEAD']);
 
-  const project = ProjectBindingSchema.parse({
-    id: ProjectIdSchema.parse('project_retirement'),
-    hostId: HostIdSchema.parse('host_retirement'),
+  const project = Schema.decodeUnknownSync(ProjectBindingSchema)({
+    id: Schema.decodeUnknownSync(ProjectIdSchema)('project_retirement'),
+    hostId: Schema.decodeUnknownSync(HostIdSchema)('host_retirement'),
     repositoryRoot,
     stateDirectory,
   });
+
   let nextId = 0;
+
   const store = Store.open({
     databasePath: join(root, 'state.sqlite'),
     project,
     clock: () => new Date('2026-09-11T00:00:00.000Z'),
     idFactory: (kind) => `${kind}_${++nextId}`,
   });
+
   const actor = {
-    id: AgentSessionIdSchema.parse('session_actor'),
-    generation: SessionGenerationSchema.parse(1),
+    id: Schema.decodeUnknownSync(AgentSessionIdSchema)('session_actor'),
+    generation: Schema.decodeUnknownSync(SessionGenerationSchema)(1),
   };
+
   store.registerSession({
     ...actor,
     workspaceId: null,
@@ -95,7 +102,7 @@ function createFixture(): Fixture {
     nativeServerGeneration: null,
     nativeLocator: null,
   });
-  const workspaceId = WorkspaceIdSchema.parse('workspace_retirement');
+  const workspaceId = Schema.decodeUnknownSync(WorkspaceIdSchema)('workspace_retirement');
   store.registerWorkspace({
     actor,
     id: workspaceId,
@@ -107,6 +114,7 @@ function createFixture(): Fixture {
     writes: [],
     idempotencyKey: 'register-retirement-workspace',
   });
+
   return { root, repositoryRoot, workspacePath, stateDirectory, workspaceId, actor, store };
 }
 
@@ -123,6 +131,7 @@ function isRegistered(fixture: Fixture): boolean {
 
 test('preserves a dirty registered worktree and its untracked bytes', async () => {
   const fixture = createFixture();
+
   try {
     const untracked = join(fixture.workspacePath, 'keep-me.txt');
     writeFileSync(untracked, 'do not delete');
@@ -146,11 +155,13 @@ test('preserves a dirty registered worktree and its untracked bytes', async () =
 
 test('keeps the worktree while another registered session consumes it', async () => {
   const fixture = createFixture();
+
   try {
     const consumer = {
-      id: AgentSessionIdSchema.parse('session_consumer'),
-      generation: SessionGenerationSchema.parse(1),
+      id: Schema.decodeUnknownSync(AgentSessionIdSchema)('session_consumer'),
+      generation: Schema.decodeUnknownSync(SessionGenerationSchema)(1),
     };
+
     fixture.store.registerSession({
       ...consumer,
       workspaceId: fixture.workspaceId,
@@ -182,8 +193,10 @@ test('keeps the worktree while another registered session consumes it', async ()
 
 test('reconciles the same intent after Git removed the worktree before completion was recorded', async () => {
   const fixture = createFixture();
+
   try {
     const nativeGit = new NativeWorkspaceRetirementGit();
+
     const crashAfterRemove: WorkspaceRetirementGit = {
       observe: (workspace) => nativeGit.observe(workspace),
       remove: (workspace) => {
@@ -191,6 +204,7 @@ test('reconciles the same intent after Git removed the worktree before completio
         throw new Error('simulated crash after Git removal');
       },
     };
+
     const input = {
       store: fixture.store,
       actor: fixture.actor,
@@ -217,11 +231,13 @@ test('reconciles the same intent after Git removed the worktree before completio
 
 test('requires the exact registered native identity before closing an owned tab', async () => {
   const fixture = createFixture();
+
   try {
     const session = {
-      id: AgentSessionIdSchema.parse('session_native'),
-      generation: SessionGenerationSchema.parse(1),
+      id: Schema.decodeUnknownSync(AgentSessionIdSchema)('session_native'),
+      generation: Schema.decodeUnknownSync(SessionGenerationSchema)(1),
     };
+
     const identity: NativeIdentity = {
       binding: {
         hostId: fixture.store.project.hostId,
@@ -244,6 +260,7 @@ test('requires the exact registered native identity before closing an owned tab'
       identityRevision: 1,
       ownedTabId: 'tab-1',
     };
+
     fixture.store.registerSession({
       ...session,
       workspaceId: fixture.workspaceId,
@@ -257,13 +274,16 @@ test('requires the exact registered native identity before closing an owned tab'
       nativeLocator: nativeLocatorForRetirement(identity),
     });
     const calls: string[] = [];
+
     const nativeAdapter: NativeRetirementAdapter = {
       async observe(observedIdentity) {
         calls.push(`observe:${observedIdentity.paneId}`);
+
         return { kind: 'settled', identity: observedIdentity, slotReady: true };
       },
       async cleanup(cleanedIdentity, authorized) {
         calls.push(`cleanup:${cleanedIdentity.ownedTabId}:${authorized}`);
+
         return { kind: 'cleaned', operationId: 'cleanup-1' };
       },
     };
@@ -296,6 +316,7 @@ test('requires the exact registered native identity before closing an owned tab'
 
 test('preserves a worktree when a required verification log is not durable', async () => {
   const fixture = createFixture();
+
   try {
     const artifacts = new ArtifactFiles(fixture.stateDirectory);
     const artifact = artifacts.put(Buffer.from('verified command output'));

@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import test, { type TestContext } from 'node:test';
 import { createBinding, localSessionContext } from '../../src/v1/context.js';
+import { Schema } from 'effect';
 import {
   AgentSessionIdSchema,
   DigestSchema,
@@ -33,21 +34,24 @@ function fixture(t: TestContext, crashAt: 'launch' | 'prompt' | null = null) {
   mkdirSync(repo);
   const context = createBinding({ repositoryRoot: repo, stateRoot: join(root, 'state') });
   const local = localSessionContext(context);
+
   const store = Store.open({
     databasePath: context.binding.databasePath,
-    project: ProjectBindingSchema.parse({
+    project: Schema.decodeUnknownSync(ProjectBindingSchema)({
       id: context.binding.projectId,
       hostId: context.binding.hostId,
       repositoryRoot: repo,
       stateDirectory: context.binding.stateDirectory,
     }),
   });
+
   t.after(() => {
     store.close();
     rmSync(root, { recursive: true, force: true });
   });
+
   const actor = store.registerSession({
-    id: AgentSessionIdSchema.parse(local.sessionId),
+    id: Schema.decodeUnknownSync(AgentSessionIdSchema)(local.sessionId),
     generation: local.generation,
     workspaceId: null,
     role: 'user',
@@ -59,9 +63,10 @@ function fixture(t: TestContext, crashAt: 'launch' | 'prompt' | null = null) {
     nativeLocator: null,
     nativeServerGeneration: null,
   });
+
   const workspace = store.registerWorkspace({
     actor,
-    id: WorkspaceIdSchema.parse('workspace-test'),
+    id: Schema.decodeUnknownSync(WorkspaceIdSchema)('workspace-test'),
     kind: 'existing',
     path: repo,
     repositoryRoot: repo,
@@ -70,12 +75,13 @@ function fixture(t: TestContext, crashAt: 'launch' | 'prompt' | null = null) {
     writes: [],
     idempotencyKey: 'workspace',
   });
+
   const job = store.createJob({
     actor,
     stableKey: 'job',
     request: {
       text: 'Read-only check',
-      digest: DigestSchema.parse(createHash('sha256').update('Read-only check').digest('hex')),
+      digest: Schema.decodeUnknownSync(DigestSchema)(createHash('sha256').update('Read-only check').digest('hex')),
       inputSnapshots: [],
     },
     brief: {
@@ -92,6 +98,7 @@ function fixture(t: TestContext, crashAt: 'launch' | 'prompt' | null = null) {
     dependencies: [],
     idempotencyKey: 'job',
   });
+
   const settings = new Settings(store, actor);
   settings.set({
     key: 'profile/test',
@@ -105,6 +112,7 @@ function fixture(t: TestContext, crashAt: 'launch' | 'prompt' | null = null) {
     expectedRevision: 0,
     idempotencyKey: 'profile',
   });
+
   const binding: NativeBinding = {
     hostId: store.project.hostId,
     socketPath: '/fixture/herdr.sock',
@@ -117,6 +125,7 @@ function fixture(t: TestContext, crashAt: 'launch' | 'prompt' | null = null) {
       protocol: 22,
     },
   };
+
   settings.set({
     key: 'native/w1',
     value: binding,
@@ -128,6 +137,7 @@ function fixture(t: TestContext, crashAt: 'launch' | 'prompt' | null = null) {
   let prompts = 0;
   let nativeSettled = false;
   let ambiguous = false;
+
   class Adapter extends HerdrNativeAdapter {
     constructor(private readonly effects: NativeJournal) {
       super(effects);
@@ -137,7 +147,9 @@ function fixture(t: TestContext, crashAt: 'launch' | 'prompt' | null = null) {
       launches++;
       const prepared = await this.effects.prepare({ kind: 'create-tab', workspaceId: 'w1' });
       assert.equal(prepared.kind, 'prepared');
+
       if (crashAt === 'launch') throw new Error('Simulated process loss after durable claim');
+
       return {
         kind: 'launched',
         identity: {
@@ -156,25 +168,32 @@ function fixture(t: TestContext, crashAt: 'launch' | 'prompt' | null = null) {
     override async prompt(identity: NativeIdentity, text: string): Promise<NativeSubmission> {
       prompts++;
       assert.match(text, /Adopt brief revision 1/);
+
       const prepared = await this.effects.prepare({
         kind: 'prompt',
         paneId: identity.paneId,
         textDigest: createHash('sha256').update(text).digest('hex'),
       });
+
       if (prepared.kind === 'rejected') throw new Error(prepared.reason);
+
       if (crashAt === 'prompt') throw new Error('Simulated process loss after durable claim');
+
       return { kind: 'submitted', operationId: prepared.operationId };
     }
     override async observe(identity: NativeIdentity): Promise<NativeObservation> {
       if (ambiguous) return { kind: 'unconfirmed', reason: 'Fixture could not confirm identity' };
+
       return nativeSettled
         ? { kind: 'settled', identity, slotReady: true }
         : { kind: 'working', identity };
     }
   }
+
   const runtime = new Runtime(store, actor, context, (journal) =>
     composeHerdrAdapter(new Adapter(journal)),
   );
+
   const input = {
     jobId: job.id,
     profile: 'test',
@@ -183,6 +202,7 @@ function fixture(t: TestContext, crashAt: 'launch' | 'prompt' | null = null) {
     expectedBriefRevision: 1,
     idempotencyKey: 'admit',
   };
+
   return {
     runtime,
     store,
@@ -208,11 +228,13 @@ test('native runtime admits idempotently and concurrent starts claim each extern
   await Promise.all([f.runtime.start(id), f.runtime.start(id)]);
   assert.deepEqual(f.counts(), { launches: 1, prompts: 1 });
   assert.equal(f.store.getAttempt(id).phase, 'running');
+
   const effects = f.store.read((db) =>
     db
       .prepare('SELECT effect_kind FROM native_effects WHERE attempt_id=? ORDER BY effect_kind')
       .all(id),
   );
+
   assert.deepEqual(
     effects.map((row) => row.effect_kind),
     ['create-tab', 'prompt'],
@@ -230,13 +252,17 @@ test('crash after a claimed launch becomes unconfirmed without replaying launch 
   await f.runtime.reconcile(id);
   assert.deepEqual(f.counts(), { launches: 1, prompts: 0 });
   assert.equal(f.store.getAttempt(id).phase, 'unconfirmed');
+
   const native = f.store.read((db) =>
     db.prepare('SELECT phase FROM native_attempts WHERE attempt_id=?').get(id),
   );
+
   assert.equal(native?.phase, 'unconfirmed');
+
   const reservation = f.store.read((db) =>
     db.prepare('SELECT state FROM execution_reservations WHERE attempt_id=?').get(id),
   );
+
   assert.equal(reservation?.state, 'unconfirmed');
 });
 
@@ -251,9 +277,11 @@ test('a working prompt claim recovers as active without resending the prompt', a
   await f.runtime.reconcile(id);
   assert.deepEqual(f.counts(), { launches: 1, prompts: 1 });
   assert.equal(f.store.getAttempt(id).phase, 'running');
+
   const native = f.store.read((db) =>
     db.prepare('SELECT phase FROM native_attempts WHERE attempt_id=?').get(id),
   );
+
   assert.equal(native?.phase, 'active');
   const attempt = f.store.getAttempt(id);
   assert.doesNotThrow(() =>
@@ -261,8 +289,8 @@ test('a working prompt claim recovers as active without resending the prompt', a
       actor: { id: attempt.sessionId, generation: attempt.sessionGeneration },
       attemptId: id,
       content: { kind: 'report', body: 'Worker can still report', artifactDigests: [] },
-      inputDigest: DigestSchema.parse('0'.repeat(64)),
-      workspaceDigest: DigestSchema.parse('1'.repeat(64)),
+      inputDigest: Schema.decodeUnknownSync(DigestSchema)('0'.repeat(64)),
+      workspaceDigest: Schema.decodeUnknownSync(DigestSchema)('1'.repeat(64)),
       evidenceClaims: [],
       evidence: [],
       verification: { kind: 'not-requested' },
@@ -280,8 +308,8 @@ test('an ambiguous observation can later settle with a durable result without re
     actor: f.actor,
     attemptId: id,
     content: { kind: 'report', body: 'Controller verified the report', artifactDigests: [] },
-    inputDigest: DigestSchema.parse('0'.repeat(64)),
-    workspaceDigest: DigestSchema.parse('1'.repeat(64)),
+    inputDigest: Schema.decodeUnknownSync(DigestSchema)('0'.repeat(64)),
+    workspaceDigest: Schema.decodeUnknownSync(DigestSchema)('1'.repeat(64)),
     evidenceClaims: [],
     evidence: [],
     verification: { kind: 'not-requested' },
@@ -293,13 +321,17 @@ test('an ambiguous observation can later settle with a durable result without re
   await f.runtime.reconcile(id);
   assert.deepEqual(f.counts(), { launches: 1, prompts: 1 });
   assert.equal(f.store.getAttempt(id).phase, 'unconfirmed');
+
   const native = f.store.read((db) =>
     db.prepare('SELECT phase FROM native_attempts WHERE attempt_id=?').get(id),
   );
+
   assert.equal(native?.phase, 'unconfirmed');
+
   const reservation = f.store.read((db) =>
     db.prepare('SELECT state FROM execution_reservations WHERE attempt_id=?').get(id),
   );
+
   assert.equal(reservation?.state, 'unconfirmed');
 
   f.makeObservationExact();
@@ -307,13 +339,17 @@ test('an ambiguous observation can later settle with a durable result without re
   await f.runtime.reconcile(id);
   assert.deepEqual(f.counts(), { launches: 1, prompts: 1 });
   assert.equal(f.store.getAttempt(id).phase, 'settled');
+
   const settledNative = f.store.read((db) =>
     db.prepare('SELECT phase FROM native_attempts WHERE attempt_id=?').get(id),
   );
+
   assert.equal(settledNative?.phase, 'settled');
+
   const settledReservation = f.store.read((db) =>
     db.prepare('SELECT state FROM execution_reservations WHERE attempt_id=?').get(id),
   );
+
   assert.equal(settledReservation?.state, 'released');
 });
 
@@ -328,8 +364,8 @@ test('native idle releases execution only after a durable result exists', async 
     actor: f.actor,
     attemptId: id,
     content: { kind: 'report', body: 'Verified report', artifactDigests: [] },
-    inputDigest: DigestSchema.parse('0'.repeat(64)),
-    workspaceDigest: DigestSchema.parse('1'.repeat(64)),
+    inputDigest: Schema.decodeUnknownSync(DigestSchema)('0'.repeat(64)),
+    workspaceDigest: Schema.decodeUnknownSync(DigestSchema)('1'.repeat(64)),
     evidenceClaims: [],
     evidence: [],
     verification: { kind: 'not-requested' },
@@ -338,8 +374,10 @@ test('native idle releases execution only after a durable result exists', async 
   });
   await f.runtime.reconcile(id);
   assert.equal(f.store.getAttempt(id).phase, 'settled');
+
   const reservation = f.store.read((db) =>
     db.prepare('SELECT state FROM execution_reservations WHERE attempt_id=?').get(id),
   );
+
   assert.equal(reservation?.state, 'released');
 });

@@ -16,7 +16,7 @@ test('v1 output contracts cover every operation and retain the version boundary'
   assert.equal(outputContractVersion, 'v1');
   assert.deepEqual(
     Object.keys(operationOutputSchemas).sort(),
-    operationSchema.options.map((option) => option.shape.operation.value).sort(),
+    operationSchema.members.map((member) => member.fields.operation.literal).sort(),
   );
 });
 
@@ -28,20 +28,27 @@ test('v1 output contracts parse real board operation results', async (t) => {
 
   const client = Marionette.init({ repositoryRoot, stateHome: join(root, 'state') });
   t.after(() => client.close());
-  const created = await execute(client, {
-    operation: 'board.create',
-    title: 'Public output contract',
-    idempotencyKey: 'create-contract-thread',
-  });
-  parseOperationOutput('board.create', created);
-  const posted = await execute(client, {
-    operation: 'board.post',
-    threadId: created.id,
-    body: 'The board result has its public fields.',
-    kind: 'finding',
-    idempotencyKey: 'post-contract-output',
-  });
-  parseOperationOutput('board.post', posted);
+
+  const created = parseOperationOutput(
+    'board.create',
+    await execute(client, {
+      operation: 'board.create',
+      title: 'Public output contract',
+      idempotencyKey: 'create-contract-thread',
+    }),
+  );
+
+  const posted = parseOperationOutput(
+    'board.post',
+    await execute(client, {
+      operation: 'board.post',
+      threadId: created.id,
+      body: 'The board result has its public fields.',
+      kind: 'finding',
+      idempotencyKey: 'post-contract-output',
+    }),
+  );
+
   const read = await execute(client, { operation: 'board.read', threadId: created.id });
   const parsed = parseOperationOutput('board.read', read);
   assert.equal(parsed.entries[0]?.id, posted.id);
@@ -50,6 +57,7 @@ test('v1 output contracts parse real board operation results', async (t) => {
 
 test('v1 output contracts accept the native observation and submission states', () => {
   const timestamp = '2026-09-11T00:00:00.000Z';
+
   const attempt = {
     id: 'attempt-1',
     jobId: 'job-1',
@@ -68,6 +76,7 @@ test('v1 output contracts accept the native observation and submission states', 
     createdAt: timestamp,
     settledAt: null,
   };
+
   const identity = {
     binding: {
       hostId: 'host-1',
@@ -90,6 +99,7 @@ test('v1 output contracts accept the native observation and submission states', 
     identityRevision: 1,
     ownedTabId: 'tab-1',
   };
+
   const native = [
     { kind: 'working', identity },
     { kind: 'blocked', identity, reason: 'Waiting for input' },

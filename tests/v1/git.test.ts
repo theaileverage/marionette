@@ -9,11 +9,14 @@ import { assertGitState, captureGitState, exportCommit } from '../../src/v1/git.
 
 test('target checks detect untracked bytes, staged changes and HEAD drift; commit exports retain bytes', () => {
   const root = mkdtempSync(join(tmpdir(), 'marionette-v1-git-'));
+
   const run = (args: string[]) => {
     const result = spawnSync('git', ['-C', root, ...args], { encoding: 'utf8' });
     assert.equal(result.status, 0, result.stderr);
+
     return result.stdout.trim();
   };
+
   try {
     run(['init', '-q']);
     run(['config', 'user.name', 'Fixture']);

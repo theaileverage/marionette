@@ -1,119 +1,108 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { smokePackage } from './package-smoke-v1.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const read = (path) => JSON.parse(readFileSync(resolve(root, path), 'utf8'));
 
-export function versionParts(version) {
-  assert.match(
-    version,
-    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/,
-    'Use an exact SemVer without build metadata',
-  );
-  const [base, ...suffix] = version.split('-');
-  const pre = suffix.join('-').split('.').filter(Boolean);
-  for (const part of pre)
-    assert.ok(!/^0\d+$/.test(part), 'Numeric prerelease identifiers cannot have leading zeroes');
-  return { base: base.split('.').map(BigInt), pre };
+const packagePath = join(root, 'package.json');
+
+const changelogPath = join(root, 'CHANGELOG.md');
+
+const manifest = JSON.parse(readFileSync(packagePath, 'utf8'));
+
+function run(argv, cwd, env = process.env) {
+  const result = spawnSync(argv[0], argv.slice(1), {
+    cwd, env, encoding: 'utf8', timeout: 120_000, maxBuffer: 8 * 1024 * 1024,
+  });
+
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+
+  return result.stdout;
 }
 
-export function compareVersions(a, b) {
-  const x = versionParts(a);
-  const y = versionParts(b);
-  for (let index = 0; index < 3; index += 1)
-    if (x.base[index] !== y.base[index]) return x.base[index] > y.base[index] ? 1 : -1;
-  if (!x.pre.length || !y.pre.length)
-    return x.pre.length === y.pre.length ? 0 : x.pre.length ? -1 : 1;
-  for (let index = 0; index < Math.max(x.pre.length, y.pre.length); index += 1) {
-    const left = x.pre[index];
-    const right = y.pre[index];
-    if (left === right) continue;
-    if (left === undefined) return -1;
-    if (right === undefined) return 1;
-    const leftNumeric = /^\d+$/.test(left);
-    const rightNumeric = /^\d+$/.test(right);
-    if (leftNumeric && rightNumeric) return BigInt(left) > BigInt(right) ? 1 : -1;
-    if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
-    return left > right ? 1 : -1;
+function check() {
+  assert.match(manifest.version, /^\d+\.\d+\.\d+(?:-[\w.]+)?$/);
+  assert.equal(manifest.private, undefined, 'The release package must be publishable');
+  assert.equal(manifest.publishConfig.access, 'public');
+  assert.equal(manifest.license, 'MIT');
+  assert.ok(manifest.description && manifest.repository?.url && manifest.homepage && manifest.bugs?.url);
+  assert.equal(manifest.engines.node, '>=26.8.1');
+  assert.ok(readFileSync(changelogPath, 'utf8').includes(`## ${manifest.version}`));
+
+  for (const name of ['check', 'test', 'build', 'prepack', 'format:check',
+    'release:check', 'release:prepare', 'boundaries:check', 'package:smoke']) {
+    assert.ok(Object.hasOwn(manifest.scripts, name) && manifest.scripts[name], `Missing script ${name}`);
   }
-  return 0;
-}
 
-export function notesFor(changelog, version) {
-  versionParts(version);
-  const sections = changelog.split(/(?=^## )/m);
-  const section = sections.find((candidate) =>
-    new RegExp(`^## ${version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)`).test(candidate),
-  );
-  assert.ok(section, `Add a changelog section for ${version}`);
-  const body = section.replace(/^.*\n/, '').trim();
-  assert.ok(
-    body && !body.includes('Describe the release here.'),
-    'Write release notes before tagging',
-  );
-  return `${body}\n`;
-}
+  const source = readFileSync(join(root, 'src/herdr-protocol.ts'), 'utf8');
+  const contract = JSON.parse(readFileSync(join(root, 'vendor/herdr-0.9.0/contract.json')));
+  assert.ok(source.includes(`HERDR_PROTOCOL = ${contract.protocol} as const`));
+  assert.ok(source.includes(contract.schemaSha256));
+  const methods = source.match(/export const HERDR_METHODS = \[([\s\S]*?)\] as const;/)?.[1];
+  assert.ok(methods, 'Missing generated method list');
+  const entries = [...methods.matchAll(/^\s+'([^']+)',?$/gm)].map((match) => match[1]);
+  assert.equal(entries.length, contract.methodCount);
+  assert.equal(new Set(entries).size, entries.length);
+  assert.ok(source.includes('export type HerdrMethod = keyof HerdrParams'));
 
-export function check(tag) {
-  const pkg = read('package.json');
-  versionParts(pkg.version);
-  assert.equal(pkg.engines?.node, '>=26.8.1');
-  assert.equal(pkg.bin?.marionette, 'dist/v1/cli.js');
-  assert.equal(pkg.types, './dist/v1/index.d.ts');
-  assert.equal(pkg.exports?.['.']?.import, './dist/v1/index.js');
-  assert.equal(pkg.exports?.['.']?.types, './dist/v1/index.d.ts');
-  assert.equal(pkg.exports?.['./herdr-sdk']?.import, './dist/herdr-sdk.js');
-  assert.equal(pkg.exports?.['./herdr-sdk']?.types, './dist/herdr-sdk.d.ts');
-  assert.equal(pkg.dependencies?.zod, '^3.25.0');
-  assert.equal(pkg.repository?.url, 'git+https://github.com/theaileverage/marionette.git');
-  assert.equal(pkg.license, 'MIT');
-  for (const path of ['LICENSE', 'vendor/herdr-0.9.0/LICENSE', 'workflows/feature.json'])
-    assert.ok(existsSync(resolve(root, path)), `Missing package resource ${path}`);
-  notesFor(readFileSync(resolve(root, 'CHANGELOG.md'), 'utf8'), pkg.version);
-  if (tag) {
-    assert.equal(tag, `v${pkg.version}`, 'Tag must match package version');
-    if (process.env.GITHUB_ACTIONS === 'true')
-      assert.equal(
-        process.env.GITHUB_REF,
-        `refs/tags/${tag}`,
-        'Dispatch the workflow on its version tag',
-      );
+  for (const workflow of ['ci.yml', 'release.yml']) {
+    const text = readFileSync(join(root, '.github/workflows', workflow), 'utf8');
+
+    for (const match of text.matchAll(/npm run ([\w:-]+)/g))
+      assert.ok(manifest.scripts[match[1]], `${workflow}: missing ${match[1]}`);
   }
-  return pkg;
+
+  process.stdout.write(`VERIFIED: release scripts, version ${manifest.version}, and captured Herdr contract.\n`);
 }
 
-export function prepare(version) {
-  const pkg = read('package.json');
-  assert.ok(compareVersions(version, pkg.version) > 0, 'New version must increase');
-  assert.equal(
-    execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }),
-    '',
-    'Start from a clean checkout',
-  );
-  pkg.version = version;
-  writeFileSync(resolve(root, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`);
-  const changelogPath = resolve(root, 'CHANGELOG.md');
+function prepare(version) {
+  assert.match(version ?? '', /^\d+\.\d+\.\d+(?:-[\w.]+)?$/);
   const changelog = readFileSync(changelogPath, 'utf8');
-  writeFileSync(
-    changelogPath,
-    changelog.replace(
-      '# Changelog\n',
-      `# Changelog\n\n## ${version} — ${new Date().toISOString().slice(0, 10)}\n\nDescribe the release here.\n`,
-    ),
-  );
-  console.log(`Prepared ${version}. Verify the package before creating a release tag.`);
+  const previous = manifest.version;
+  assert.ok(changelog.includes(`## ${previous}`), 'Current changelog entry missing');
+  assert.ok(!changelog.includes(`## ${version}`), 'Target version already has a changelog entry');
+  manifest.version = version;
+  writeFileSync(packagePath, JSON.stringify(manifest, null, 2) + '\n');
+  writeFileSync(changelogPath, changelog.replace(`## ${previous}`, `## ${version}`));
+  process.stdout.write(`Prepared ${version}; review the changelog and update bun.lock before tagging.\n`);
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const [action, argument] = process.argv.slice(2);
-  if (action === 'prepare') prepare(argument);
-  else if (action === 'check') {
-    check(argument);
-    console.log('Release metadata is consistent');
-  } else if (action === 'smoke') smokePackage(argument);
-  else throw new Error('Use prepare VERSION, check [TAG], or smoke TARBALL');
+function smoke(tarball) {
+  assert.ok(tarball, 'Usage: node scripts/release.mjs smoke /absolute/path/to/package.tgz');
+  const temp = mkdtempSync(join(tmpdir(), 'marionette-release-'));
+
+  try {
+    const project = join(temp, 'project');
+    run([process.execPath, '-e', `require('fs').mkdirSync(${JSON.stringify(project)})`], root);
+    run(['npm', 'install', '--ignore-scripts', '--no-audit', '--no-fund',
+      '--prefix', project, resolve(tarball)], root);
+    const installed = join(project, 'node_modules/@theaileverage/marionette');
+    const installedManifest = JSON.parse(readFileSync(join(installed, 'package.json'), 'utf8'));
+    assert.equal(installedManifest.version, manifest.version);
+    const cli = join(installed, installedManifest.bin.marionette);
+    assert.ok(run([process.execPath, cli, '--version'], project).includes(manifest.version));
+    run([process.execPath, '--input-type=module', '-e',
+      `await Promise.all(${JSON.stringify(Object.keys(manifest.exports).map((path) =>
+        path === '.' ? manifest.name : manifest.name + path.slice(1)))}.map((name) => import(name)))`],
+    project);
+    process.stdout.write(`VERIFIED: installed tarball ${manifest.version} CLI and all export subpaths.\n`);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+}
+
+const [action, value] = process.argv.slice(2);
+
+try {
+  if (action === 'check') check();
+  else if (action === 'prepare') prepare(value);
+  else if (action === 'smoke') smoke(value);
+  else throw new Error('Usage: node scripts/release.mjs check|prepare VERSION|smoke TARBALL');
+} catch (error) {
+  process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+  process.exitCode = 1;
 }
