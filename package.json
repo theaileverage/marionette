@@ -35,7 +35,7 @@
   "devDependencies": {
     "@effect/tsgo": "0.43.0",
     "@oxlint/plugins": "1.82.0",
-    "@types/node": "24.13.4",
+    "@types/node": "26.5.1",
     "esbuild": "0.28.2",
     "oxlint": "1.82.0",
     "typescript": "7.0.2",
