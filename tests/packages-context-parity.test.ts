@@ -195,7 +195,7 @@ test("context schemas preserve UUID, absolute-path, token, generation, and stric
 
   const context = {
     version: 1,
-    bindingPath: "/repo/.marionette-v1/project.json",
+    bindingPath: "/repo/.marionette/project.json",
     projectId,
     hostId,
     sessionId: "session",

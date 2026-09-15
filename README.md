@@ -1,47 +1,31 @@
-# Marionette Effect port
+# Marionette
 
-This is the additive Effect v4 implementation of Marionette v1. It owns its source, schemas, database code, runtime, watcher, adapters, SDK facade, and CLI. The original Node/Zod implementation remains the comparison baseline outside this folder.
+Marionette is a local, evidence-backed workflow runtime for coding agents. The CLI and TypeScript SDK use the same durable project state. Native work, recorded results, acceptance, and integration have separate states so an idle agent is never mistaken for an accepted result.
 
-Requires Node 26.8.1 or newer. Bun manages the separate lockfile; Node runs SQLite and the application.
+The default v1 implementation uses Effect v4 for services, schemas, and workflows. SQLite remains the authority for project identity, session generations, immutable inputs, result evidence, and external-effect claims. Marionette v1 is CLI-only; it does not expose an MCP or HTTP server.
+
+Requires Node.js 26.8.1 or newer, a Herdr server for native execution, and an authenticated agent executable. Development uses Bun 1.3.14 and the pinned lockfile.
 
 ```sh
-cd effect-port
 bun install --frozen-lockfile
-npm run prepare
 npm run check
 npm test
-node scripts/build.mjs
-node dist/v1/cli.js --help
+npm run boundaries:check
+npm run package:smoke
 ```
 
-The build emits JavaScript and declarations into `dist/` and checks the captured workflow and coordination-skill resources stored in this package. It does not publish or migrate an existing installation. The package stays private during the additive migration.
+Install the alpha CLI with `npm install --global @theaileverage/marionette@alpha`, then run `marionette init` in your repository. New projects bind through `.marionette/project.json`. The private state directory holds the SQLite database and session credentials outside the repository. A repository with an existing `.marionette-v1/project.json` reuses that project identity when initialized with the current CLI; the old binding remains available for managed sessions that still name it.
+
+Run `marionette --help` for the available v1 operations and `marionette schema OPERATION` for a mutation's installed request contract. Workers inherit `MARIONETTE_CONTEXT`; that managed context fixes their project and session. A local native observation is execution evidence, not result acceptance.
 
 ## Effect API
 
-All public codecs are native Effect Schema values. Use `Schema.decodeUnknownSync(codec)(input)` or `Schema.decodeUnknownEffect(codec)(input)`; use `typeof codec.Type` for decoded types. Schema `.parse`, `.safeParse`, and Zod introspection are replaced by Effect's decoding and AST APIs. CLI JSON shapes and authority checks retain the v1 contracts.
+Public codecs are Effect Schema values. Decode untrusted input with `Schema.decodeUnknownSync(codec)(input)` or `Schema.decodeUnknownEffect(codec)(input)`. Effect callers may use `executeEffect` or the scoped `MarionetteService`; imperative callers may use `Marionette.connect` and must call `close()`.
 
-The scoped service owns the connection and closes SQLite on successful exit, failure, or interruption:
+Native launch and notification claims are durable before external mutation. Ambiguous acknowledgments remain uncertain until reconciled, and the runtime does not blindly replay them. A result can be recorded while acceptance and integration remain pending.
 
-```ts
-import { Effect } from 'effect';
-import { MarionetteService, marionetteLayer } from './dist/v1/index.js';
+## Verification
 
-const program = Effect.gen(function* () {
-  const marionette = yield* MarionetteService;
-  return yield* marionette.execute({ operation: 'context' });
-});
+The test harness compares selected behavior with a pinned pre-port source snapshot from Git history. CI fetches full history for that oracle. The boundary check compares every current `src/` file with [the reviewed Effect source manifest](evidence/effect-source-manifest.json), verifies the product import graph stays inside `src/`, and rejects product Zod imports. When changing source intentionally, review and update the manifest in the same change. These checks and package smoke establish local behavior and artifact completeness; live Herdr compatibility requires separate native acceptance.
 
-await Effect.runPromise(
-  program.pipe(Effect.provide(marionetteLayer({ cwd: '/absolute/project/path' }))),
-);
-```
-
-`Marionette.connect` and the Promise SDK remain available for imperative callers, which must call `close()`. Effect callers use `executeEffect`, the scoped service, or the named `*Effect` methods. Exported tagged errors support typed handling. SQLite transaction callbacks are deliberately synchronous and reject Promise and Effect results.
-
-The separate Herdr SDK entry remains dependency-free. Native launch and notification claims are durable before external mutation; ambiguous acknowledgements retain uncertainty and are never blindly retried. A result and its acceptance are separate from a native idle observation.
-
-## Diagnostics and evidence
-
-Open `effect-port.code-workspace` for the local TypeScript-Go and Effect language service settings. See [diagnostics](docs/diagnostics.md) for commands and the deliberate-failure plugin smoke test.
-
-The harness verifies the captured baseline hashes, redirects adapted v1 tests to port-owned source, and permits original source only as an explicitly isolated test oracle. It uses separate scratch directories for concurrent runs. See [test adaptations](docs/test-adaptations.md), [architecture](docs/architecture.md), [extension contracts](docs/extensions.md), and [coverage](docs/coverage.json). Passing a selected slice does not establish whole-project or live native parity; retained evidence records those distinctions.
+See [release instructions](RELEASING.md), [Effect diagnostics](docs/diagnostics.md), and [extension contracts](docs/extensions.md).

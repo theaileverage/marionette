@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { mkdtempSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { createBinding, resolveContext, writeSessionContext } from '../../src/v1/context.js';
 
@@ -64,6 +64,41 @@ test('host mismatch and malformed context fail before project fallback', () => {
       () => resolveContext({ cwd: repositoryRoot, env: { MARIONETTE_CONTEXT: context } }),
       SyntaxError,
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('init migrates a legacy binding without changing project identity or managed context', () => {
+  const root = mkdtempSync(join(tmpdir(), 'marionette-v1-binding-migration-'));
+
+  try {
+    const repositoryRoot = join(root, 'repo');
+    const stateRoot = join(root, 'state');
+    mkdirSync(repositoryRoot);
+    const original = createBinding({ repositoryRoot, stateRoot });
+    const legacyPath = join(dirname(dirname(original.bindingPath)), '.marionette-v1', 'project.json');
+    mkdirSync(dirname(legacyPath));
+    renameSync(original.bindingPath, legacyPath);
+
+    const context = writeSessionContext({
+      stateDirectory: original.binding.stateDirectory,
+      context: {
+        version: 1, bindingPath: legacyPath, projectId: original.binding.projectId,
+        hostId: original.binding.hostId, sessionId: 'worker', generation: 1,
+        token: randomBytes(32).toString('hex'),
+      },
+    });
+
+    const env = { MARIONETTE_STATE_HOME: stateRoot };
+    assert.equal(resolveContext({ cwd: repositoryRoot, env }).bindingPath, legacyPath);
+    const migrated = createBinding({ repositoryRoot, stateRoot });
+    assert.equal(migrated.bindingPath, original.bindingPath);
+    assert.deepEqual(migrated.binding, original.binding);
+    assert.deepEqual(readFileSync(migrated.bindingPath), readFileSync(legacyPath));
+    assert.equal(resolveContext({ cwd: repositoryRoot, env }).bindingPath, migrated.bindingPath);
+    assert.equal(resolveContext({ cwd: repositoryRoot, env: { ...env, MARIONETTE_CONTEXT: context } }).bindingPath, legacyPath);
+    assert.ok(existsSync(legacyPath));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

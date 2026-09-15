@@ -1,5 +1,5 @@
 // Generated from Herdr 0.9.0 (Apache-2.0); see vendor/herdr-0.9.0/LICENSE.
-// Do not edit. Run npm run sdk:generate.
+// Captured Herdr 0.9.0 protocol contract. See docs/herdr-contract.md before updating.
 export const HERDR_PROTOCOL = 22 as const;
 
 export const HERDR_SCHEMA_SHA256 =

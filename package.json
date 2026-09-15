@@ -1,7 +1,7 @@
 {
   "name": "@theaileverage/marionette",
   "version": "1.0.0-alpha.1",
-  "private": true,
+  "description": "A local, evidence-backed workflow runtime for coding agents.",
   "type": "module",
   "engines": {
     "node": ">=26.8.1"
@@ -17,12 +17,21 @@
     "lint:anti-slop-smoke": "node scripts/anti-slop-smoke.mjs",
     "prepare": "effect-tsgo patch --typescript --no-oxlint",
     "build": "node scripts/build.mjs",
+    "prepack": "npm run build && npm run boundaries:check",
+    "format:check": "node scripts/format-check.mjs",
+    "release:check": "node scripts/release.mjs check",
+    "release:prepare": "node scripts/release.mjs prepare",
     "package:smoke": "node scripts/package-smoke.mjs",
     "boundaries:check": "node scripts/verify-boundaries.mjs"
   },
   "dependencies": {
     "effect": "4.0.0-rc.112"
   },
+  "publishConfig": { "access": "public" },
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/theaileverage/marionette.git" },
+  "homepage": "https://github.com/theaileverage/marionette#readme",
+  "bugs": { "url": "https://github.com/theaileverage/marionette/issues" },
   "devDependencies": {
     "@effect/tsgo": "0.43.0",
     "@oxlint/plugins": "1.82.0",

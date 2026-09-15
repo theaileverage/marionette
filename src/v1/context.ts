@@ -117,13 +117,38 @@ export function createBinding(options: {
   stateRoot: string;
 }): ResolvedContext {
   const repositoryRoot = realpathSync(options.repositoryRoot);
-  const bindingPath = join(repositoryRoot, ".marionette-v1", "project.json");
+  const bindingPath = join(repositoryRoot, ".marionette", "project.json");
+  const legacyBindingPath = join(repositoryRoot, ".marionette-v1", "project.json");
   const hostId = localHostId(options.stateRoot);
 
   try {
     const binding = readJson(bindingPath, bindingSchema);
 
     if (binding.hostId !== hostId) throw new Error("Project belongs to another execution host");
+
+    return { binding, bindingPath, session: null };
+  } catch (error) {
+    if (!missing(error)) throw error;
+  }
+
+  // Retain the old file for managed sessions whose inherited context names it.
+  // A fresh init reuses the same project identity under the current path.
+  try {
+    const legacy = readJson(legacyBindingPath, bindingSchema);
+
+    if (legacy.hostId !== hostId) throw new Error("Project belongs to another execution host");
+    mkdirSync(dirname(bindingPath), { recursive: true });
+
+    try {
+      createJson(bindingPath, legacy);
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+    }
+
+    const binding = readJson(bindingPath, bindingSchema);
+
+    if (binding.projectId !== legacy.projectId || binding.hostId !== legacy.hostId)
+      throw new Error("Current and legacy project bindings disagree");
 
     return { binding, bindingPath, session: null };
   } catch (error) {
@@ -161,15 +186,19 @@ export function resolveContext(
     let directory = realpathSync(options.cwd ?? process.cwd());
 
     for (;;) {
-      const candidate = join(directory, ".marionette-v1", "project.json");
+      for (const name of [".marionette", ".marionette-v1"]) {
+        const candidate = join(directory, name, "project.json");
 
-      try {
-        readFileSync(candidate);
-        bindingPath = candidate;
-        break;
-      } catch (error) {
-        if (!missing(error)) throw error;
+        try {
+          readFileSync(candidate);
+          bindingPath = candidate;
+          break;
+        } catch (error) {
+          if (!missing(error)) throw error;
+        }
       }
+
+      if (bindingPath) break;
 
       const parent = dirname(directory);
 

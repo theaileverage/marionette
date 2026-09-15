@@ -1,3 +1,27 @@
 .test-output/
 dist/
 node_modules/
+public/
+.marionette/
+.marionette-v1/
+.v1-test/
+.runtime/
+.DS_Store
+*.log
+*.tgz
+
+# Local agent configuration and credentials
+.codex/
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/effect/
+.marionette-reports/
+tests/.marionette-reports/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+release-assets/
+.quality-check-*/

@@ -426,7 +426,7 @@ test('invalid command input exits 2 before project discovery and never exposes p
     }
 
     assert.equal(existsSync(stateHome), false);
-    assert.equal(existsSync(join(root, '.marionette-v1')), false);
+    assert.equal(existsSync(join(root, '.marionette')), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
