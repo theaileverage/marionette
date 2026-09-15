@@ -142,7 +142,8 @@ function runtimeAttemptRows(store: Store, workspaceId: WorkspaceId): RuntimeAtte
          JOIN agent_sessions s ON s.project_id = a.project_id
                              AND s.id = a.session_id
                              AND s.generation = a.session_generation
-         WHERE a.project_id = ? AND a.workspace_id = ? AND n.identity_json IS NOT NULL`,
+         WHERE a.project_id = ? AND a.workspace_id = ? AND n.identity_json IS NOT NULL
+           AND s.state IN ('active', 'unconfirmed')`,
       )
       .all(store.project.id, workspaceId)
       .map((row) => decode(runtimeAttemptRowSchema, row)),
@@ -307,7 +308,8 @@ function cleanupJournal(
              JOIN agent_sessions s ON s.project_id = a.project_id
                                  AND s.id = a.session_id
                                  AND s.generation = a.session_generation
-             WHERE a.project_id = ? AND a.id = ? AND n.identity_json IS NOT NULL`,
+             WHERE a.project_id = ? AND a.id = ? AND n.identity_json IS NOT NULL
+               AND s.state IN ('active', 'unconfirmed')`,
             )
             .all(input.store.project.id, target.attemptId)
             .map((row) => decode(runtimeAttemptRowSchema, row));

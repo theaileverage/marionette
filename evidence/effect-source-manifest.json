@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "reviewedRevision": "legacy-local-session-migration-r2",
+  "reviewedRevision": "legacy-local-session-migration-r2+settled-native-binding-retirement-r1",
   "reviewBaseCommit": "68ded44",
   "portSourceCommit": "0ddd61dcf87f0180b17c4a16dafcca83b14493a5",
   "files": [
@@ -174,7 +174,7 @@
     },
     {
       "path": "src/v1/runtime-retirement.ts",
-      "sha256": "986c89cb8efef02bcf6988f912aa6275dae082ed06996cdcbe33746950c172f9"
+      "sha256": "3a416c782e114beabf446262f04fef0447d22913faaaec8bbea25c5b5e685e75"
     },
     {
       "path": "src/v1/runtime.ts",
