@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "reviewedRevision": "legacy-local-session-migration-r2+settled-native-binding-retirement-r1+alpha.2-release-r1",
+  "reviewedRevision": "legacy-local-session-migration-r2+settled-native-binding-retirement-r1+alpha.2-release-r1+cli-help-r1",
   "reviewBaseCommit": "68ded44",
   "portSourceCommit": "0ddd61dcf87f0180b17c4a16dafcca83b14493a5",
   "files": [
@@ -58,7 +58,7 @@
     },
     {
       "path": "src/v1/cli.ts",
-      "sha256": "c225acc38562228d7b96b6934070e866d45707d9aadb9f67af67e76fbc5a7736"
+      "sha256": "12d1df33cdc612c4028ab6173b57441948d5e361188dc8d33314f2018e0846ed"
     },
     {
       "path": "src/v1/client.ts",
@@ -91,6 +91,10 @@
     {
       "path": "src/v1/git.ts",
       "sha256": "fa70ef3d9d78f883bc3e9dd067b824e130a0ef469fdf9f3c2f14177f08afae4f"
+    },
+    {
+      "path": "src/v1/help-renderer.ts",
+      "sha256": "9a18904fb82acd135885ea5526ac54b7aa45fe44e4d8bf10a360ecb5d35f185a"
     },
     {
       "path": "src/v1/handoff.ts",

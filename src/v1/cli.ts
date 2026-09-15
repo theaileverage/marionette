@@ -29,6 +29,7 @@ import {
 } from './command-registry.js';
 import { defaultOutput, outputModeSchema, writeError, writeOutput } from './output.js';
 import { installProjectSkill } from './onboarding.js';
+import { helpColorEnabled, renderCommandHelp, renderMainHelp } from './help-renderer.js';
 
 let output = requestedOutput(process.argv.slice(2)) ?? defaultOutput();
 
@@ -81,13 +82,8 @@ function help(name?: string) {
 
   if (output === 'human') {
     if (command)
-      process.stdout.write(
-        `${command.name}\n${command.summary}\n\nRequest flags:\n${command.flags.map((flag) => `  --${flag.name} ${flag.type === 'boolean' ? '' : flag.type.toUpperCase()}`).join('\n')}\n\nUse --input FILE or --json JSON_OR_FILE for nested requests.\nContract: marionette schema ${command.name} --output json\n`,
-      );
-    else
-      process.stdout.write(
-        `Marionette ${cliVersion}\n\n${commands.map((entry) => `  ${entry.name.replace('.', ' ').padEnd(22)} ${entry.summary}`).join('\n')}\n\nUtilities: init, schema, describe, watch, --version\nOutput: --output human|json|ndjson. No prompts.\nExample: marionette board create --title Notes --idempotency-key notes\n`,
-      );
+      process.stdout.write(renderCommandHelp(command, helpColorEnabled()));
+    else process.stdout.write(renderMainHelp(cliVersion, helpColorEnabled()));
   } else writeOutput(value, output);
 }
 
