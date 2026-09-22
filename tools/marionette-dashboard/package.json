@@ -1,0 +1,10 @@
+{
+  "name": "marionette-dashboard",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun server.mjs",
+    "check": "node --check client.js && node --check server.mjs && node --check lifecycle.mjs",
+    "test": "bun test lifecycle.test.mjs"
+  }
+}
